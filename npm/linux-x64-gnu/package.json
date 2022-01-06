@@ -1,0 +1,41 @@
+{
+  "name": "@napi-rs/image-linux-x64-gnu",
+  "version": "0.0.0",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "main": "image.linux-x64-gnu.node",
+  "files": [
+    "image.linux-x64-gnu.node",
+    "install.js"
+  ],
+  "description": "Image processing library",
+  "keywords": [
+    "image",
+    "lossless",
+    "compression",
+    "jpeg",
+    "jpg",
+    "png"
+  ],
+  "author": {
+    "email": "github@lyn.one",
+    "name": "LongYinan",
+    "url": "https://lyn.one"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">= 10"
+  },
+  "scripts": {
+    "install": "node install.js"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
+  "repository": "git@github.com:Brooooooklyn/imgquant.git"
+}

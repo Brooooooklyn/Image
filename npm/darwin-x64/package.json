@@ -1,0 +1,37 @@
+{
+  "name": "@napi-rs/image-darwin-x64",
+  "version": "0.0.0",
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "main": "image.darwin-x64.node",
+  "files": [
+    "image.darwin-x64.node"
+  ],
+  "description": "Image processing library",
+  "keywords": [
+    "image",
+    "lossless",
+    "compression",
+    "jpeg",
+    "jpg",
+    "png"
+  ],
+  "author": {
+    "email": "github@lyn.one",
+    "name": "LongYinan",
+    "url": "https://lyn.one"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">= 10"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
+  "repository": "git@github.com:Brooooooklyn/imgquant.git"
+}

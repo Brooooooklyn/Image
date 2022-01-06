@@ -1,0 +1,6 @@
+target
+node_modules
+*.node
+Cargo.lock
+.swc
+.DS_Store
