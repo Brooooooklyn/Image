@@ -1,6 +1,6 @@
 {
   "name": "@napi-rs/image",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "main": "index.js",
   "types": "index.d.ts",
   "description": "Image processing library",

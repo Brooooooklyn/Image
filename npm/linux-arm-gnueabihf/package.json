@@ -1,6 +1,6 @@
 {
   "name": "@napi-rs/image-linux-arm-gnueabihf",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "os": [
     "linux"
   ],
