@@ -1,0 +1,63 @@
+{
+  "name": "@napi-rs/image",
+  "version": "1.0.0",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "description": "Image processing library",
+  "author": {
+    "email": "github@lyn.one",
+    "name": "LongYinan",
+    "url": "https://lyn.one"
+  },
+  "keywords": [
+    "image",
+    "lossless",
+    "compression",
+    "jpeg",
+    "jpg",
+    "png"
+  ],
+  "files": [
+    "index.js",
+    "index.d.ts"
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
+  "napi": {
+    "name": "image",
+    "triples": {
+      "additional": [
+        "aarch64-apple-darwin",
+        "aarch64-linux-android",
+        "aarch64-unknown-linux-gnu",
+        "aarch64-unknown-linux-musl",
+        "armv7-unknown-linux-gnueabihf",
+        "x86_64-unknown-linux-musl",
+        "x86_64-unknown-freebsd",
+        "i686-pc-windows-msvc",
+        "armv7-linux-androideabi"
+      ]
+    }
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">= 10"
+  },
+  "funding": {
+    "type": "github",
+    "url": "https://github.com/sponsors/Brooooooklyn"
+  },
+  "scripts": {
+    "artifacts": "napi artifacts -d ../../artifacts",
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform",
+    "format": "run-p format:prettier format:rs",
+    "format:prettier": "prettier --config ./package.json -w .",
+    "format:rs": "cargo fmt --all",
+    "prepublishOnly": "napi prepublish -t npm",
+    "version": "napi version"
+  },
+  "repository": "git@github.com:Brooooooklyn/Image.git"
+}

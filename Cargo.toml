@@ -1,35 +1,8 @@
-[package]
-edition = "2021"
-name = "napi-rs_pngquant"
-version = "0.0.0"
-
-[lib]
-crate-type = ["cdylib"]
-
-[dependencies]
-libc = "0.2"
-napi = {version = "2", default-features = false, features = ["napi3"]}
-napi-derive = {version = "2", default-features = false, features = ["type-def"]}
-
-[target.'cfg(not(any(target_arch = "x86_64", target_arch = "x86", target_arch = "aarch64")))'.dependencies.oxipng]
-default-features = false
-features = ["parallel", "libdeflater"]
-version = "5"
-
-[target.'cfg(any(target_arch = "x86_64", target_arch = "x86", target_arch = "aarch64"))'.dependencies.oxipng]
-default-features = false
-features = ["parallel"]
-version = "5"
-
-[target.'cfg(not(all(target_os = "linux", target_arch = "arm")))'.dependencies.mozjpeg-sys]
-version = "1"
-
-[target.'cfg(all(target_os = "linux", target_arch = "arm"))'.dependencies.mozjpeg-sys]
-default-features = false
-version = "1"
-
-[build-dependencies]
-napi-build = "1"
+[workspace]
+members = [
+  "./packages/binding",
+]
 
 [profile.release]
+codegen-units = 1
 lto = true
