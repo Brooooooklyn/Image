@@ -1,0 +1,28 @@
+[package]
+edition = "2021"
+name = "napi_rs_image"
+version = "0.0.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+default = ["oxipng/parallel"]
+oxipng_libdeflater = ["oxipng/libdeflater", "oxipng/parallel"]
+with_simd = ["mozjpeg-sys/nasm_simd_parallel_build"]
+
+[dependencies]
+libc = "0.2"
+napi = {version = "2", default-features = false, features = ["napi3"]}
+napi-derive = {version = "2", default-features = false, features = ["type-def"]}
+
+[dependencies.oxipng]
+default-features = false
+version = "5"
+
+[dependencies.mozjpeg-sys]
+default-features = false
+version = "1"
+
+[build-dependencies]
+napi-build = "1"

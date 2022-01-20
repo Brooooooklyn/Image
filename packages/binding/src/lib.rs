@@ -64,7 +64,7 @@ fn to_oxipng_options(options: Option<PNGLosslessOptions>) -> oxipng::Options {
       })
       .unwrap_or(oxipng::Headers::All),
     use_heuristics: opt.use_heuristics.unwrap_or(true),
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "x86", target_arch = "aarch64")))]
+    #[cfg(target_arch = "arm")]
     deflate: oxipng::Deflaters::Libdeflater,
     ..Default::default()
   }
