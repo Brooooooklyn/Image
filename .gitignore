@@ -13,3 +13,5 @@ Cargo.lock
 !.yarn/versions
 .turbo
 *.tsbuildinfo
+optimized-lossless.*
+quantized.png

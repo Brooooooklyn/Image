@@ -64,3 +64,10 @@ export interface JpegCompressOptions {
   optimizeScans?: boolean | undefined | null
 }
 export function compressJpeg(input: Buffer, options?: JpegCompressOptions | undefined | null): Buffer
+export interface PngQuantOptions {
+  minQuality?: number | undefined | null
+  maxQuality?: number | undefined | null
+  speed?: number | undefined | null
+  posterization?: number | undefined | null
+}
+export function pngQuantize(input: Buffer, options?: PngQuantOptions | undefined | null): Buffer

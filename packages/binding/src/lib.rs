@@ -183,3 +183,80 @@ extern "C" fn silence_message(
   _level: std::os::raw::c_int,
 ) {
 }
+
+#[napi(object)]
+#[derive(Default)]
+pub struct PngQuantOptions {
+  // default is 70
+  pub min_quality: Option<u32>,
+  // default is 99
+  pub max_quality: Option<u32>,
+  // 1- 10
+  // Faster speeds generate images of lower quality, but may be useful for real-time generation of images.
+  // default: 5
+  pub speed: Option<u32>,
+  // Number of least significant bits to ignore.
+  // Useful for generating palettes for VGA, 15-bit textures, or other retro platforms.
+  pub posterization: Option<u32>,
+}
+
+#[napi]
+pub fn png_quantize(input: Buffer, options: Option<PngQuantOptions>) -> Result<Buffer> {
+  let bitmap = lodepng::decode32(input.as_ref()).map_err(|err| {
+    Error::new(
+      Status::InvalidArg,
+      format!("Decode png from buffer failed{}", err),
+    )
+  })?;
+  let options = options.unwrap_or_default();
+  let width = bitmap.width;
+  let height = bitmap.height;
+  let mut liq = imagequant::new();
+  liq
+    .set_speed(options.speed.unwrap_or(5) as i32)
+    .map_err(|err| Error::new(Status::GenericFailure, format!("{}", err)))?;
+  liq
+    .set_quality(
+      options.min_quality.unwrap_or(70) as u8,
+      options.max_quality.unwrap_or(99) as u8,
+    )
+    .map_err(|err| Error::new(Status::GenericFailure, format!("{}", err)))?;
+  let mut img = liq
+    .new_image(
+      bitmap.buffer.as_slice(),
+      width as usize,
+      height as usize,
+      0.0,
+    )
+    .map_err(|err| {
+      Error::new(
+        Status::GenericFailure,
+        format!("Create image failed {}", err),
+      )
+    })?;
+  let mut quantization_result = liq
+    .quantize(&mut img)
+    .map_err(|err| Error::new(Status::GenericFailure, format!("quantize failed {}", err)))?;
+  quantization_result
+    .set_dithering_level(1.0)
+    .map_err(|err| Error::new(Status::GenericFailure, format!("{}", err)))?;
+  let (palette, pixels) = quantization_result
+    .remapped(&mut img)
+    .map_err(|err| Error::new(Status::GenericFailure, format!("remap failed {}", err)))?;
+  let mut encoder = lodepng::Encoder::new();
+  encoder.set_palette(palette.as_slice()).map_err(|err| {
+    Error::new(
+      Status::GenericFailure,
+      format!("Set palette on png encoder {}", err),
+    )
+  })?;
+  let output = encoder
+    .encode(pixels.as_slice(), width, height)
+    .map_err(|err| {
+      Error::new(
+        Status::GenericFailure,
+        format!("Encode quantized png failed {}", err),
+      )
+    })?;
+  Ok(output.into())
+}
