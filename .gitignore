@@ -14,4 +14,7 @@ Cargo.lock
 .turbo
 *.tsbuildinfo
 optimized-lossless.*
+optimized.svg
 quantized.png
+lib
+dist
