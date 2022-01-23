@@ -1,7 +1,11 @@
 const { readFileSync, writeFileSync } = require('fs')
 
-const { losslessCompressPng, compressJpeg } = require('./packages/binding')
+const { losslessCompressPng, compressJpeg, pngQuantize } = require('./packages/binding')
 
-writeFileSync('optimized-lossless.png', losslessCompressPng(readFileSync('./un-optimized.png')))
+const PNG = readFileSync('./un-optimized.png')
+
+writeFileSync('optimized-lossless.png', losslessCompressPng(PNG))
+
+writeFileSync('quantized.png', pngQuantize(PNG))
 
 writeFileSync('optimized-lossless.jpg', compressJpeg(readFileSync('./un-optimized.jpg')))
