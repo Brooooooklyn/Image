@@ -71,3 +71,16 @@ export interface PngQuantOptions {
   posterization?: number | undefined | null
 }
 export function pngQuantize(input: Buffer, options?: PngQuantOptions | undefined | null): Buffer
+export const enum Ident {
+  None = 0,
+  Two = 2,
+  Four = 4,
+  Tab = 5
+}
+export interface SvgMinOptions {
+  idPrefix?: string | undefined | null
+  useSingleQuote?: boolean | undefined | null
+  indent?: Ident | undefined | null
+  attributesIndent?: Ident | undefined | null
+}
+export function svgMin(input: string | Buffer, options?: SvgMinOptions | undefined | null): string

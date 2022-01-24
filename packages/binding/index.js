@@ -221,8 +221,10 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { losslessCompressPng, compressJpeg, pngQuantize } = nativeBinding
+const { losslessCompressPng, compressJpeg, pngQuantize, Ident, svgMin } = nativeBinding
 
 module.exports.losslessCompressPng = losslessCompressPng
 module.exports.compressJpeg = compressJpeg
 module.exports.pngQuantize = pngQuantize
+module.exports.Ident = Ident
+module.exports.svgMin = svgMin

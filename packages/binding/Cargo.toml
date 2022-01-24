@@ -17,6 +17,8 @@ libc = "0.2"
 lodepng = "3"
 napi = {version = "2", default-features = false, features = ["napi3"]}
 napi-derive = {version = "2", default-features = false, features = ["type-def"]}
+usvg = {version = "0.20", features = ["export"]}
+xmlwriter = "0.1"
 
 [dependencies.oxipng]
 default-features = false
