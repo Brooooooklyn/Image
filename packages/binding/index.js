@@ -13,28 +13,43 @@ function isMusl() {
     try {
       return readFileSync('/usr/bin/ldd', 'utf8').includes('musl')
     } catch (e) {
-      return false
+      return true
     }
   } else {
     const { glibcVersionRuntime } = process.report.getReport().header
-    return !Boolean(glibcVersionRuntime)
+    return !glibcVersionRuntime
   }
 }
 
 switch (platform) {
   case 'android':
-    if (arch !== 'arm64') {
-      throw new Error(`Unsupported architecture on Android ${arch}`)
-    }
-    localFileExisted = existsSync(join(__dirname, 'image.android-arm64.node'))
-    try {
-      if (localFileExisted) {
-        nativeBinding = require('./image.android-arm64.node')
-      } else {
-        nativeBinding = require('@napi-rs/image-android-arm64')
-      }
-    } catch (e) {
-      loadError = e
+    switch (arch) {
+      case 'arm64':
+        localFileExisted = existsSync(join(__dirname, 'image.android-arm64.node'))
+        try {
+          if (localFileExisted) {
+            nativeBinding = require('./image.android-arm64.node')
+          } else {
+            nativeBinding = require('@napi-rs/image-android-arm64')
+          }
+        } catch (e) {
+          loadError = e
+        }
+        break
+      case 'arm':
+        localFileExisted = existsSync(join(__dirname, 'image.android-arm-eabi.node'))
+        try {
+          if (localFileExisted) {
+            nativeBinding = require('./image.android-arm-eabi.node')
+          } else {
+            nativeBinding = require('@napi-rs/image-android-arm-eabi')
+          }
+        } catch (e) {
+          loadError = e
+        }
+        break
+      default:
+        throw new Error(`Unsupported architecture on Android ${arch}`)
     }
     break
   case 'win32':
@@ -221,10 +236,9 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { losslessCompressPng, compressJpeg, pngQuantize, Ident, svgMin } = nativeBinding
+const { losslessCompressPng, compressJpeg, pngQuantize, losslessWebpFromPng } = nativeBinding
 
 module.exports.losslessCompressPng = losslessCompressPng
 module.exports.compressJpeg = compressJpeg
 module.exports.pngQuantize = pngQuantize
-module.exports.Ident = Ident
-module.exports.svgMin = svgMin
+module.exports.losslessWebpFromPng = losslessWebpFromPng
