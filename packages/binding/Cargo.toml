@@ -12,13 +12,12 @@ oxipng_libdeflater = ["oxipng/libdeflater", "oxipng/parallel"]
 with_simd = ["mozjpeg-sys/nasm_simd_parallel_build"]
 
 [dependencies]
-imagequant = "4.0.0-beta.8"
+imagequant = "4.0.0"
 libc = "0.2"
+libwebp-sys = {version = "0.5", features = ["avx2", "sse41", "neon"]}
 lodepng = "3"
 napi = {version = "2", default-features = false, features = ["napi3"]}
 napi-derive = {version = "2", default-features = false, features = ["type-def"]}
-usvg = {version = "0.20", features = ["export"]}
-xmlwriter = "0.1"
 
 [dependencies.oxipng]
 default-features = false

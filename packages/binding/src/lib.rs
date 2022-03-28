@@ -262,75 +262,27 @@ pub fn png_quantize(input: Buffer, options: Option<PngQuantOptions>) -> Result<B
 }
 
 #[napi]
-pub enum Ident {
-  None,
-  Two = 2,
-  Four = 4,
-  Tab,
-}
-
-#[napi(object)]
-pub struct SvgMinOptions {
-  pub id_prefix: Option<String>,
-  pub use_single_quote: Option<bool>,
-  pub indent: Option<Ident>,
-  pub attributes_indent: Option<Ident>,
-}
-
-#[inline(always)]
-fn ident_to_xml_ident(id: &Ident) -> xmlwriter::Indent {
-  match id {
-    &Ident::None => xmlwriter::Indent::None,
-    &Ident::Two => xmlwriter::Indent::Spaces(2),
-    &Ident::Four => xmlwriter::Indent::Spaces(4),
-    &Ident::Tab => xmlwriter::Indent::Tabs,
-  }
-}
-
-#[napi]
-pub fn svg_min(input: Either<String, Buffer>, options: Option<SvgMinOptions>) -> Result<String> {
-  let (tree, len) = match &input {
-    Either::A(s) => {
-      usvg::Tree::from_str(s.as_str(), &usvg::Options::default().to_ref()).map(|t| (t, s.len()))
-    }
-    Either::B(b) => {
-      usvg::Tree::from_data(b.as_ref(), &usvg::Options::default().to_ref()).map(|t| (t, b.len()))
-    }
-  }
-  .map_err(|err| {
+pub unsafe fn lossless_webp_from_png(env: Env, input: Buffer) -> Result<JsBuffer> {
+  let image = lodepng::decode32(input).map_err(|err| {
     Error::new(
       Status::InvalidArg,
-      format!("Parse svg from input data failed {}", err),
+      format!("Decode png from input buffer failed {}", err),
     )
   })?;
-  let options = options.unwrap_or(SvgMinOptions {
-    id_prefix: None,
-    use_single_quote: Some(true),
-    indent: Some(Ident::None),
-    attributes_indent: Some(Ident::None),
-  });
-  let result = tree.to_string(&usvg::XmlOptions {
-    id_prefix: options.id_prefix,
-    writer_opts: xmlwriter::Options {
-      use_single_quote: options.use_single_quote.unwrap_or(true),
-      indent: options
-        .indent
-        .as_ref()
-        .map(ident_to_xml_ident)
-        .unwrap_or(xmlwriter::Indent::None),
-      attributes_indent: options
-        .attributes_indent
-        .as_ref()
-        .map(ident_to_xml_ident)
-        .unwrap_or(xmlwriter::Indent::None),
-    },
-  });
-  if result.len() < len {
-    Ok(result)
-  } else {
-    Ok(match input {
-      Either::A(a) => a,
-      Either::B(b) => unsafe { String::from_utf8_unchecked(b.to_vec()) },
+  let mut out_buf = std::ptr::null_mut();
+  let width = image.width;
+  let height = image.height;
+  let stride = width as i32 * 4;
+  let len = libwebp_sys::WebPEncodeLosslessRGBA(
+    image.buffer.as_ptr() as *const _,
+    width as i32,
+    height as i32,
+    stride,
+    &mut out_buf,
+  );
+  env
+    .create_buffer_with_borrowed_data(out_buf, len, out_buf, |raw, _env| {
+      Vec::from_raw_parts(raw, len, len);
     })
-  }
+    .map(|v| v.into_raw())
 }
