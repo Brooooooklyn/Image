@@ -13,8 +13,6 @@ Cargo.lock
 !.yarn/versions
 .turbo
 *.tsbuildinfo
-optimized-lossless.*
-optimized.svg
-quantized.png
+optimized*
 lib
 dist

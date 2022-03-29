@@ -12,6 +12,7 @@
   ],
   "devDependencies": {
     "@napi-rs/cli": "^2.5.0",
+    "@taplo/cli": "^0.3.2",
     "@types/node": "^17.0.23",
     "ava": "^4.1.0",
     "lerna": "^4.0.0",
@@ -23,6 +24,10 @@
     "artifacts": "lerna run artifacts",
     "build": "lerna run build --stream --concurrency 1 --no-prefix",
     "build:ts": "tsc -b tsconfig.project.json",
+    "format": "run-p format:prettier format:rs format:toml",
+    "format:prettier": "prettier . -w",
+    "format:rs": "cargo fmt",
+    "format:toml": "taplo format",
     "test": "ava"
   },
   "prettier": {
@@ -36,9 +41,25 @@
     "extensions": [
       "mjs"
     ],
-    "timeout": "3m",
+    "timeout": "10m",
     "environmentVariables": {
       "NODE_ENV": "ava"
+    }
+  },
+  "lint-staged": {
+    "*.@(js||ts|json|md|yml|yaml)": [
+      "prettier --write"
+    ],
+    "*.toml": [
+      "taplo format"
+    ],
+    "*.rs": [
+      "cargo fmt --"
+    ]
+  },
+  "husky": {
+    "hooks": {
+      "pre-commit": "lint-staged && cargo fmt --all"
     }
   },
   "packageManager": "yarn@3.2.0",

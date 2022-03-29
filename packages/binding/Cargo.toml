@@ -13,11 +13,18 @@ with_simd = ["mozjpeg-sys/nasm_simd_parallel_build"]
 
 [dependencies]
 imagequant = "4.0.0"
+infer = "0.7"
+jpeg-decoder = "0.2"
 libc = "0.2"
-libwebp-sys = {version = "0.5", features = ["avx2", "sse41", "neon"]}
+libwebp-sys = { version = "0.5", features = ["avx2", "sse41", "neon"] }
 lodepng = "3"
-napi = {version = "2", default-features = false, features = ["napi3"]}
-napi-derive = {version = "2", default-features = false, features = ["type-def"]}
+napi = { version = "2", default-features = false, features = ["napi3"] }
+napi-derive = { version = "2", default-features = false, features = [
+  "type-def",
+] }
+png = "0.17"
+ravif = "0.8"
+rgb = "0.8"
 
 [dependencies.oxipng]
 default-features = false

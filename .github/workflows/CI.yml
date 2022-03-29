@@ -52,6 +52,7 @@ jobs:
               set -e &&
               unset RUSTFLAGS &&
               unset CC &&
+              apk add --update --repository http://dl-cdn.alpinelinux.org/alpine/edge/testing --no-cache nasm &&
               yarn build -- --features with_simd &&
               strip packages/*/*.node
           - host: macos-latest
@@ -197,7 +198,7 @@ jobs:
           usesh: true
           mem: 3000
           prepare: |
-            pkg install -y curl node14 python2
+            pkg install -y curl nasm node14 python2
             curl -qL https://www.npmjs.com/install.sh | sh
             npm install -g yarn
             curl https://sh.rustup.rs -sSf --output rustup.sh

@@ -30,6 +30,9 @@
   "engines": {
     "node": ">= 10"
   },
+  "libc": [
+    "musl"
+  ],
   "scripts": {
     "install": "node install.js"
   },
