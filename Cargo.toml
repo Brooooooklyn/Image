@@ -1,7 +1,5 @@
 [workspace]
-members = [
-  "./packages/binding",
-]
+members = ["./packages/binding"]
 
 [profile.release]
 codegen-units = 1
