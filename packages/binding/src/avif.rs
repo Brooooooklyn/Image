@@ -5,13 +5,13 @@ use rgb::FromSlice;
 use crate::decode::decode_input_image;
 
 #[napi(object)]
-#[derive(Default)]
-pub struct AVIFConfig {
+#[derive(Default, Clone)]
+pub struct AvifConfig {
   /// 0-100 scale
   pub quality: Option<u32>,
   /// 0-100 scale
   pub alpha_quality: Option<u32>,
-  /// rav1e preset 1 (slow) 10 (fast but crappy)
+  /// rav1e preset 1 (slow) 10 (fast but crappy), default is 4
   pub speed: Option<u32>,
   /// True if RGBA input has already been premultiplied. It inserts appropriate metadata.
   pub premultiplied_alpha: Option<bool>,
@@ -27,8 +27,8 @@ pub enum ColorSpace {
   RGB,
 }
 
-impl From<AVIFConfig> for ravif::Config {
-  fn from(config: AVIFConfig) -> Self {
+impl From<AvifConfig> for ravif::Config {
+  fn from(config: AvifConfig) -> Self {
     ravif::Config {
       // See also: https://github.com/kornelski/cavif-rs#usage
       quality: config.quality.unwrap_or(80) as f32,
@@ -38,7 +38,7 @@ impl From<AVIFConfig> for ravif::Config {
       // Encoding speed between 1 (best, but slowest) and 10 (fastest, but a blurry mess), the default value is 4.
       // Speeds 1 and 2 are unbelievably slow, but make files ~3-5% smaller.
       // Speeds 7 and above degrade compression significantly, and are not recommended.
-      speed: config.speed.unwrap_or(4) as u8,
+      speed: config.speed.unwrap_or(5) as u8,
       premultiplied_alpha: config.premultiplied_alpha.unwrap_or(false),
       color_space: match config.color_space {
         Some(ColorSpace::YCbCr) => ravif::ColorSpace::YCbCr,
@@ -51,9 +51,21 @@ impl From<AVIFConfig> for ravif::Config {
 }
 
 #[napi]
-pub fn encode_avif(input: Buffer, config: Option<AVIFConfig>) -> Result<Buffer> {
+pub fn encode_avif(input: Buffer, config: Option<AvifConfig>) -> Result<Buffer> {
   let (image, width, height, alpha_channel) = decode_input_image(input.as_ref())?;
-  let output = if alpha_channel {
+  let output = encode_avif_inner(config, &image, width, height, alpha_channel)?;
+  Ok(output.into())
+}
+
+#[inline]
+pub(crate) fn encode_avif_inner(
+  config: Option<AvifConfig>,
+  image: &[u8],
+  width: u32,
+  height: u32,
+  alpha_channel: bool,
+) -> Result<Vec<u8>> {
+  if alpha_channel {
     ravif::encode_rgba(
       ravif::Img::new(image.as_rgba(), width as usize, height as usize),
       &config.unwrap_or_default().into(),
@@ -71,6 +83,5 @@ pub fn encode_avif(input: Buffer, config: Option<AVIFConfig>) -> Result<Buffer> 
       Status::GenericFailure,
       format!("Encode avif failed {}", err),
     )
-  })?;
-  Ok(output.into())
+  })
 }
