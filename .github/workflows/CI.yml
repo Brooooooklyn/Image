@@ -107,6 +107,10 @@ jobs:
             docker: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-alpine
             build: >-
               set -e &&
+              unset RUSTFLAGS &&
+              unset CC &&
+              unset CXX &&
+              apk add --update --repository http://dl-cdn.alpinelinux.org/alpine/edge/testing --no-cache perl &&
               yarn build -- --target aarch64-unknown-linux-musl --features with_simd &&
               /aarch64-linux-musl-cross/bin/aarch64-linux-musl-strip packages/*/*.node
     name: stable - ${{ matrix.settings.target }} - node@16
