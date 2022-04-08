@@ -43,6 +43,7 @@ jobs:
             docker: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-debian
             build: |
               set -e && \
+              apt install libaom-dev -y && \
               yarn build -- --features with_simd --target x86_64-unknown-linux-gnu && \
               strip packages/*/*.node
           - host: ubuntu-latest
@@ -52,7 +53,8 @@ jobs:
               set -e &&
               unset RUSTFLAGS &&
               unset CC &&
-              apk add --update --repository http://dl-cdn.alpinelinux.org/alpine/edge/testing --no-cache nasm &&
+              unset CXX &&
+              apk add --update --repository http://dl-cdn.alpinelinux.org/alpine/edge/testing --no-cache perl nasm &&
               yarn build -- --features with_simd &&
               strip packages/*/*.node
           - host: macos-latest
@@ -121,7 +123,7 @@ jobs:
           cache: yarn
       - name: Setup nasm
         uses: ilammy/setup-nasm@v1
-        if: matrix.settings.target == 'x86_64-pc-windows-msvc' || matrix.settings.target == 'x86_64-apple-darwin'
+        if: matrix.settings.target == 'x86_64-pc-windows-msvc' || matrix.settings.target == 'x86_64-apple-darwin' || matrix.settings.target == 'i686-pc-windows-msvc'
       - name: Install
         uses: actions-rs/toolchain@v1
         with:
