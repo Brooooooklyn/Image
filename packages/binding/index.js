@@ -236,11 +236,11 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { JsColorType, Decoder, ColorSpace, encodeAvif, compressJpeg, losslessCompressPng, pngQuantize, losslessEncodeWebp, encodeWebp } = nativeBinding
+const { JsColorType, Decoder, ChromaSubsampling, encodeAvif, compressJpeg, losslessCompressPng, pngQuantize, losslessEncodeWebp, encodeWebp } = nativeBinding
 
 module.exports.JsColorType = JsColorType
 module.exports.Decoder = Decoder
-module.exports.ColorSpace = ColorSpace
+module.exports.ChromaSubsampling = ChromaSubsampling
 module.exports.encodeAvif = encodeAvif
 module.exports.compressJpeg = compressJpeg
 module.exports.losslessCompressPng = losslessCompressPng

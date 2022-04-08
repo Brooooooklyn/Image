@@ -40,16 +40,16 @@ export interface AvifConfig {
   alphaQuality?: number | undefined | null
   /** rav1e preset 1 (slow) 10 (fast but crappy), default is 4 */
   speed?: number | undefined | null
-  /** True if RGBA input has already been premultiplied. It inserts appropriate metadata. */
-  premultipliedAlpha?: boolean | undefined | null
-  /** Which pixel format to use in AVIF file. RGB tends to give larger files. */
-  colorSpace?: ColorSpace | undefined | null
   /** How many threads should be used (0 = match core count) */
   threads?: number | undefined | null
+  /** set to '4:2:0' to use chroma subsampling, default '4:4:4' */
+  chromaSubsampling?: ChromaSubsampling | undefined | null
 }
-export const enum ColorSpace {
-  YCbCr = 0,
-  RGB = 1
+export const enum ChromaSubsampling {
+  Yuv444 = 0,
+  Yuv422 = 1,
+  Yuv420 = 2,
+  Yuv400 = 3
 }
 export function encodeAvif(input: Buffer, config?: AvifConfig | undefined | null): Buffer
 export interface JpegCompressOptions {

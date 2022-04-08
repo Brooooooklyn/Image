@@ -3,6 +3,7 @@ use std::io::Cursor;
 use std::sync::Arc;
 
 use image::{ColorType, DynamicImage, ImageFormat};
+use libavif::AvifData;
 use napi::{bindgen_prelude::*, JsBuffer};
 use napi_derive::napi;
 
@@ -208,6 +209,7 @@ pub struct EncodeTask {
 pub enum EncodeOutput {
   Raw(*mut u8, usize),
   Buffer(Vec<u8>),
+  Avif(AvifData<'static>),
 }
 
 unsafe impl Send for EncodeOutput {}
@@ -284,27 +286,8 @@ impl Task for EncodeTask {
         return Ok(EncodeOutput::Raw(output_buf, size));
       }
       EncodeOptions::Avif(ref options) => {
-        let alpha_channel = match color_type {
-          ColorType::Rgb8 => false,
-          ColorType::Rgba8 => true,
-          _ => {
-            return Err(Error::new(
-              Status::InvalidArg,
-              format!(
-                "Unsupported encoding color type [{:?}] into avif",
-                color_type
-              ),
-            ))
-          }
-        };
-        let output = encode_avif_inner(
-          options.clone(),
-          dynamic_image.as_bytes(),
-          dynamic_image.width(),
-          dynamic_image.height(),
-          alpha_channel,
-        )?;
-        return Ok(EncodeOutput::Buffer(output));
+        let output = encode_avif_inner(options.clone(), dynamic_image)?;
+        return Ok(EncodeOutput::Avif(output));
       }
       EncodeOptions::Bmp => ImageFormat::Bmp,
       EncodeOptions::Ico => ImageFormat::Ico,
@@ -337,6 +320,14 @@ impl Task for EncodeTask {
           .map(|v| v.into_raw())
       },
       EncodeOutput::Buffer(buf) => env.create_buffer_with_data(buf).map(|b| b.into_raw()),
+      EncodeOutput::Avif(avif_data) => {
+        let len = avif_data.len();
+        let data_ptr = avif_data.as_slice().as_ptr();
+        unsafe {
+          env.create_buffer_with_borrowed_data(data_ptr, len, avif_data, |data, _env| drop(data))
+        }
+        .map(|b| b.into_raw())
+      }
     }
   }
 }
