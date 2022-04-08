@@ -204,7 +204,7 @@ jobs:
           usesh: true
           mem: 3000
           prepare: |
-            pkg install -y curl nasm node14 python2
+            pkg install -y curl cmake perl nasm node14 python2
             curl -qL https://www.npmjs.com/install.sh | sh
             npm install -g yarn
             curl https://sh.rustup.rs -sSf --output rustup.sh
