@@ -30,7 +30,7 @@ png = "0.17"
 rexif = "0.7"
 rgb = "0.8"
 
-[target.'cfg(not(any(target_arch = "arm", target_arch = "x86")))'.dependencies]
+[target.'cfg(all(not(target_arch = "arm"), not(target_arch = "x86")))'.dependencies]
 libavif = { version = "0.10", default-features = false, features = [
   "codec-aom",
 ] }

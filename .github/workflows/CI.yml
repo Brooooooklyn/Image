@@ -54,7 +54,7 @@ jobs:
               unset RUSTFLAGS &&
               unset CC &&
               unset CXX &&
-              apk add --update --repository http://dl-cdn.alpinelinux.org/alpine/edge/testing --no-cache perl nasm &&
+              apk add --update --repository http://dl-cdn.alpinelinux.org/alpine/edge/testing --no-cache aom-dev perl nasm &&
               yarn build -- --features with_simd &&
               strip packages/*/*.node
           - host: macos-latest
@@ -110,7 +110,7 @@ jobs:
               unset RUSTFLAGS &&
               unset CC &&
               unset CXX &&
-              apk add --update --repository http://dl-cdn.alpinelinux.org/alpine/edge/testing --no-cache perl &&
+              apk add --update --repository http://dl-cdn.alpinelinux.org/alpine/edge/testing --no-cache aom-dev perl &&
               yarn build -- --target aarch64-unknown-linux-musl --features with_simd &&
               /aarch64-linux-musl-cross/bin/aarch64-linux-musl-strip packages/*/*.node
     name: stable - ${{ matrix.settings.target }} - node@16
@@ -204,7 +204,7 @@ jobs:
           usesh: true
           mem: 3000
           prepare: |
-            pkg install -y curl cmake perl nasm node14 python2
+            pkg install -y curl cmake nasm node14 python2
             curl -qL https://www.npmjs.com/install.sh | sh
             npm install -g yarn
             curl https://sh.rustup.rs -sSf --output rustup.sh
