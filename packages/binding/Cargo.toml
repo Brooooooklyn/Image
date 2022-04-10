@@ -16,6 +16,9 @@ imagequant = "4.0.0"
 image = { version = "0.24" }
 infer = "0.7"
 jpeg-decoder = "0.2"
+libavif = { version = "0.10", git = "https://github.com/Brooooooklyn/libavif-rs", branch = "fix-arm-build",  default-features = false, features = [
+  "codec-aom",
+] }
 libc = "0.2"
 libwebp-sys = { version = "0.5", features = ["avx2", "sse41", "neon"] }
 lodepng = "3"
@@ -29,16 +32,6 @@ num_cpus = "1"
 png = "0.17"
 rexif = "0.7"
 rgb = "0.8"
-
-[target.'cfg(all(not(target_arch = "arm"), not(target_arch = "x86")))'.dependencies]
-libavif = { version = "0.10", default-features = false, features = [
-  "codec-aom",
-] }
-
-[target.'cfg(any(target_arch = "arm", target_arch = "x86"))'.dependencies]
-libavif = { version = "0.10", default-features = false, features = [
-  "codec-rav1e",
-] }
 
 [dependencies.oxipng]
 default-features = false

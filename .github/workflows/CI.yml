@@ -34,6 +34,7 @@ jobs:
             target: x86_64-pc-windows-msvc
           - host: windows-latest
             build: |
+              export LIBAVIF_CROSS_WIN32=1
               yarn build -- --features with_simd
               yarn test
             target: i686-pc-windows-msvc
@@ -98,6 +99,7 @@ jobs:
               export CC="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi24-clang"
               export CXX="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi24-clang++"
               export PATH="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin:${PATH}"
+              export C_INCLUDE_PATH="${ANDROID_NDK_HOME}/sources/android/cpufeatures"; 
               yarn build -- --features oxipng_libdeflater
               ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/arm-linux-androideabi-strip packages/*/*.node
           - host: ubuntu-latest
