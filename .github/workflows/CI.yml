@@ -36,8 +36,9 @@ jobs:
             build: |
               call "C:/Program Files/Microsoft Visual Studio/2022/Enterprise/VC/Auxiliary/Build/vcvarsamd64_x86.bat"
               node replace-system-cl.js
+              set LIBAVIF_CROSS_WIN32=1
               set PATH=%cd%/bin;%PATH%
-              yarn build -- --features with_simd
+              yarn build -- --features with_simd --cargo-flags="-j 1"
               yarn test
             target: i686-pc-windows-msvc
           - host: ubuntu-latest
