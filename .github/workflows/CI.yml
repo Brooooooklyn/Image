@@ -35,6 +35,8 @@ jobs:
           - host: windows-latest
             build: |
               export LIBAVIF_CROSS_WIN32=1
+              node replace-system-cl.js
+              export PATH="$(cwd)/bin:$PATH"
               yarn build -- --features with_simd
               yarn test
             target: i686-pc-windows-msvc
