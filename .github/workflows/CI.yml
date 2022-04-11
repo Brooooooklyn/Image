@@ -218,6 +218,9 @@ jobs:
             node -v
             echo "~~~~ yarn --version ~~~~"
             yarn --version
+            echo "~~~~ perl --version ~~~~"
+            perl --version;
+            ln -sf $(which perl) /usr/local/bin/Perl
           run: |
             export PATH="/usr/local/cargo/bin:$PATH"
             export RUST_TARGET="x86_64-unknown-freebsd"

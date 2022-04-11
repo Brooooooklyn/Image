@@ -5,5 +5,5 @@ linker = "aarch64-linux-gnu-gcc"
 [target.aarch64-unknown-linux-musl]
 linker = "aarch64-linux-musl-gcc"
 rustflags = ["-C", "target-feature=-crt-static"]
-[target.arm-unknown-linux-gnueabihf]
+[target.armv7-unknown-linux-gnueabihf]
 linker = "arm-linux-gnueabihf-gcc"
