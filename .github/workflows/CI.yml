@@ -34,9 +34,10 @@ jobs:
             target: x86_64-pc-windows-msvc
           - host: windows-latest
             build: |
-              export LIBAVIF_CROSS_WIN32=1
+              call "C:/Program Files (x86)/Microsoft Visual Studio/2019/Enterprise/VC/Auxiliary/Build/vcvars64.bat"
               node replace-system-cl.js
-              export PATH="$(cwd)/bin:$PATH"
+              set LIBAVIF_CROSS_WIN32=1
+              set PATH=%cd%/bin;%PATH%
               yarn build -- --features with_simd
               yarn test
             target: i686-pc-windows-msvc
@@ -182,8 +183,12 @@ jobs:
           run: ${{ matrix.settings.build }}
       - name: Build
         run: ${{ matrix.settings.build }}
-        if: ${{ !matrix.settings.docker }}
+        if: ${{ !matrix.settings.docker }} && matrix.settings.target != 'i686-pc-windows-msvc'
         shell: bash
+      - name: Build
+        run: ${{ matrix.settings.build }}
+        if: matrix.settings.target == 'i686-pc-windows-msvc'
+        shell: cmd
       - name: Upload artifact
         uses: actions/upload-artifact@v2
         with:
@@ -208,7 +213,7 @@ jobs:
           usesh: true
           mem: 3000
           prepare: |
-            pkg install -y curl cmake nasm node14 python2
+            pkg install -y curl cmake nasm node14 python2 perl5
             curl -qL https://www.npmjs.com/install.sh | sh
             npm install -g yarn
             curl https://sh.rustup.rs -sSf --output rustup.sh
@@ -220,9 +225,6 @@ jobs:
             node -v
             echo "~~~~ yarn --version ~~~~"
             yarn --version
-            echo "~~~~ perl --version ~~~~"
-            perl --version;
-            ln -sf $(which perl) /usr/local/bin/Perl
           run: |
             export PATH="/usr/local/cargo/bin:$PATH"
             export RUST_TARGET="x86_64-unknown-freebsd"
