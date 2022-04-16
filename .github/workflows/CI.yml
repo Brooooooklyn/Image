@@ -34,8 +34,7 @@ jobs:
             target: x86_64-pc-windows-msvc
           - host: windows-2022-xl
             build: |
-              cargo --version
-              set LIBAVIF_CROSS_WIN32=1
+              export LIBAVIF_CROSS_WIN32=1
               yarn build -- --features with_simd --target i686-pc-windows-msvc
               yarn test
             target: i686-pc-windows-msvc
@@ -139,13 +138,17 @@ jobs:
           override: true
           toolchain: stable
           target: ${{ matrix.settings.target }}
+      - name: Set cargo path
+        if: matrix.settings.target == 'i686-pc-windows-msvc'
+        run: echo "$Env:USERPROFILE\.cargo\bin" >> $GITHUB_PATH
+        shell: powershell
       - name: Install Rust
         if: matrix.settings.target == 'i686-pc-windows-msvc'
         shell: powershell
         run: |
-          env
           wget https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe -o rustup-init.exe
           .\rustup-init.exe -y --default-toolchain stable --profile default -t i686-pc-windows-msvc
+          cargo --version
       - name: Cache cargo registry
         uses: actions/cache@v3
         with:
@@ -190,6 +193,7 @@ jobs:
       - name: Build
         run: ${{ matrix.settings.build }}
         if: ${{ !matrix.settings.docker }}
+        shell: bash
       - name: Upload artifact
         uses: actions/upload-artifact@v2
         with:
