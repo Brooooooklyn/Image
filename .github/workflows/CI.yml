@@ -35,8 +35,8 @@ jobs:
           - host: windows-2022-xl
             build: |
               set LIBAVIF_CROSS_WIN32=1
-              cargo build -p libaom-sys --release --target i686-pc-windows-msvc -vvv
-              yarn build -- --features with_simd --cargo-flags="-j 1"
+              echo "C:\Users\NAPI-RS\.cargo\bin" >> $GITHUB_PATH
+              yarn build -- --features with_simd
               yarn test
             target: i686-pc-windows-msvc
           - host: ubuntu-latest
@@ -182,12 +182,8 @@ jobs:
           run: ${{ matrix.settings.build }}
       - name: Build
         run: ${{ matrix.settings.build }}
-        if: ${{ !matrix.settings.docker && matrix.settings.target != 'i686-pc-windows-msvc' }}
+        if: ${{ !matrix.settings.docker }}
         shell: bash
-      - name: Build
-        run: ${{ matrix.settings.build }}
-        if: matrix.settings.target == 'i686-pc-windows-msvc'
-        shell: cmd
       - name: Upload artifact
         uses: actions/upload-artifact@v2
         with:
