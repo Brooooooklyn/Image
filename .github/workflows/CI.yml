@@ -3,6 +3,7 @@ env:
   DEBUG: napi:*
   APP_NAME: image
   MACOSX_DEPLOYMENT_TARGET: '10.13'
+  ACTIONS_STEP_DEBUG: true
 'on':
   push:
     branches:
