@@ -3,7 +3,6 @@ env:
   DEBUG: napi:*
   APP_NAME: image
   MACOSX_DEPLOYMENT_TARGET: '10.13'
-  ACTIONS_STEP_DEBUG: true
 'on':
   push:
     branches:
@@ -35,6 +34,8 @@ jobs:
             target: x86_64-pc-windows-msvc
           - host: windows-2022-xl
             build: |
+              echo $PATH
+              export PATH="/cygdrive/c/Cargo/bin;$PATH"
               export LIBAVIF_CROSS_WIN32=1
               yarn build -- --features with_simd --target i686-pc-windows-msvc
               yarn test
@@ -133,11 +134,20 @@ jobs:
         if: matrix.settings.target == 'x86_64-pc-windows-msvc' || matrix.settings.target == 'x86_64-apple-darwin' || matrix.settings.target == 'i686-pc-windows-msvc'
       - name: Install
         uses: actions-rs/toolchain@v1
+        if: matrix.settings.target != 'i686-pc-windows-msvc'
         with:
           profile: minimal
           override: true
           toolchain: stable
           target: ${{ matrix.settings.target }}
+      - name: Install Rust
+        if: matrix.settings.target == 'i686-pc-windows-msvc'
+        shell: powershell
+        run: |
+          wget https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe -o rustup-init.exe
+          .\rustup-init.exe -y --default-toolchain stable --profile default -t i686-pc-windows-msvc
+          $Env:PATH="$Env:PATH;$Env:USERPROFILE\.cargo\bin"
+          cargo --version
       - name: Cache cargo registry
         uses: actions/cache@v3
         with:
