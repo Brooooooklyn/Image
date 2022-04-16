@@ -33,9 +33,11 @@ jobs:
               yarn build -- --features with_simd
             target: x86_64-pc-windows-msvc
           - host: windows-2022-xl
-            build: |
-              set LIBAVIF_CROSS_WIN32=1
+            setup: |
               echo "C:\Users\NAPI-RS\.cargo\bin" >> $GITHUB_PATH
+            build: |
+              cargo --version
+              set LIBAVIF_CROSS_WIN32=1
               yarn build -- --features with_simd
               yarn test
             target: i686-pc-windows-msvc
