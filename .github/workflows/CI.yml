@@ -133,6 +133,7 @@ jobs:
         if: matrix.settings.target == 'x86_64-pc-windows-msvc' || matrix.settings.target == 'x86_64-apple-darwin' || matrix.settings.target == 'i686-pc-windows-msvc'
       - name: Install
         uses: actions-rs/toolchain@v1
+        if: matrix.settings.target != 'i686-pc-windows-msvc'
         with:
           profile: minimal
           override: true
