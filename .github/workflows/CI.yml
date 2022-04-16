@@ -32,9 +32,8 @@ jobs:
             build: |
               yarn build -- --features with_simd
             target: x86_64-pc-windows-msvc
-          - host: windows-latest
+          - host: windows-2022-xl
             build: |
-              call "C:/Program Files/Microsoft Visual Studio/2022/Enterprise/VC/Auxiliary/Build/vcvarsamd64_x86.bat"
               set LIBAVIF_CROSS_WIN32=1
               cargo build -p libaom-sys --release --target i686-pc-windows-msvc -vvv
               yarn build -- --features with_simd --cargo-flags="-j 1"
