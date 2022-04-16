@@ -34,7 +34,8 @@ jobs:
             target: x86_64-pc-windows-msvc
           - host: windows-2022-xl
             setup: |
-              echo "C:\Users\NAPI-RS\.cargo\bin" >> $GITHUB_PATH
+              choco install rust -y
+              rustup target add i686-pc-windows-msvc
             build: |
               cargo --version
               set LIBAVIF_CROSS_WIN32=1
