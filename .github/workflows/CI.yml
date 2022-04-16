@@ -33,9 +33,6 @@ jobs:
               yarn build -- --features with_simd
             target: x86_64-pc-windows-msvc
           - host: windows-2022-xl
-            setup: |
-              choco install rust -y
-              rustup target add i686-pc-windows-msvc
             build: |
               cargo --version
               set LIBAVIF_CROSS_WIN32=1
@@ -142,6 +139,13 @@ jobs:
           override: true
           toolchain: stable
           target: ${{ matrix.settings.target }}
+      - name: Install Rust
+        if: matrix.settings.target == 'i686-pc-windows-msvc'
+        shell: powershell
+        run: |
+          wget https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe -o rustup-init.exe
+          .\rustup-init.exe -y --default-toolchain stable --profile minimal
+          rustup target add i686-pc-windows-msvc
       - name: Cache cargo registry
         uses: actions/cache@v3
         with:
