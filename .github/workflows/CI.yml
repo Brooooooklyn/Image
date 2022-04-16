@@ -143,8 +143,9 @@ jobs:
         if: matrix.settings.target == 'i686-pc-windows-msvc'
         shell: powershell
         run: |
+          env
           wget https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe -o rustup-init.exe
-          .\rustup-init.exe -y --default-toolchain stable --profile complete -t i686-pc-windows-msvc
+          .\rustup-init.exe -y --default-toolchain stable --profile default -t i686-pc-windows-msvc
       - name: Cache cargo registry
         uses: actions/cache@v3
         with:
@@ -189,7 +190,6 @@ jobs:
       - name: Build
         run: ${{ matrix.settings.build }}
         if: ${{ !matrix.settings.docker }}
-        shell: bash
       - name: Upload artifact
         uses: actions/upload-artifact@v2
         with:
