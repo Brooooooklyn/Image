@@ -6,7 +6,7 @@ import { from, timer, lastValueFrom, Subject } from 'rxjs'
 import { mergeMap, takeUntil } from 'rxjs/operators'
 import sharp from 'sharp'
 
-import { ChromaSubsampling, Decoder } from '@napi-rs/image'
+import { ChromaSubsampling, Transformer } from '@napi-rs/image'
 
 // https://github.com/ianare/exif-samples/blob/master/jpg/orientation/portrait_5.jpg
 const WITH_EXIF = await fs.readFile('./with-exif.jpg')
@@ -79,7 +79,7 @@ function bench(name, options = {}) {
 
 await bench('webp')
   .add('@napi-rs/image', () =>
-    new Decoder(WITH_EXIF)
+    new Transformer(WITH_EXIF)
       .rotate()
       .resize(450 / 2)
       .webp(75),
@@ -95,7 +95,7 @@ await bench('webp')
 
 bench('avif')
   .add('@napi-rs/image', () =>
-    new Decoder(WITH_EXIF)
+    new Transformer(WITH_EXIF)
       .rotate()
       .resize(450 / 2)
       .avif({ quality: 70, chromaSubsampling: ChromaSubsampling.Yuv420 }),

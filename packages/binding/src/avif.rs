@@ -1,6 +1,6 @@
 use image::{buffer::ConvertBuffer, DynamicImage, GenericImageView, ImageBuffer, Rgb};
 use libavif::{AvifData, AvifImage, RgbPixels, YuvFormat};
-use napi::{bindgen_prelude::*, JsBuffer};
+use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
 #[napi(object)]
@@ -67,24 +67,6 @@ impl From<AvifConfig> for Config {
         .unwrap_or(ChromaSubsampling::Yuv444),
     }
   }
-}
-
-#[napi]
-pub fn encode_avif(env: Env, input: Buffer, config: Option<AvifConfig>) -> Result<JsBuffer> {
-  let input_image = image::load_from_memory(input.as_ref()).map_err(|err| {
-    Error::new(
-      Status::InvalidArg,
-      format!("Decode input image failed {}", err),
-    )
-  })?;
-  let output = encode_avif_inner(config, &input_image)?;
-  let buf_ptr = output.as_slice().as_ptr();
-  unsafe {
-    env.create_buffer_with_borrowed_data(buf_ptr, output.len(), output, |avif_data, _env| {
-      drop(avif_data)
-    })
-  }
-  .map(|b| b.into_raw())
 }
 
 #[inline]

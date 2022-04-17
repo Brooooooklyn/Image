@@ -333,16 +333,16 @@ impl Task for EncodeTask {
 }
 
 #[napi]
-pub struct Decoder {
+pub struct Transformer {
   dynamic_image: Arc<ThreadSafeDynamicImage>,
   rotate: bool,
   resize: (Option<u32>, Option<u32>),
 }
 
 #[napi]
-impl Decoder {
+impl Transformer {
   #[napi(constructor)]
-  pub fn new(input: Buffer) -> Result<Decoder> {
+  pub fn new(input: Buffer) -> Result<Transformer> {
     Ok(Self {
       dynamic_image: Arc::new(ThreadSafeDynamicImage::new(input)),
       rotate: false,
@@ -399,6 +399,21 @@ impl Decoder {
   }
 
   #[napi]
+  /// The quality factor `quality_factor` ranges from 0 to 100 and controls the loss and quality during compression.
+  /// The value 0 corresponds to low quality and small output sizes, whereas 100 is the highest quality and largest output size.
+  /// https://developers.google.com/speed/webp/docs/api#simple_encoding_api
+  pub fn webp_sync(&mut self, env: Env, quality_factor: u32) -> Result<JsBuffer> {
+    let mut encoder = EncodeTask {
+      image: self.dynamic_image.clone(),
+      options: EncodeOptions::Webp(quality_factor),
+      rotate: self.rotate,
+      resize: self.resize,
+    };
+    let output = encoder.compute()?;
+    encoder.resolve(env, output)
+  }
+
+  #[napi]
   pub fn webp_lossless(&mut self, signal: Option<AbortSignal>) -> AsyncTask<EncodeTask> {
     AsyncTask::with_optional_signal(
       EncodeTask {
@@ -409,6 +424,18 @@ impl Decoder {
       },
       signal,
     )
+  }
+
+  #[napi]
+  pub fn webp_lossless_sync(&mut self, env: Env) -> Result<JsBuffer> {
+    let mut encoder = EncodeTask {
+      image: self.dynamic_image.clone(),
+      options: EncodeOptions::WebpLossless,
+      rotate: self.rotate,
+      resize: self.resize,
+    };
+    let output = encoder.compute()?;
+    encoder.resolve(env, output)
   }
 
   #[napi]
@@ -426,6 +453,18 @@ impl Decoder {
       },
       signal,
     )
+  }
+
+  #[napi]
+  pub fn avif_sync(&mut self, env: Env, options: Option<AvifConfig>) -> Result<JsBuffer> {
+    let mut encoder = EncodeTask {
+      image: self.dynamic_image.clone(),
+      options: EncodeOptions::Avif(options),
+      rotate: self.rotate,
+      resize: self.resize,
+    };
+    let output = encoder.compute()?;
+    encoder.resolve(env, output)
   }
 }
 

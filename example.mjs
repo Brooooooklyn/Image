@@ -7,7 +7,7 @@ import {
   losslessEncodeWebp,
   encodeAvif,
   encodeWebp,
-  Decoder,
+  Transformer,
 } from '@napi-rs/image'
 
 const PNG = readFileSync('./un-optimized.png')
@@ -31,7 +31,7 @@ writeFileSync('optimized.avif', encodeAvif(PNG))
 
 writeFileSync(
   'output-exif.webp',
-  await new Decoder(WITH_EXIF)
+  await new Transformer(WITH_EXIF)
     .rotate()
     .resize(450 / 2)
     .webp(75),

@@ -4,7 +4,7 @@ import { fileURLToPath } from 'url'
 
 import test from 'ava'
 
-import { losslessCompressPng, compressJpeg, encodeWebp, losslessEncodeWebp, encodeAvif } from '../index.js'
+import { losslessCompressPng, compressJpeg, Transformer } from '../index.js'
 
 const ROOT_DIR = join(fileURLToPath(import.meta.url), '..', '..', '..', '..')
 
@@ -22,27 +22,27 @@ test('should be able to lossless optimize jpeg image', async (t) => {
 })
 
 test('should be able to lossy encode webp from png', (t) => {
-  t.true(encodeWebp(PNG, 90).length < PNG.length)
+  t.true(new Transformer(PNG).webpSync(90).length < PNG.length)
 })
 
 test('should be able to lossy encode webp from jpeg', (t) => {
-  t.true(encodeWebp(JPEG, 90).length < JPEG.length)
+  t.true(new Transformer(JPEG).webpSync(90).length < JPEG.length)
 })
 
 test('should be able to lossless encode webp from png', (t) => {
-  t.true(losslessEncodeWebp(PNG).length < PNG.length)
+  t.true(new Transformer(PNG).webpLosslessSync().length < PNG.length)
 })
 
 test('should be able to lossless encode webp from jpeg', (t) => {
   t.notThrows(() => {
-    losslessEncodeWebp(JPEG)
+    new Transformer(JPEG).webpLosslessSync()
   })
 })
 
 test('should be able to encode avif from png', (t) => {
-  t.true(encodeAvif(PNG).length < PNG.length)
+  t.true(new Transformer(PNG).avifSync().length < PNG.length)
 })
 
 test('should be able to encode avif from jpeg', (t) => {
-  t.true(encodeAvif(JPEG).length < JPEG.length)
+  t.true(new Transformer(JPEG).avifSync().length < JPEG.length)
 })

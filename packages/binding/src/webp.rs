@@ -1,31 +1,5 @@
 use image::ColorType;
-use napi::{bindgen_prelude::*, JsBuffer};
-use napi_derive::napi;
-
-use crate::decode::decode_input_image;
-
-#[napi]
-/// # Safety
-///
-/// The output buffer is checked by V8 while converting it into Node.js Buffer.
-pub unsafe fn lossless_encode_webp(env: Env, input: Buffer) -> Result<JsBuffer> {
-  let (decoded_buf, width, height, alpha_channel) = decode_input_image(input.as_ref())?;
-  let (out_buf, len) = lossless_encode_webp_inner(
-    &decoded_buf,
-    width,
-    height,
-    if alpha_channel {
-      &ColorType::Rgba8
-    } else {
-      &ColorType::Rgb8
-    },
-  )?;
-  env
-    .create_buffer_with_borrowed_data(out_buf, len, out_buf, |raw, _env| {
-      Vec::from_raw_parts(raw, len, len);
-    })
-    .map(|v| v.into_raw())
-}
+use napi::bindgen_prelude::*;
 
 #[inline]
 pub(crate) unsafe fn lossless_encode_webp_inner(
@@ -67,30 +41,6 @@ pub(crate) unsafe fn lossless_encode_webp_inner(
     }
   };
   Ok((out_buf, len))
-}
-
-#[napi]
-/// The quality factor `quality_factor` ranges from 0 to 100 and controls the loss and quality during compression.
-/// The value 0 corresponds to low quality and small output sizes, whereas 100 is the highest quality and largest output size.
-/// https://developers.google.com/speed/webp/docs/api#simple_encoding_api
-pub unsafe fn encode_webp(env: Env, input: Buffer, quality_factor: u32) -> Result<JsBuffer> {
-  let (decoded_buf, width, height, alpha_channel) = decode_input_image(input.as_ref())?;
-  let (out_buf, len) = encode_webp_inner(
-    &decoded_buf,
-    quality_factor,
-    width,
-    height,
-    if alpha_channel {
-      &ColorType::Rgba8
-    } else {
-      &ColorType::Rgb8
-    },
-  )?;
-  env
-    .create_buffer_with_borrowed_data(out_buf, len, out_buf, |raw, _env| {
-      Vec::from_raw_parts(raw, len, len);
-    })
-    .map(|v| v.into_raw())
 }
 
 #[inline]

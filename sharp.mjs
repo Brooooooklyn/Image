@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync } from 'fs'
 
 import sharp from 'sharp'
 
-import { ChromaSubsampling, Decoder } from '@napi-rs/image'
+import { ChromaSubsampling, Transformer } from '@napi-rs/image'
 
 // https://github.com/ianare/exif-samples/blob/master/jpg/orientation/portrait_5.jpg
 const WITH_EXIF = readFileSync('./with-exif.jpg')
@@ -23,7 +23,7 @@ writeFileSync('output-exif.sharp.webp', sharpOutputWebp)
 
 console.time('@napi-rs/image webp')
 
-const imageOutputWebp = await new Decoder(WITH_EXIF)
+const imageOutputWebp = await new Transformer(WITH_EXIF)
   .rotate()
   .resize(450 / 2)
   .webp(75)
@@ -46,7 +46,7 @@ writeFileSync('output-exif.sharp.avif', sharpOutputAvif)
 
 console.time('@napi-rs/image avif')
 
-const imageOutputAvif = await new Decoder(WITH_EXIF)
+const imageOutputAvif = await new Transformer(WITH_EXIF)
   .rotate()
   .resize(450 / 2)
   .avif({ quality: 70, chromaSubsampling: ChromaSubsampling.Yuv420 })

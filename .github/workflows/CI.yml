@@ -37,7 +37,9 @@ jobs:
               export PATH="/cygdrive/c/Cargo/bin;$PATH"
               export LIBAVIF_CROSS_WIN32=1
               yarn build -- --features with_simd --target i686-pc-windows-msvc
-              node ./node_modules/.bin/ava --verbose
+              node --version
+              node -e "console.log(process.arch)"
+              npm run test
             target: i686-pc-windows-msvc
           - host: ubuntu-latest
             target: x86_64-unknown-linux-gnu
