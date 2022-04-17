@@ -50,7 +50,7 @@
     }
   },
   "lint-staged": {
-    "*.@(js||ts|json|md|yml|yaml)": [
+    "*.@(js|ts|json|md|yml|yaml)": [
       "prettier --write"
     ],
     "*.toml": [
