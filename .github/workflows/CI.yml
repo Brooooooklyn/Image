@@ -183,11 +183,11 @@ jobs:
           run: ${{ matrix.settings.build }}
       - name: Build
         run: ${{ matrix.settings.build }}
-        if: ${{ !matrix.settings.docker && matrix.settings.target != "i686-pc-windows-msvc" }}
+        if: ${{ !matrix.settings.docker && matrix.settings.target != 'i686-pc-windows-msvc' }}
         shell: bash
       - name: Build
         run: ${{ matrix.settings.build }}
-        if: ${{ matrix.settings.target == "i686-pc-windows-msvc" }}
+        if: matrix.settings.target == 'i686-pc-windows-msvc'
         shell: powershell
       - name: Upload artifact
         uses: actions/upload-artifact@v2

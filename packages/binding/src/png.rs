@@ -36,14 +36,14 @@ pub struct PNGLosslessOptions {
 }
 
 #[inline(always)]
-fn to_oxipng_options(options: Option<PNGLosslessOptions>) -> oxipng::Options {
-  let opt = options.unwrap_or_default();
+fn to_oxipng_options(opt: &PNGLosslessOptions) -> oxipng::Options {
   oxipng::Options {
     fix_errors: opt.fix_errors.unwrap_or(false),
     force: opt.force.unwrap_or(false),
     filter: opt
       .filter
-      .map(|v| v.into_iter().map(|i| i as u8).collect())
+      .as_ref()
+      .map(|v| v.into_iter().map(|i| *i as u8).collect())
       .unwrap_or_else(|| oxipng::IndexSet::from_iter(0..5)),
     bit_depth_reduction: opt.bit_depth_reduction.unwrap_or(true),
     color_type_reduction: opt.color_type_reduction.unwrap_or(true),
@@ -68,10 +68,51 @@ fn to_oxipng_options(options: Option<PNGLosslessOptions>) -> oxipng::Options {
 }
 
 #[napi]
-pub fn lossless_compress_png(input: Buffer, options: Option<PNGLosslessOptions>) -> Result<Buffer> {
-  let output = oxipng::optimize_from_memory(input.as_ref(), &to_oxipng_options(options))
-    .map_err(|err| Error::new(Status::InvalidArg, format!("Optimize failed {}", err)))?;
+pub fn lossless_compress_png_sync(
+  input: Buffer,
+  options: Option<PNGLosslessOptions>,
+) -> Result<Buffer> {
+  let output = oxipng::optimize_from_memory(
+    input.as_ref(),
+    &to_oxipng_options(&options.unwrap_or_default()),
+  )
+  .map_err(|err| Error::new(Status::InvalidArg, format!("Optimize failed {}", err)))?;
   Ok(output.into())
+}
+
+pub struct LosslessPngTask {
+  input: Buffer,
+  options: PNGLosslessOptions,
+}
+
+#[napi]
+impl Task for LosslessPngTask {
+  type Output = Vec<u8>;
+  type JsValue = Buffer;
+
+  fn compute(&mut self) -> Result<Self::Output> {
+    oxipng::optimize_from_memory(self.input.as_ref(), &to_oxipng_options(&self.options))
+      .map_err(|err| Error::new(Status::InvalidArg, format!("Optimize failed {}", err)))
+  }
+
+  fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
+    Ok(output.into())
+  }
+}
+
+#[napi]
+pub fn lossless_compress_png(
+  input: Buffer,
+  options: Option<PNGLosslessOptions>,
+  signal: Option<AbortSignal>,
+) -> AsyncTask<LosslessPngTask> {
+  AsyncTask::with_optional_signal(
+    LosslessPngTask {
+      input,
+      options: options.unwrap_or_default(),
+    },
+    signal,
+  )
 }
 
 #[napi(object)]

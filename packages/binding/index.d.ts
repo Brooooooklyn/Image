@@ -76,7 +76,8 @@ export interface PNGLosslessOptions {
   /** Whether to use heuristics to pick the best filter and compression */
   useHeuristics?: boolean | undefined | null
 }
-export function losslessCompressPng(input: Buffer, options?: PNGLosslessOptions | undefined | null): Buffer
+export function losslessCompressPngSync(input: Buffer, options?: PNGLosslessOptions | undefined | null): Buffer
+export function losslessCompressPng(input: Buffer, options?: PNGLosslessOptions | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>
 export interface PngQuantOptions {
   /** default is 70 */
   minQuality?: number | undefined | null
