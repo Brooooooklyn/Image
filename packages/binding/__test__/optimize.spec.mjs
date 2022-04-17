@@ -17,7 +17,7 @@ test('should be able to lossless optimize png image', async (t) => {
 })
 
 test('should be able to lossless optimize jpeg image', async (t) => {
-  const dest = compressJpeg(JPEG, { quality: 100 })
+  const dest = await compressJpeg(JPEG, { quality: 100 })
   t.true(dest.length < PNG.length)
 })
 

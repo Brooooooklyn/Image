@@ -34,12 +34,11 @@ jobs:
             target: x86_64-pc-windows-msvc
           - host: windows-2022-xl
             build: |
-              export PATH="/cygdrive/c/Cargo/bin;$PATH"
-              export LIBAVIF_CROSS_WIN32=1
+              $Env:PATH="C:\Cargo\bin;$Env:PATH"
+              $Env:LIBAVIF_CROSS_WIN32=1
               yarn build -- --features with_simd --target i686-pc-windows-msvc
-              node --version
               node -e "console.log(process.arch)"
-              npm run test
+              yarn test
             target: i686-pc-windows-msvc
           - host: ubuntu-latest
             target: x86_64-unknown-linux-gnu
@@ -184,8 +183,12 @@ jobs:
           run: ${{ matrix.settings.build }}
       - name: Build
         run: ${{ matrix.settings.build }}
-        if: ${{ !matrix.settings.docker }}
+        if: ${{ !matrix.settings.docker && matrix.settings.target != "i686-pc-windows-msvc" }}
         shell: bash
+      - name: Build
+        run: ${{ matrix.settings.build }}
+        if: ${{ matrix.settings.target == "i686-pc-windows-msvc" }}
+        shell: powershell
       - name: Upload artifact
         uses: actions/upload-artifact@v2
         with:

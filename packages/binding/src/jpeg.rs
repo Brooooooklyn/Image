@@ -12,16 +12,41 @@ pub struct JpegCompressOptions {
 }
 
 #[napi]
-/// # Safety
-///
-/// The output buffer from `mozjpeg` is checked by V8 while converting it into Node.js Buffer.
-pub unsafe fn compress_jpeg(
+pub fn compress_jpeg_sync(
   env: Env,
   input: Buffer,
   options: Option<JpegCompressOptions>,
 ) -> Result<JsBuffer> {
+  let (buf, outsize, de_c_info, compress_c_info) =
+    unsafe { moz_jpeg_compress(input.as_ref(), &options.unwrap_or_default()) }?;
+  unsafe {
+    env.create_buffer_with_borrowed_data(
+      buf,
+      outsize,
+      (de_c_info, compress_c_info, buf),
+      |(mut input, mut output, buf), _| {
+        mozjpeg_sys::jpeg_destroy_decompress(&mut input);
+        mozjpeg_sys::jpeg_destroy_compress(&mut output);
+        libc::free(buf as *mut std::ffi::c_void);
+      },
+    )
+  }
+  .map(|v| v.into_raw())
+}
+
+/// # Safety
+///
+/// The output buffer from `mozjpeg` is checked by V8 while converting it into Node.js Buffer.
+unsafe fn moz_jpeg_compress(
+  input: &[u8],
+  opts: &JpegCompressOptions,
+) -> Result<(
+  *mut u8,
+  usize,
+  mozjpeg_sys::jpeg_decompress_struct,
+  mozjpeg_sys::jpeg_compress_struct,
+)> {
   std::panic::catch_unwind(|| {
-    let opts = options.unwrap_or_default();
     let mut de_c_info: mozjpeg_sys::jpeg_decompress_struct = std::mem::zeroed();
     let mut err_handler = create_error_handler();
     de_c_info.common.err = &mut err_handler;
@@ -59,18 +84,7 @@ pub unsafe fn compress_jpeg(
     mozjpeg_sys::jpeg_write_coefficients(&mut compress_c_info, src_coef_arrays);
     mozjpeg_sys::jpeg_finish_compress(&mut compress_c_info);
     mozjpeg_sys::jpeg_finish_decompress(&mut de_c_info);
-    env
-      .create_buffer_with_borrowed_data(
-        buf,
-        outsize as usize,
-        (de_c_info, compress_c_info, buf),
-        |(mut input, mut output, buf), _| {
-          mozjpeg_sys::jpeg_destroy_decompress(&mut input);
-          mozjpeg_sys::jpeg_destroy_compress(&mut output);
-          libc::free(buf as *mut std::ffi::c_void);
-        },
-      )
-      .map(|v| v.into_raw())
+    (buf, outsize as usize, de_c_info, compress_c_info)
   })
   .map_err(|err| {
     Error::new(
@@ -78,7 +92,6 @@ pub unsafe fn compress_jpeg(
       format!("Compress JPEG failed {:?}", err),
     )
   })
-  .and_then(|v| v)
 }
 
 unsafe fn create_error_handler() -> mozjpeg_sys::jpeg_error_mgr {
@@ -109,4 +122,72 @@ extern "C" fn silence_message(
   _cinfo: &mut mozjpeg_sys::jpeg_common_struct,
   _level: std::os::raw::c_int,
 ) {
+}
+
+pub struct ThreadsafeMozjpegCompressOutput {
+  buf: *mut u8,
+  len: usize,
+  de_c_info: mozjpeg_sys::jpeg_decompress_struct,
+  compress_c_info: mozjpeg_sys::jpeg_compress_struct,
+}
+
+unsafe impl Send for ThreadsafeMozjpegCompressOutput {}
+
+pub struct CompressJpegTask {
+  options: JpegCompressOptions,
+  input: Buffer,
+}
+
+#[napi]
+impl Task for CompressJpegTask {
+  type Output = ThreadsafeMozjpegCompressOutput;
+  type JsValue = JsBuffer;
+
+  fn compute(&mut self) -> Result<Self::Output> {
+    unsafe { moz_jpeg_compress(self.input.as_ref(), &self.options) }.map(
+      |(buf, len, de_c_info, compress_c_info)| ThreadsafeMozjpegCompressOutput {
+        buf,
+        len,
+        de_c_info,
+        compress_c_info,
+      },
+    )
+  }
+
+  fn resolve(&mut self, env: Env, output: Self::Output) -> Result<Self::JsValue> {
+    let ThreadsafeMozjpegCompressOutput {
+      buf,
+      len,
+      de_c_info,
+      compress_c_info,
+    } = output;
+    unsafe {
+      env.create_buffer_with_borrowed_data(
+        buf,
+        len,
+        (de_c_info, compress_c_info, buf),
+        |(mut input, mut output, buf), _| {
+          mozjpeg_sys::jpeg_destroy_decompress(&mut input);
+          mozjpeg_sys::jpeg_destroy_compress(&mut output);
+          libc::free(buf as *mut std::ffi::c_void);
+        },
+      )
+    }
+    .map(|v| v.into_raw())
+  }
+}
+
+#[napi]
+pub fn compress_jpeg(
+  input: Buffer,
+  options: Option<JpegCompressOptions>,
+  signal: Option<AbortSignal>,
+) -> AsyncTask<CompressJpegTask> {
+  AsyncTask::with_optional_signal(
+    CompressJpegTask {
+      input,
+      options: options.unwrap_or_default(),
+    },
+    signal,
+  )
 }

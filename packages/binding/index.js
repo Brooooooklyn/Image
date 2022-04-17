@@ -236,9 +236,10 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { ChromaSubsampling, compressJpeg, losslessCompressPng, pngQuantize, JsColorType, Transformer } = nativeBinding
+const { ChromaSubsampling, compressJpegSync, compressJpeg, losslessCompressPng, pngQuantize, JsColorType, Transformer } = nativeBinding
 
 module.exports.ChromaSubsampling = ChromaSubsampling
+module.exports.compressJpegSync = compressJpegSync
 module.exports.compressJpeg = compressJpeg
 module.exports.losslessCompressPng = losslessCompressPng
 module.exports.pngQuantize = pngQuantize

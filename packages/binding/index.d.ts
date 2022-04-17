@@ -30,12 +30,8 @@ export interface JpegCompressOptions {
    */
   optimizeScans?: boolean | undefined | null
 }
-/**
- * # Safety
- *
- * The output buffer from `mozjpeg` is checked by V8 while converting it into Node.js Buffer.
- */
-export function compressJpeg(input: Buffer, options?: JpegCompressOptions | undefined | null): Buffer
+export function compressJpegSync(input: Buffer, options?: JpegCompressOptions | undefined | null): Buffer
+export function compressJpeg(input: Buffer, options?: JpegCompressOptions | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>
 export interface PNGLosslessOptions {
   /**
    * Attempt to fix errors when decoding the input file rather than returning an Err.
