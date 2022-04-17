@@ -22,10 +22,8 @@ libavif = { version = "0.10", git = "https://github.com/Brooooooklyn/libavif-rs"
 libc = "0.2"
 libwebp-sys = { version = "0.5", features = ["avx2", "sse41", "neon"] }
 lodepng = "3"
-napi = { version = "2.3.0-canary.1", default-features = false, features = [
-  "napi3",
-] }
-napi-derive = { version = "2.3.0-canary.1", default-features = false, features = [
+napi = { version = "2", default-features = false, features = ["napi3"] }
+napi-derive = { version = "2", default-features = false, features = [
   "type-def",
 ] }
 num_cpus = "1"

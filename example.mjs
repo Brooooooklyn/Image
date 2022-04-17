@@ -1,15 +1,15 @@
 import { readFileSync, writeFileSync } from 'fs'
 
-import { losslessCompressPng, compressJpegSync, pngQuantize, Transformer } from '@napi-rs/image'
+import { losslessCompressPngSync, compressJpegSync, pngQuantizeSync, Transformer } from '@napi-rs/image'
 
 const PNG = readFileSync('./un-optimized.png')
 const JPEG = readFileSync('./un-optimized.jpg')
 // https://github.com/ianare/exif-samples/blob/master/jpg/orientation/portrait_5.jpg
 const WITH_EXIF = readFileSync('./with-exif.jpg')
 
-writeFileSync('optimized-lossless.png', losslessCompressPng(PNG))
+writeFileSync('optimized-lossless.png', losslessCompressPngSync(PNG))
 
-writeFileSync('optimized-lossy.png', pngQuantize(PNG))
+writeFileSync('optimized-lossy.png', pngQuantizeSync(PNG))
 
 writeFileSync('optimized-lossless.jpg', compressJpegSync(readFileSync('./un-optimized.jpg')))
 

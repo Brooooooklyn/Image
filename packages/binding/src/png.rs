@@ -132,8 +132,14 @@ pub struct PngQuantOptions {
 }
 
 #[napi]
-pub fn png_quantize(input: Buffer, options: Option<PngQuantOptions>) -> Result<Buffer> {
-  let decoder = png::Decoder::new(input.as_ref());
+pub fn png_quantize_sync(input: Buffer, options: Option<PngQuantOptions>) -> Result<Buffer> {
+  let output = png_quantize_inner(input.as_ref(), &options.unwrap_or_default())?;
+  Ok(output.into())
+}
+
+#[inline]
+fn png_quantize_inner(input: &[u8], options: &PngQuantOptions) -> Result<Vec<u8>> {
+  let decoder = png::Decoder::new(input);
   let mut reader = decoder
     .read_info()
     .map_err(|err| Error::new(Status::InvalidArg, format!("Read png info failed {}", err)))?;
@@ -142,7 +148,6 @@ pub fn png_quantize(input: Buffer, options: Option<PngQuantOptions>) -> Result<B
     .next_frame(&mut decoded_buf)
     .map_err(|err| Error::new(Status::InvalidArg, format!("Read png frame failed {}", err)))?;
 
-  let options = options.unwrap_or_default();
   let width = output_info.width;
   let height = output_info.height;
   let mut liq = imagequant::new();
@@ -187,5 +192,39 @@ pub fn png_quantize(input: Buffer, options: Option<PngQuantOptions>) -> Result<B
         format!("Encode quantized png failed {}", err),
       )
     })?;
-  Ok(output.into())
+  Ok(output)
+}
+
+pub struct PngQuantTask {
+  input: Buffer,
+  options: PngQuantOptions,
+}
+
+#[napi]
+impl Task for PngQuantTask {
+  type Output = Vec<u8>;
+  type JsValue = Buffer;
+
+  fn compute(&mut self) -> Result<Self::Output> {
+    png_quantize_inner(self.input.as_ref(), &self.options)
+  }
+
+  fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
+    Ok(output.into())
+  }
+}
+
+#[napi]
+pub fn png_quantize(
+  input: Buffer,
+  options: Option<PngQuantOptions>,
+  signal: Option<AbortSignal>,
+) -> AsyncTask<PngQuantTask> {
+  AsyncTask::with_optional_signal(
+    PngQuantTask {
+      input,
+      options: options.unwrap_or_default(),
+    },
+    signal,
+  )
 }

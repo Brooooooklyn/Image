@@ -95,7 +95,8 @@ export interface PngQuantOptions {
    */
   posterization?: number | undefined | null
 }
-export function pngQuantize(input: Buffer, options?: PngQuantOptions | undefined | null): Buffer
+export function pngQuantizeSync(input: Buffer, options?: PngQuantOptions | undefined | null): Buffer
+export function pngQuantize(input: Buffer, options?: PngQuantOptions | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>
 export const enum JsColorType {
   /** Pixel is 8-bit luminance */
   L8 = 0,
