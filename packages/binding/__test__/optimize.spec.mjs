@@ -11,20 +11,6 @@ const ROOT_DIR = join(fileURLToPath(import.meta.url), '..', '..', '..', '..')
 const PNG = await fs.readFile(join(ROOT_DIR, 'un-optimized.png'))
 const JPEG = await fs.readFile(join(ROOT_DIR, 'un-optimized.jpg'))
 
-function isMusl() {
-  // For Node 10
-  if (!process.report || typeof process.report.getReport !== 'function') {
-    try {
-      return readFileSync('/usr/bin/ldd', 'utf8').includes('musl')
-    } catch (e) {
-      return true
-    }
-  } else {
-    const { glibcVersionRuntime } = process.report.getReport().header
-    return !glibcVersionRuntime
-  }
-}
-
 test('should be able to lossless optimize png image', async (t) => {
   const dest = await losslessCompressPng(PNG)
   t.true(dest.length < PNG.length)
@@ -59,17 +45,9 @@ test('should be able to lossless encode webp from jpeg', (t) => {
 })
 
 test('should be able to encode avif from png', (t) => {
-  if (isMusl()) {
-    t.pass()
-    return
-  }
   t.true(new Transformer(PNG).avifSync().length < PNG.length)
 })
 
 test('should be able to encode avif from jpeg', (t) => {
-  if (isMusl()) {
-    t.pass()
-    return
-  }
   t.true(new Transformer(JPEG).avifSync().length < JPEG.length)
 })

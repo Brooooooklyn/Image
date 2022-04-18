@@ -57,7 +57,10 @@ jobs:
               unset RUSTFLAGS &&
               unset CC &&
               unset CXX &&
-              apk add --update --repository http://dl-cdn.alpinelinux.org/alpine/edge/testing --no-cache perl nasm &&
+              apk add --update --repository http://dl-cdn.alpinelinux.org/alpine/edge/testing --no-cache perl nasm aom-dev &&
+              export LIB_AOM_STATIC_LIB_PATH=/usr/lib &&
+              export LIB_AOM_INCLUDE_PATH=/usr/include/aom/aom &&
+              export LIB_AOM_PKG_CONFIG_PATH=/usr/lib/pkgconfig &&
               yarn build -- --features with_simd &&
               strip packages/*/*.node
           - host: macos-latest
