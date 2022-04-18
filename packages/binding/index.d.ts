@@ -129,6 +129,7 @@ export interface Metadata {
 }
 export class Transformer {
   constructor(input: Buffer)
+  static fromRgbaPixels(input: Buffer | Uint8ClampedArray, width: number, height: number): Transformer
   metadata(withExif?: boolean | undefined | null, signal?: AbortSignal | undefined | null): Promise<Metadata>
   /** Rotate with exif orientation */
   rotate(): this
