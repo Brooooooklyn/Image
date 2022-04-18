@@ -13,8 +13,12 @@ with_simd = ["mozjpeg-sys/nasm_simd_parallel_build"]
 
 [dependencies]
 imagequant = "4.0.0"
+image = { version = "0.24" }
 infer = "0.7"
 jpeg-decoder = "0.2"
+libavif = { version = "0.10", git = "https://github.com/Brooooooklyn/libavif-rs", branch = "fix-build", default-features = false, features = [
+  "codec-aom",
+] }
 libc = "0.2"
 libwebp-sys = { version = "0.5", features = ["avx2", "sse41", "neon"] }
 lodepng = "3"
@@ -22,8 +26,9 @@ napi = { version = "2", default-features = false, features = ["napi3"] }
 napi-derive = { version = "2", default-features = false, features = [
   "type-def",
 ] }
+num_cpus = "1"
 png = "0.17"
-ravif = "0.8"
+rexif = "0.7"
 rgb = "0.8"
 
 [dependencies.oxipng]

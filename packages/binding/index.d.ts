@@ -8,20 +8,19 @@ export interface AvifConfig {
   quality?: number | undefined | null
   /** 0-100 scale */
   alphaQuality?: number | undefined | null
-  /** rav1e preset 1 (slow) 10 (fast but crappy) */
+  /** rav1e preset 1 (slow) 10 (fast but crappy), default is 4 */
   speed?: number | undefined | null
-  /** True if RGBA input has already been premultiplied. It inserts appropriate metadata. */
-  premultipliedAlpha?: boolean | undefined | null
-  /** Which pixel format to use in AVIF file. RGB tends to give larger files. */
-  colorSpace?: ColorSpace | undefined | null
   /** How many threads should be used (0 = match core count) */
   threads?: number | undefined | null
+  /** set to '4:2:0' to use chroma subsampling, default '4:4:4' */
+  chromaSubsampling?: ChromaSubsampling | undefined | null
 }
-export const enum ColorSpace {
-  YCbCr = 0,
-  RGB = 1,
+export const enum ChromaSubsampling {
+  Yuv444 = 0,
+  Yuv422 = 1,
+  Yuv420 = 2,
+  Yuv400 = 3
 }
-export function encodeAvif(input: Buffer, config?: AvifConfig | undefined | null): Buffer
 export interface JpegCompressOptions {
   /** Output quality, default is 100 (lossless) */
   quality?: number | undefined | null
@@ -31,12 +30,8 @@ export interface JpegCompressOptions {
    */
   optimizeScans?: boolean | undefined | null
 }
-/**
- * # Safety
- *
- * The output buffer from `mozjpeg` is checked by V8 while converting it into Node.js Buffer.
- */
-export function compressJpeg(input: Buffer, options?: JpegCompressOptions | undefined | null): Buffer
+export function compressJpegSync(input: Buffer, options?: JpegCompressOptions | undefined | null): Buffer
+export function compressJpeg(input: Buffer, options?: JpegCompressOptions | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>
 export interface PNGLosslessOptions {
   /**
    * Attempt to fix errors when decoding the input file rather than returning an Err.
@@ -81,7 +76,8 @@ export interface PNGLosslessOptions {
   /** Whether to use heuristics to pick the best filter and compression */
   useHeuristics?: boolean | undefined | null
 }
-export function losslessCompressPng(input: Buffer, options?: PNGLosslessOptions | undefined | null): Buffer
+export function losslessCompressPngSync(input: Buffer, options?: PNGLosslessOptions | undefined | null): Buffer
+export function losslessCompressPng(input: Buffer, options?: PNGLosslessOptions | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>
 export interface PngQuantOptions {
   /** default is 70 */
   minQuality?: number | undefined | null
@@ -99,16 +95,58 @@ export interface PngQuantOptions {
    */
   posterization?: number | undefined | null
 }
-export function pngQuantize(input: Buffer, options?: PngQuantOptions | undefined | null): Buffer
-/**
- * # Safety
- *
- * The output buffer is checked by V8 while converting it into Node.js Buffer.
- */
-export function losslessEncodeWebp(input: Buffer): Buffer
-/**
- * The quality factor `quality_factor` ranges from 0 to 100 and controls the loss and quality during compression.
- * The value 0 corresponds to low quality and small output sizes, whereas 100 is the highest quality and largest output size.
- * https://developers.google.com/speed/webp/docs/api#simple_encoding_api
- */
-export function encodeWebp(input: Buffer, qualityFactor: number): Buffer
+export function pngQuantizeSync(input: Buffer, options?: PngQuantOptions | undefined | null): Buffer
+export function pngQuantize(input: Buffer, options?: PngQuantOptions | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>
+export const enum JsColorType {
+  /** Pixel is 8-bit luminance */
+  L8 = 0,
+  /** Pixel is 8-bit luminance with an alpha channel */
+  La8 = 1,
+  /** Pixel contains 8-bit R, G and B channels */
+  Rgb8 = 2,
+  /** Pixel is 8-bit RGB with an alpha channel */
+  Rgba8 = 3,
+  /** Pixel is 16-bit luminance */
+  L16 = 4,
+  /** Pixel is 16-bit luminance with an alpha channel */
+  La16 = 5,
+  /** Pixel is 16-bit RGB */
+  Rgb16 = 6,
+  /** Pixel is 16-bit RGBA */
+  Rgba16 = 7,
+  /** Pixel is 32-bit float RGB */
+  Rgb32F = 8,
+  /** Pixel is 32-bit float RGBA */
+  Rgba32F = 9
+}
+export interface Metadata {
+  width: number
+  height: number
+  exif?: Record<string, string> | undefined | null
+  orientation?: number | undefined | null
+  format: string
+  colorType: JsColorType
+}
+export class Transformer {
+  constructor(input: Buffer)
+  metadata(withExif?: boolean | undefined | null, signal?: AbortSignal | undefined | null): Promise<Metadata>
+  /** Rotate with exif orientation */
+  rotate(): this
+  resize(width?: number | undefined | null, height?: number | undefined | null): this
+  /**
+   * The quality factor `quality_factor` ranges from 0 to 100 and controls the loss and quality during compression.
+   * The value 0 corresponds to low quality and small output sizes, whereas 100 is the highest quality and largest output size.
+   * https://developers.google.com/speed/webp/docs/api#simple_encoding_api
+   */
+  webp(qualityFactor: number, signal?: AbortSignal | undefined | null): Promise<Buffer>
+  /**
+   * The quality factor `quality_factor` ranges from 0 to 100 and controls the loss and quality during compression.
+   * The value 0 corresponds to low quality and small output sizes, whereas 100 is the highest quality and largest output size.
+   * https://developers.google.com/speed/webp/docs/api#simple_encoding_api
+   */
+  webpSync(qualityFactor: number): Buffer
+  webpLossless(signal?: AbortSignal | undefined | null): Promise<Buffer>
+  webpLosslessSync(): Buffer
+  avif(options?: AvifConfig | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>
+  avifSync(options?: AvifConfig | undefined | null): Buffer
+}

@@ -2,6 +2,7 @@ target
 node_modules
 *.node
 Cargo.lock
+*.log
 .swc
 .DS_Store
 .pnp.*
@@ -16,3 +17,4 @@ Cargo.lock
 optimized*
 lib
 dist
+output-exif.*

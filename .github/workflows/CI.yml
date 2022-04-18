@@ -32,9 +32,12 @@ jobs:
             build: |
               yarn build -- --features with_simd
             target: x86_64-pc-windows-msvc
-          - host: windows-latest
+          - host: windows-2022-xl
             build: |
-              yarn build -- --features with_simd
+              $Env:PATH="C:\Cargo\bin;$Env:PATH"
+              $Env:LIBAVIF_CROSS_WIN32=1
+              yarn build -- --features with_simd --target i686-pc-windows-msvc
+              node -e "console.log(process.arch)"
               yarn test
             target: i686-pc-windows-msvc
           - host: ubuntu-latest
@@ -43,6 +46,7 @@ jobs:
             docker: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-debian
             build: |
               set -e && \
+              apt install libaom-dev -y && \
               yarn build -- --features with_simd --target x86_64-unknown-linux-gnu && \
               strip packages/*/*.node
           - host: ubuntu-latest
@@ -52,7 +56,11 @@ jobs:
               set -e &&
               unset RUSTFLAGS &&
               unset CC &&
-              apk add --update --repository http://dl-cdn.alpinelinux.org/alpine/edge/testing --no-cache nasm &&
+              unset CXX &&
+              apk add --update --repository http://dl-cdn.alpinelinux.org/alpine/edge/testing --no-cache perl nasm aom-dev &&
+              export LIB_AOM_STATIC_LIB_PATH=/usr/lib &&
+              export LIB_AOM_INCLUDE_PATH=/usr/include/aom/aom &&
+              export LIB_AOM_PKG_CONFIG_PATH=/usr/lib/pkgconfig &&
               yarn build -- --features with_simd &&
               strip packages/*/*.node
           - host: macos-latest
@@ -96,6 +104,7 @@ jobs:
               export CC="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi24-clang"
               export CXX="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi24-clang++"
               export PATH="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin:${PATH}"
+              export C_INCLUDE_PATH="${ANDROID_NDK_HOME}/sources/android/cpufeatures"; 
               yarn build -- --features oxipng_libdeflater
               ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/arm-linux-androideabi-strip packages/*/*.node
           - host: ubuntu-latest
@@ -105,6 +114,10 @@ jobs:
             docker: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-alpine
             build: >-
               set -e &&
+              unset RUSTFLAGS &&
+              unset CC &&
+              unset CXX &&
+              apk add --update --repository http://dl-cdn.alpinelinux.org/alpine/edge/testing --no-cache aom-dev perl &&
               yarn build -- --target aarch64-unknown-linux-musl --features with_simd &&
               /aarch64-linux-musl-cross/bin/aarch64-linux-musl-strip packages/*/*.node
     name: stable - ${{ matrix.settings.target }} - node@16
@@ -121,9 +134,10 @@ jobs:
           cache: yarn
       - name: Setup nasm
         uses: ilammy/setup-nasm@v1
-        if: matrix.settings.target == 'x86_64-pc-windows-msvc' || matrix.settings.target == 'x86_64-apple-darwin'
+        if: matrix.settings.target == 'x86_64-pc-windows-msvc' || matrix.settings.target == 'x86_64-apple-darwin' || matrix.settings.target == 'i686-pc-windows-msvc'
       - name: Install
         uses: actions-rs/toolchain@v1
+        if: matrix.settings.target != 'i686-pc-windows-msvc'
         with:
           profile: minimal
           override: true
@@ -172,8 +186,12 @@ jobs:
           run: ${{ matrix.settings.build }}
       - name: Build
         run: ${{ matrix.settings.build }}
-        if: ${{ !matrix.settings.docker }}
+        if: ${{ !matrix.settings.docker && matrix.settings.target != 'i686-pc-windows-msvc' }}
         shell: bash
+      - name: Build
+        run: ${{ matrix.settings.build }}
+        if: matrix.settings.target == 'i686-pc-windows-msvc'
+        shell: powershell
       - name: Upload artifact
         uses: actions/upload-artifact@v2
         with:
@@ -198,7 +216,7 @@ jobs:
           usesh: true
           mem: 3000
           prepare: |
-            pkg install -y curl nasm node14 python2
+            pkg install -y curl cmake nasm node14 python2 perl5
             curl -qL https://www.npmjs.com/install.sh | sh
             npm install -g yarn
             curl https://sh.rustup.rs -sSf --output rustup.sh
