@@ -2,14 +2,19 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::Arc;
 
-use image::{ColorType, DynamicImage, ImageFormat};
+use image::{imageops::FilterType, ColorType, DynamicImage, ImageEncoder, ImageFormat};
 use libavif::AvifData;
 use napi::{bindgen_prelude::*, JsBuffer};
 use napi_derive::napi;
 
-use crate::avif::{encode_avif_inner, AvifConfig};
+use crate::{
+  avif::{encode_avif_inner, AvifConfig},
+  png::PngEncodeOptions,
+};
 
 pub enum EncodeOptions {
+  Png(PngEncodeOptions),
+  Jpeg(u32),
   Webp(u32),
   WebpLossless,
   Avif(Option<AvifConfig>),
@@ -19,6 +24,151 @@ pub enum EncodeOptions {
   Pnm,
   Tga,
   Farbfeld,
+}
+
+#[napi]
+#[repr(u16)]
+pub enum Orientation {
+  /// Normal
+  Horizontal = 1,
+  MirrorHorizontal,
+  Rotate180,
+  MirrorVertical,
+  MirrorHorizontalAndRotate270Cw,
+  Rotate90Cw,
+  MirrorHorizontalAndRotate90Cw,
+  Rotate270Cw,
+}
+
+impl Default for Orientation {
+  fn default() -> Self {
+    Orientation::Horizontal
+  }
+}
+
+impl From<Orientation> for u16 {
+  fn from(orientation: Orientation) -> Self {
+    orientation as u16
+  }
+}
+
+impl TryFrom<u16> for Orientation {
+  type Error = Error;
+
+  fn try_from(value: u16) -> Result<Self> {
+    match value {
+      1 => Ok(Orientation::Horizontal),
+      2 => Ok(Orientation::MirrorHorizontal),
+      3 => Ok(Orientation::Rotate180),
+      4 => Ok(Orientation::MirrorVertical),
+      5 => Ok(Orientation::MirrorHorizontalAndRotate270Cw),
+      6 => Ok(Orientation::Rotate90Cw),
+      7 => Ok(Orientation::MirrorHorizontalAndRotate90Cw),
+      8 => Ok(Orientation::Rotate270Cw),
+      _ => Err(Error::new(
+        Status::InvalidArg,
+        format!("Invalid orientation {}", value),
+      )),
+    }
+  }
+}
+
+#[napi]
+/// Available Sampling Filters.
+///
+/// ## Examples
+///
+/// To test the different sampling filters on a real example, you can find two
+/// examples called
+/// [`scaledown`](https://github.com/image-rs/image/tree/master/examples/scaledown)
+/// and
+/// [`scaleup`](https://github.com/image-rs/image/tree/master/examples/scaleup)
+/// in the `examples` directory of the crate source code.
+///
+/// Here is a 3.58 MiB
+/// [test image](https://github.com/image-rs/image/blob/master/examples/scaledown/test.jpg)
+/// that has been scaled down to 300x225 px:
+///
+/// <!-- NOTE: To test new test images locally, replace the GitHub path with `../../../docs/` -->
+/// <div style="display: flex; flex-wrap: wrap; align-items: flex-start;">
+///   <div style="margin: 0 8px 8px 0;">
+///     <img src="https://raw.githubusercontent.com/image-rs/image/master/examples/scaledown/scaledown-test-near.png" title="Nearest"><br>
+///     Nearest Neighbor
+///   </div>
+///   <div style="margin: 0 8px 8px 0;">
+///     <img src="https://raw.githubusercontent.com/image-rs/image/master/examples/scaledown/scaledown-test-tri.png" title="Triangle"><br>
+///     Linear: Triangle
+///   </div>
+///   <div style="margin: 0 8px 8px 0;">
+///     <img src="https://raw.githubusercontent.com/image-rs/image/master/examples/scaledown/scaledown-test-cmr.png" title="CatmullRom"><br>
+///     Cubic: Catmull-Rom
+///   </div>
+///   <div style="margin: 0 8px 8px 0;">
+///     <img src="https://raw.githubusercontent.com/image-rs/image/master/examples/scaledown/scaledown-test-gauss.png" title="Gaussian"><br>
+///     Gaussian
+///   </div>
+///   <div style="margin: 0 8px 8px 0;">
+///     <img src="https://raw.githubusercontent.com/image-rs/image/master/examples/scaledown/scaledown-test-lcz2.png" title="Lanczos3"><br>
+///     Lanczos with window 3
+///   </div>
+/// </div>
+///
+/// ## Speed
+///
+/// Time required to create each of the examples above, tested on an Intel
+/// i7-4770 CPU with Rust 1.37 in release mode:
+///
+/// <table style="width: auto;">
+///   <tr>
+///     <th>Nearest</th>
+///     <td>31 ms</td>
+///   </tr>
+///   <tr>
+///     <th>Triangle</th>
+///     <td>414 ms</td>
+///   </tr>
+///   <tr>
+///     <th>CatmullRom</th>
+///     <td>817 ms</td>
+///   </tr>
+///   <tr>
+///     <th>Gaussian</th>
+///     <td>1180 ms</td>
+///   </tr>
+///   <tr>
+///     <th>Lanczos3</th>
+///     <td>1170 ms</td>
+///   </tr>
+/// </table>
+pub enum ResizeFilterType {
+  /// Nearest Neighbor
+  Nearest,
+  /// Linear Filter
+  Triangle,
+  /// Cubic Filter
+  CatmullRom,
+  /// Gaussian Filter
+  Gaussian,
+  /// Lanczos with window 3
+  Lanczos3,
+}
+
+impl Default for ResizeFilterType {
+  fn default() -> Self {
+    ResizeFilterType::Lanczos3
+  }
+}
+
+impl From<ResizeFilterType> for FilterType {
+  fn from(filter: ResizeFilterType) -> Self {
+    match filter {
+      ResizeFilterType::Nearest => FilterType::Nearest,
+      ResizeFilterType::Triangle => FilterType::Triangle,
+      ResizeFilterType::CatmullRom => FilterType::CatmullRom,
+      ResizeFilterType::Gaussian => FilterType::Gaussian,
+      ResizeFilterType::Lanczos3 => FilterType::Lanczos3,
+    }
+  }
 }
 
 struct ImageMetaData {
@@ -199,11 +349,25 @@ impl Task for MetadataTask {
   }
 }
 
+#[derive(Default, Clone, Copy)]
+struct ImageTransformArgs {
+  grayscale: bool,
+  invert: bool,
+  rotate: bool,
+  resize: (u32, Option<u32>, ResizeFilterType),
+  contrast: Option<f32>,
+  blur: Option<f32>,
+  unsharpen: Option<(f32, i32)>,
+  filter3x3: Option<[f32; 9]>,
+  brightness: Option<i32>,
+  huerotate: Option<i32>,
+  orientation: Option<Orientation>,
+}
+
 pub struct EncodeTask {
   image: Arc<ThreadSafeDynamicImage>,
   options: EncodeOptions,
-  rotate: bool,
-  resize: (Option<u32>, Option<u32>),
+  image_transform_args: ImageTransformArgs,
 }
 
 pub enum EncodeOutput {
@@ -220,44 +384,63 @@ impl Task for EncodeTask {
   type JsValue = JsBuffer;
 
   fn compute(&mut self) -> Result<Self::Output> {
-    let meta = self.image.get(self.rotate)?;
-    let orientation = meta.orientation;
-    if self.rotate {
+    let meta = self.image.get(self.image_transform_args.rotate)?;
+    let orientation = self
+      .image_transform_args
+      .orientation
+      .map(Ok)
+      .or_else(|| meta.orientation.map(|o| o.try_into()));
+    if self.image_transform_args.rotate || self.image_transform_args.orientation.is_some() {
       if let Some(orientation) = orientation {
-        match orientation {
-          1 => {}
-          2 => meta.image = meta.image.fliph(),
-          3 => meta.image = meta.image.rotate180(),
-          4 => meta.image = meta.image.flipv(),
-          5 => meta.image = meta.image.fliph().rotate270(),
-          6 => meta.image = meta.image.rotate270(),
-          7 => meta.image = meta.image.flipv().rotate270(),
-          8 => meta.image = meta.image.rotate90(),
-          _ => {
-            return Err(Error::new(
-              Status::InvalidArg,
-              format!("Unsupported orientation value {}", orientation),
-            ))
+        match orientation? {
+          Orientation::Horizontal => {}
+          Orientation::MirrorHorizontal => meta.image = meta.image.fliph(),
+          Orientation::Rotate180 => meta.image = meta.image.rotate180(),
+          Orientation::MirrorVertical => meta.image = meta.image.flipv(),
+          Orientation::MirrorHorizontalAndRotate270Cw => {
+            meta.image = meta.image.fliph().rotate270()
           }
+          Orientation::Rotate90Cw => meta.image = meta.image.rotate270(),
+          Orientation::MirrorHorizontalAndRotate90Cw => meta.image = meta.image.flipv().rotate270(),
+          Orientation::Rotate270Cw => meta.image = meta.image.rotate90(),
         }
       }
     }
     let raw_width = meta.image.width();
     let raw_height = meta.image.height();
-    match self.resize {
-      (Some(w), Some(h)) => {
-        meta.image = meta
-          .image
-          .resize(w, h, image::imageops::FilterType::Lanczos3)
-      }
-      (Some(w), None) => {
+    match self.image_transform_args.resize {
+      (w, Some(h), filter_type) => meta.image = meta.image.resize(w, h, filter_type.into()),
+      (w, None, filter_type) => {
         meta.image = meta.image.resize(
           w,
           ((w as f32 / raw_width as f32) * (raw_height as f32)) as u32,
-          image::imageops::FilterType::Lanczos3,
+          filter_type.into(),
         )
       }
-      _ => {}
+    }
+    if self.image_transform_args.grayscale {
+      meta.image.grayscale();
+    }
+    if self.image_transform_args.invert {
+      meta.image.invert();
+    }
+    if let Some(contrast) = self.image_transform_args.contrast {
+      meta.image.adjust_contrast(contrast);
+    }
+    if let Some(blur) = self.image_transform_args.blur {
+      meta.image.blur(blur);
+    }
+    if let Some((sigma, threshold)) = self.image_transform_args.unsharpen {
+      meta.image.unsharpen(sigma, threshold);
+    }
+    if let Some(filter) = self.image_transform_args.filter3x3 {
+      meta.image.filter3x3(filter.as_ref());
+    }
+    if let Some(brighten) = self.image_transform_args.brightness {
+      meta.image.brighten(brighten);
+    }
+    if let Some(hue) = self.image_transform_args.huerotate {
+      meta.image.huerotate(hue);
     }
     let dynamic_image = &mut meta.image;
     let color_type = &meta.color_type;
@@ -288,6 +471,44 @@ impl Task for EncodeTask {
       EncodeOptions::Avif(ref options) => {
         let output = encode_avif_inner(options.clone(), dynamic_image)?;
         return Ok(EncodeOutput::Avif(output));
+      }
+      EncodeOptions::Png(ref options) => {
+        let mut output: Cursor<Vec<u8>> = Cursor::new(Vec::with_capacity(
+          (dynamic_image.width() * dynamic_image.height() * 4) as usize,
+        ));
+        let png_encoder = image::codecs::png::PngEncoder::new_with_quality(
+          &mut output,
+          options.compression_type.unwrap_or_default().into(),
+          options.filter_type.unwrap_or_default().into(),
+        );
+        png_encoder
+          .write_image(
+            dynamic_image.as_bytes(),
+            dynamic_image.width(),
+            dynamic_image.height(),
+            dynamic_image.color(),
+          )
+          .map_err(|err| {
+            Error::new(
+              Status::GenericFailure,
+              format!("Encode output png failed {}", err),
+            )
+          })?;
+        return Ok(EncodeOutput::Buffer(output.into_inner()));
+      }
+      EncodeOptions::Jpeg(quality) => {
+        let mut output: Cursor<Vec<u8>> = Cursor::new(Vec::with_capacity(
+          (dynamic_image.width() * dynamic_image.height() * 4) as usize,
+        ));
+        let mut encoder =
+          image::codecs::jpeg::JpegEncoder::new_with_quality(&mut output, quality as u8);
+        encoder.encode_image(dynamic_image).map_err(|err| {
+          Error::new(
+            Status::GenericFailure,
+            format!("Encode output jpeg failed {}", err),
+          )
+        })?;
+        return Ok(EncodeOutput::Buffer(output.into_inner()));
       }
       EncodeOptions::Bmp => ImageFormat::Bmp,
       EncodeOptions::Ico => ImageFormat::Ico,
@@ -335,8 +556,7 @@ impl Task for EncodeTask {
 #[napi]
 pub struct Transformer {
   dynamic_image: Arc<ThreadSafeDynamicImage>,
-  rotate: bool,
-  resize: (Option<u32>, Option<u32>),
+  image_transform_args: ImageTransformArgs,
 }
 
 #[napi]
@@ -345,8 +565,7 @@ impl Transformer {
   pub fn new(input: Buffer) -> Transformer {
     Self {
       dynamic_image: Arc::new(ThreadSafeDynamicImage::new(input)),
-      rotate: false,
-      resize: (None, None),
+      image_transform_args: ImageTransformArgs::default(),
     }
   }
 
@@ -377,8 +596,7 @@ impl Transformer {
           raw: vec![0].into(),
           image: Box::into_raw(image_meta),
         }),
-        rotate: false,
-        resize: (None, None),
+        image_transform_args: Default::default(),
       })
     } else {
       Err(Error::new(
@@ -406,13 +624,115 @@ impl Transformer {
   #[napi]
   /// Rotate with exif orientation
   pub fn rotate(&mut self) -> &Self {
-    self.rotate = true;
+    self.image_transform_args.rotate = true;
     self
   }
 
   #[napi]
-  pub fn resize(&mut self, width: Option<u32>, height: Option<u32>) -> &Self {
-    self.resize = (width, height);
+  /// Return a grayscale version of this image.
+  /// Returns `Luma` images in most cases. However, for `f32` images,
+  /// this will return a greyscale `Rgb/Rgba` image instead.
+  pub fn grayscale(&mut self) -> &Self {
+    self.image_transform_args.grayscale = true;
+    self
+  }
+
+  #[napi]
+  /// Invert the colors of this image.
+  pub fn invert(&mut self) -> &Self {
+    self.image_transform_args.invert = true;
+    self
+  }
+
+  #[napi]
+  /// Resize this image using the specified filter algorithm.
+  /// The image is scaled to the maximum possible size that fits
+  /// within the bounds specified by `width` and `height`.
+  pub fn resize(
+    &mut self,
+    width: u32,
+    height: Option<u32>,
+    filter_type: Option<ResizeFilterType>,
+  ) -> &Self {
+    self.image_transform_args.resize = (width, height, filter_type.unwrap_or_default());
+    self
+  }
+
+  #[napi]
+  /// Performs a Gaussian blur on this image.
+  /// `sigma` is a measure of how much to blur by.
+  pub fn blur(&mut self, sigma: f64) -> &Self {
+    self.image_transform_args.blur = Some(sigma as f32);
+    self
+  }
+
+  #[napi]
+  /// Performs an unsharpen mask on this image.
+  /// `sigma` is the amount to blur the image by.
+  /// `threshold` is a control of how much to sharpen.
+  ///
+  /// See <https://en.wikipedia.org/wiki/Unsharp_masking#Digital_unsharp_masking>
+  pub fn unsharpen(&mut self, sigma: f64, threshold: i32) -> &Self {
+    self.image_transform_args.unsharpen = Some((sigma as f32, threshold));
+    self
+  }
+
+  #[napi(js_name = "filter3x3")]
+  /// Filters this image with the specified 3x3 kernel.
+  pub fn filter3x3(&mut self, kernel: Vec<f64>) -> Result<&Self> {
+    if kernel.len() != 9 {
+      return Err(Error::new(
+        Status::InvalidArg,
+        "filter must be 3 x 3".to_owned(),
+      ));
+    }
+    self.image_transform_args.filter3x3 = Some([
+      kernel[0] as f32,
+      kernel[1] as f32,
+      kernel[2] as f32,
+      kernel[3] as f32,
+      kernel[4] as f32,
+      kernel[5] as f32,
+      kernel[6] as f32,
+      kernel[7] as f32,
+      kernel[8] as f32,
+    ]);
+    Ok(self)
+  }
+
+  #[napi]
+  /// Adjust the contrast of this image.
+  /// `contrast` is the amount to adjust the contrast by.
+  /// Negative values decrease the contrast and positive values increase the contrast.
+  pub fn adjust_contrast(&mut self, contrast: f64) -> &Self {
+    self.image_transform_args.contrast = Some(contrast as f32);
+    self
+  }
+
+  #[napi]
+  /// Brighten the pixels of this image.
+  /// `value` is the amount to brighten each pixel by.
+  /// Negative values decrease the brightness and positive values increase it.
+  pub fn brighten(&mut self, brightness: i32) -> &Self {
+    self.image_transform_args.brightness = Some(brightness);
+    self
+  }
+
+  #[napi]
+  /// Hue rotate the supplied image.
+  /// `value` is the degrees to rotate each pixel by.
+  /// 0 and 360 do nothing, the rest rotates by the given degree value.
+  /// just like the css webkit filter hue-rotate(180)
+  pub fn huerotate(&mut self, hue: i32) -> &Self {
+    self.image_transform_args.huerotate = Some(hue);
+    self
+  }
+
+  #[napi]
+  /// Set the new orientation
+  /// the new orientation value will override the exif orientation value
+  pub fn orientation(&mut self, orientation: Orientation) -> &Self {
+    self.image_transform_args.orientation = Some(orientation);
     self
   }
 
@@ -429,8 +749,7 @@ impl Transformer {
       EncodeTask {
         image: self.dynamic_image.clone(),
         options: EncodeOptions::Webp(quality_factor),
-        rotate: self.rotate,
-        resize: self.resize,
+        image_transform_args: self.image_transform_args,
       },
       signal,
     )
@@ -444,8 +763,7 @@ impl Transformer {
     let mut encoder = EncodeTask {
       image: self.dynamic_image.clone(),
       options: EncodeOptions::Webp(quality_factor),
-      rotate: self.rotate,
-      resize: self.resize,
+      image_transform_args: self.image_transform_args,
     };
     let output = encoder.compute()?;
     encoder.resolve(env, output)
@@ -457,8 +775,7 @@ impl Transformer {
       EncodeTask {
         image: self.dynamic_image.clone(),
         options: EncodeOptions::WebpLossless,
-        rotate: self.rotate,
-        resize: self.resize,
+        image_transform_args: self.image_transform_args,
       },
       signal,
     )
@@ -469,8 +786,7 @@ impl Transformer {
     let mut encoder = EncodeTask {
       image: self.dynamic_image.clone(),
       options: EncodeOptions::WebpLossless,
-      rotate: self.rotate,
-      resize: self.resize,
+      image_transform_args: self.image_transform_args,
     };
     let output = encoder.compute()?;
     encoder.resolve(env, output)
@@ -486,8 +802,7 @@ impl Transformer {
       EncodeTask {
         image: self.dynamic_image.clone(),
         options: EncodeOptions::Avif(options),
-        rotate: self.rotate,
-        resize: self.resize,
+        image_transform_args: self.image_transform_args,
       },
       signal,
     )
@@ -498,14 +813,206 @@ impl Transformer {
     let mut encoder = EncodeTask {
       image: self.dynamic_image.clone(),
       options: EncodeOptions::Avif(options),
-      rotate: self.rotate,
-      resize: self.resize,
+      image_transform_args: self.image_transform_args,
+    };
+    let output = encoder.compute()?;
+    encoder.resolve(env, output)
+  }
+
+  #[napi]
+  pub fn png(
+    &mut self,
+    options: Option<PngEncodeOptions>,
+    signal: Option<AbortSignal>,
+  ) -> AsyncTask<EncodeTask> {
+    AsyncTask::with_optional_signal(
+      EncodeTask {
+        image: self.dynamic_image.clone(),
+        options: EncodeOptions::Png(options.unwrap_or_default()),
+        image_transform_args: self.image_transform_args,
+      },
+      signal,
+    )
+  }
+
+  #[napi]
+  pub fn png_sync(&mut self, env: Env, options: Option<PngEncodeOptions>) -> Result<JsBuffer> {
+    let mut encoder = EncodeTask {
+      image: self.dynamic_image.clone(),
+      options: EncodeOptions::Png(options.unwrap_or_default()),
+      image_transform_args: self.image_transform_args,
+    };
+    let output = encoder.compute()?;
+    encoder.resolve(env, output)
+  }
+
+  #[napi]
+  /// default `quality` is 90
+  pub fn jpeg(
+    &mut self,
+    quality: Option<u32>,
+    signal: Option<AbortSignal>,
+  ) -> AsyncTask<EncodeTask> {
+    AsyncTask::with_optional_signal(
+      EncodeTask {
+        image: self.dynamic_image.clone(),
+        options: EncodeOptions::Jpeg(quality.unwrap_or(90)),
+        image_transform_args: self.image_transform_args,
+      },
+      signal,
+    )
+  }
+
+  #[napi]
+  /// default `quality` is 90
+  pub fn jpeg_sync(&mut self, env: Env, quality: Option<u32>) -> Result<JsBuffer> {
+    let mut encoder = EncodeTask {
+      image: self.dynamic_image.clone(),
+      options: EncodeOptions::Jpeg(quality.unwrap_or(90)),
+      image_transform_args: self.image_transform_args,
+    };
+    let output = encoder.compute()?;
+    encoder.resolve(env, output)
+  }
+
+  #[napi]
+  pub fn bmp(&mut self, signal: Option<AbortSignal>) -> AsyncTask<EncodeTask> {
+    AsyncTask::with_optional_signal(
+      EncodeTask {
+        image: self.dynamic_image.clone(),
+        options: EncodeOptions::Bmp,
+        image_transform_args: self.image_transform_args,
+      },
+      signal,
+    )
+  }
+
+  #[napi]
+  pub fn bmp_sync(&mut self, env: Env) -> Result<JsBuffer> {
+    let mut encoder = EncodeTask {
+      image: self.dynamic_image.clone(),
+      options: EncodeOptions::Bmp,
+      image_transform_args: self.image_transform_args,
+    };
+    let output = encoder.compute()?;
+    encoder.resolve(env, output)
+  }
+
+  #[napi]
+  pub fn ico(&mut self, signal: Option<AbortSignal>) -> AsyncTask<EncodeTask> {
+    AsyncTask::with_optional_signal(
+      EncodeTask {
+        image: self.dynamic_image.clone(),
+        options: EncodeOptions::Ico,
+        image_transform_args: self.image_transform_args,
+      },
+      signal,
+    )
+  }
+
+  #[napi]
+  pub fn ico_sync(&mut self, env: Env) -> Result<JsBuffer> {
+    let mut encoder = EncodeTask {
+      image: self.dynamic_image.clone(),
+      options: EncodeOptions::Ico,
+      image_transform_args: self.image_transform_args,
+    };
+    let output = encoder.compute()?;
+    encoder.resolve(env, output)
+  }
+
+  #[napi]
+  pub fn tiff(&mut self, signal: Option<AbortSignal>) -> AsyncTask<EncodeTask> {
+    AsyncTask::with_optional_signal(
+      EncodeTask {
+        image: self.dynamic_image.clone(),
+        options: EncodeOptions::Tiff,
+        image_transform_args: self.image_transform_args,
+      },
+      signal,
+    )
+  }
+
+  #[napi]
+  pub fn tiff_sync(&mut self, env: Env) -> Result<JsBuffer> {
+    let mut encoder = EncodeTask {
+      image: self.dynamic_image.clone(),
+      options: EncodeOptions::Tiff,
+      image_transform_args: self.image_transform_args,
+    };
+    let output = encoder.compute()?;
+    encoder.resolve(env, output)
+  }
+
+  #[napi]
+  pub fn pnm(&mut self, signal: Option<AbortSignal>) -> AsyncTask<EncodeTask> {
+    AsyncTask::with_optional_signal(
+      EncodeTask {
+        image: self.dynamic_image.clone(),
+        options: EncodeOptions::Pnm,
+        image_transform_args: self.image_transform_args,
+      },
+      signal,
+    )
+  }
+
+  #[napi]
+  pub fn pnm_sync(&mut self, env: Env) -> Result<JsBuffer> {
+    let mut encoder = EncodeTask {
+      image: self.dynamic_image.clone(),
+      options: EncodeOptions::Pnm,
+      image_transform_args: self.image_transform_args,
+    };
+    let output = encoder.compute()?;
+    encoder.resolve(env, output)
+  }
+
+  #[napi]
+  pub fn tga(&mut self, signal: Option<AbortSignal>) -> AsyncTask<EncodeTask> {
+    AsyncTask::with_optional_signal(
+      EncodeTask {
+        image: self.dynamic_image.clone(),
+        options: EncodeOptions::Tga,
+        image_transform_args: self.image_transform_args,
+      },
+      signal,
+    )
+  }
+
+  #[napi]
+  pub fn tga_sync(&mut self, env: Env) -> Result<JsBuffer> {
+    let mut encoder = EncodeTask {
+      image: self.dynamic_image.clone(),
+      options: EncodeOptions::Tga,
+      image_transform_args: self.image_transform_args,
+    };
+    let output = encoder.compute()?;
+    encoder.resolve(env, output)
+  }
+
+  #[napi]
+  pub fn farbfeld(&mut self, signal: Option<AbortSignal>) -> AsyncTask<EncodeTask> {
+    AsyncTask::with_optional_signal(
+      EncodeTask {
+        image: self.dynamic_image.clone(),
+        options: EncodeOptions::Farbfeld,
+        image_transform_args: self.image_transform_args,
+      },
+      signal,
+    )
+  }
+
+  #[napi]
+  pub fn farbfeld_sync(&mut self, env: Env) -> Result<JsBuffer> {
+    let mut encoder = EncodeTask {
+      image: self.dynamic_image.clone(),
+      options: EncodeOptions::Farbfeld,
+      image_transform_args: self.image_transform_args,
     };
     let output = encoder.compute()?;
     encoder.resolve(env, output)
   }
 }
-
 #[inline]
 fn parse_exif(
   buf: &[u8],

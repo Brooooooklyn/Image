@@ -83,8 +83,7 @@ pub(crate) fn encode_avif_inner(
   let (width, height) = input_image.dimensions();
   let image = match input_image {
     DynamicImage::ImageRgb8(img) => {
-      let image: ImageBuffer<Rgb<u8>, _> = img.convert();
-      let avif_image = image.as_flat_samples();
+      let avif_image = img.as_flat_samples();
       encode_image(
         avif_image.as_slice(),
         width,
