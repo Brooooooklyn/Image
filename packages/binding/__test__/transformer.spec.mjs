@@ -3,10 +3,12 @@ import { join } from 'path'
 import { fileURLToPath } from 'url'
 
 import test from 'ava'
+import { decode } from 'blurhash'
 
 import { Transformer } from '../index.js'
 
-const ROOT_DIR = join(fileURLToPath(import.meta.url), '..', '..', '..', '..')
+const __DIRNAME = join(fileURLToPath(import.meta.url), '..')
+const ROOT_DIR = join(__DIRNAME, '..', '..', '..')
 
 const PNG = await fs.readFile(join(ROOT_DIR, 'un-optimized.png'))
 const JPEG = await fs.readFile(join(ROOT_DIR, 'un-optimized.jpg'))
@@ -37,4 +39,11 @@ test('should be able to get exif from jpg', async (t) => {
 test('should be able to encode into webp', async (t) => {
   const decoder = new Transformer(PNG)
   await t.notThrowsAsync(() => decoder.webp(75))
+})
+
+test('should be able to create transformer from raw rgba pixels', async (t) => {
+  const pixels = decode('LEHV6nWB2yk8pyo0adR*.7kCMdnj', 32, 32)
+  const webp = await Transformer.fromRgbaPixels(pixels, 32, 32).webpLossless()
+  const webpSnapshot = await fs.readFile(join(__DIRNAME, 'blurhash.webp'))
+  t.deepEqual(webp, webpSnapshot)
 })

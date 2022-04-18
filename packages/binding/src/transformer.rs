@@ -342,12 +342,50 @@ pub struct Transformer {
 #[napi]
 impl Transformer {
   #[napi(constructor)]
-  pub fn new(input: Buffer) -> Result<Transformer> {
-    Ok(Self {
+  pub fn new(input: Buffer) -> Transformer {
+    Self {
       dynamic_image: Arc::new(ThreadSafeDynamicImage::new(input)),
       rotate: false,
       resize: (None, None),
-    })
+    }
+  }
+
+  #[napi]
+  pub fn from_rgba_pixels(
+    input: Either<Buffer, Uint8ClampedArray>,
+    width: u32,
+    height: u32,
+  ) -> Result<Transformer> {
+    if let Some(image) = image::RgbaImage::from_vec(
+      width,
+      height,
+      match input {
+        Either::A(a) => a.to_vec(),
+        Either::B(b) => b.to_vec(),
+      },
+    ) {
+      let image_meta = Box::new(Some(ImageMetaData {
+        color_type: ColorType::Rgba8,
+        orientation: None,
+        image: DynamicImage::ImageRgba8(image),
+        exif: HashMap::new(),
+        format: ImageFormat::Png,
+        has_parsed_exif: true,
+      }));
+      Ok(Self {
+        dynamic_image: Arc::new(ThreadSafeDynamicImage {
+          raw: vec![0].into(),
+          image: Box::into_raw(image_meta),
+        }),
+        rotate: false,
+        resize: (None, None),
+      })
+    } else {
+      Err(Error::new(
+        Status::InvalidArg,
+        format!("Input buffer is not matched the width and height"),
+      ))
+    }
   }
 
   #[napi]
