@@ -19,7 +19,7 @@ export const enum ChromaSubsampling {
   Yuv444 = 0,
   Yuv422 = 1,
   Yuv420 = 2,
-  Yuv400 = 3
+  Yuv400 = 3,
 }
 export interface JpegCompressOptions {
   /** Output quality, default is 100 (lossless) */
@@ -31,7 +31,47 @@ export interface JpegCompressOptions {
   optimizeScans?: boolean | undefined | null
 }
 export function compressJpegSync(input: Buffer, options?: JpegCompressOptions | undefined | null): Buffer
-export function compressJpeg(input: Buffer, options?: JpegCompressOptions | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>
+export function compressJpeg(
+  input: Buffer,
+  options?: JpegCompressOptions | undefined | null,
+  signal?: AbortSignal | undefined | null,
+): Promise<Buffer>
+export const enum CompressionType {
+  /** Default compression level */
+  Default = 0,
+  /** Fast, minimal compression */
+  Fast = 1,
+  /** High compression level */
+  Best = 2,
+  /** Huffman coding compression */
+  Huffman = 3,
+  /** Run-length encoding compression */
+  Rle = 4,
+}
+export const enum FilterType {
+  /**
+   * No processing done, best used for low bit depth greyscale or data with a
+   * low color count
+   */
+  NoFilter = 0,
+  /** Filters based on previous pixel in the same scanline */
+  Sub = 1,
+  /** Filters based on the scanline above */
+  Up = 2,
+  /** Filters based on the average of left and right neighbor pixels */
+  Avg = 3,
+  /** Algorithm that takes into account the left, upper left, and above pixels */
+  Paeth = 4,
+  /**
+   * Uses a heuristic to select one of the preceding filters for each
+   * scanline rather than one filter for the entire image
+   */
+  Adaptive = 5,
+}
+export interface PngEncodeOptions {
+  compressionType?: CompressionType | undefined | null
+  filterType?: FilterType | undefined | null
+}
 export interface PNGLosslessOptions {
   /**
    * Attempt to fix errors when decoding the input file rather than returning an Err.
@@ -77,7 +117,11 @@ export interface PNGLosslessOptions {
   useHeuristics?: boolean | undefined | null
 }
 export function losslessCompressPngSync(input: Buffer, options?: PNGLosslessOptions | undefined | null): Buffer
-export function losslessCompressPng(input: Buffer, options?: PNGLosslessOptions | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>
+export function losslessCompressPng(
+  input: Buffer,
+  options?: PNGLosslessOptions | undefined | null,
+  signal?: AbortSignal | undefined | null,
+): Promise<Buffer>
 export interface PngQuantOptions {
   /** default is 70 */
   minQuality?: number | undefined | null
@@ -96,7 +140,101 @@ export interface PngQuantOptions {
   posterization?: number | undefined | null
 }
 export function pngQuantizeSync(input: Buffer, options?: PngQuantOptions | undefined | null): Buffer
-export function pngQuantize(input: Buffer, options?: PngQuantOptions | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>
+export function pngQuantize(
+  input: Buffer,
+  options?: PngQuantOptions | undefined | null,
+  signal?: AbortSignal | undefined | null,
+): Promise<Buffer>
+export const enum Orientation {
+  /** Normal */
+  Horizontal = 1,
+  MirrorHorizontal = 2,
+  Rotate180 = 3,
+  MirrorVertical = 4,
+  MirrorHorizontalAndRotate270Cw = 5,
+  Rotate90Cw = 6,
+  MirrorHorizontalAndRotate90Cw = 7,
+  Rotate270Cw = 8,
+}
+/**
+ * Available Sampling Filters.
+ *
+ * ## Examples
+ *
+ * To test the different sampling filters on a real example, you can find two
+ * examples called
+ * [`scaledown`](https://github.com/image-rs/image/tree/master/examples/scaledown)
+ * and
+ * [`scaleup`](https://github.com/image-rs/image/tree/master/examples/scaleup)
+ * in the `examples` directory of the crate source code.
+ *
+ * Here is a 3.58 MiB
+ * [test image](https://github.com/image-rs/image/blob/master/examples/scaledown/test.jpg)
+ * that has been scaled down to 300x225 px:
+ *
+ * <div style="display: flex; flex-wrap: wrap; align-items: flex-start;">
+ *   <div style="margin: 0 8px 8px 0;">
+ *     <img src="https://raw.githubusercontent.com/image-rs/image/master/examples/scaledown/scaledown-test-near.png" title="Nearest"><br>
+ *     Nearest Neighbor
+ *   </div>
+ *   <div style="margin: 0 8px 8px 0;">
+ *     <img src="https://raw.githubusercontent.com/image-rs/image/master/examples/scaledown/scaledown-test-tri.png" title="Triangle"><br>
+ *     Linear: Triangle
+ *   </div>
+ *   <div style="margin: 0 8px 8px 0;">
+ *     <img src="https://raw.githubusercontent.com/image-rs/image/master/examples/scaledown/scaledown-test-cmr.png" title="CatmullRom"><br>
+ *     Cubic: Catmull-Rom
+ *   </div>
+ *   <div style="margin: 0 8px 8px 0;">
+ *     <img src="https://raw.githubusercontent.com/image-rs/image/master/examples/scaledown/scaledown-test-gauss.png" title="Gaussian"><br>
+ *     Gaussian
+ *   </div>
+ *   <div style="margin: 0 8px 8px 0;">
+ *     <img src="https://raw.githubusercontent.com/image-rs/image/master/examples/scaledown/scaledown-test-lcz2.png" title="Lanczos3"><br>
+ *     Lanczos with window 3
+ *   </div>
+ * </div>
+ *
+ * ## Speed
+ *
+ * Time required to create each of the examples above, tested on an Intel
+ * i7-4770 CPU with Rust 1.37 in release mode:
+ *
+ * <table style="width: auto;">
+ *   <tr>
+ *     <th>Nearest</th>
+ *     <td>31 ms</td>
+ *   </tr>
+ *   <tr>
+ *     <th>Triangle</th>
+ *     <td>414 ms</td>
+ *   </tr>
+ *   <tr>
+ *     <th>CatmullRom</th>
+ *     <td>817 ms</td>
+ *   </tr>
+ *   <tr>
+ *     <th>Gaussian</th>
+ *     <td>1180 ms</td>
+ *   </tr>
+ *   <tr>
+ *     <th>Lanczos3</th>
+ *     <td>1170 ms</td>
+ *   </tr>
+ * </table>
+ */
+export const enum ResizeFilterType {
+  /** Nearest Neighbor */
+  Nearest = 0,
+  /** Linear Filter */
+  Triangle = 1,
+  /** Cubic Filter */
+  CatmullRom = 2,
+  /** Gaussian Filter */
+  Gaussian = 3,
+  /** Lanczos with window 3 */
+  Lanczos3 = 4,
+}
 export const enum JsColorType {
   /** Pixel is 8-bit luminance */
   L8 = 0,
@@ -117,7 +255,7 @@ export const enum JsColorType {
   /** Pixel is 32-bit float RGB */
   Rgb32F = 8,
   /** Pixel is 32-bit float RGBA */
-  Rgba32F = 9
+  Rgba32F = 9,
 }
 export interface Metadata {
   width: number
@@ -133,7 +271,59 @@ export class Transformer {
   metadata(withExif?: boolean | undefined | null, signal?: AbortSignal | undefined | null): Promise<Metadata>
   /** Rotate with exif orientation */
   rotate(): this
-  resize(width?: number | undefined | null, height?: number | undefined | null): this
+  /**
+   * Return a grayscale version of this image.
+   * Returns `Luma` images in most cases. However, for `f32` images,
+   * this will return a greyscale `Rgb/Rgba` image instead.
+   */
+  grayscale(): this
+  /** Invert the colors of this image. */
+  invert(): this
+  /**
+   * Resize this image using the specified filter algorithm.
+   * The image is scaled to the maximum possible size that fits
+   * within the bounds specified by `width` and `height`.
+   */
+  resize(width: number, height?: number | undefined | null, filterType?: ResizeFilterType | undefined | null): this
+  /**
+   * Performs a Gaussian blur on this image.
+   * `sigma` is a measure of how much to blur by.
+   */
+  blur(sigma: number): this
+  /**
+   * Performs an unsharpen mask on this image.
+   * `sigma` is the amount to blur the image by.
+   * `threshold` is a control of how much to sharpen.
+   *
+   * See <https://en.wikipedia.org/wiki/Unsharp_masking#Digital_unsharp_masking>
+   */
+  unsharpen(sigma: number, threshold: number): this
+  /** Filters this image with the specified 3x3 kernel. */
+  filter3x3(kernel: Array<number>): this
+  /**
+   * Adjust the contrast of this image.
+   * `contrast` is the amount to adjust the contrast by.
+   * Negative values decrease the contrast and positive values increase the contrast.
+   */
+  adjustContrast(contrast: number): this
+  /**
+   * Brighten the pixels of this image.
+   * `value` is the amount to brighten each pixel by.
+   * Negative values decrease the brightness and positive values increase it.
+   */
+  brighten(brightness: number): this
+  /**
+   * Hue rotate the supplied image.
+   * `value` is the degrees to rotate each pixel by.
+   * 0 and 360 do nothing, the rest rotates by the given degree value.
+   * just like the css webkit filter hue-rotate(180)
+   */
+  huerotate(hue: number): this
+  /**
+   * Set the new orientation
+   * the new orientation value will override the exif orientation value
+   */
+  orientation(orientation: Orientation): this
   /**
    * The quality factor `quality_factor` ranges from 0 to 100 and controls the loss and quality during compression.
    * The value 0 corresponds to low quality and small output sizes, whereas 100 is the highest quality and largest output size.
@@ -150,4 +340,22 @@ export class Transformer {
   webpLosslessSync(): Buffer
   avif(options?: AvifConfig | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>
   avifSync(options?: AvifConfig | undefined | null): Buffer
+  png(options?: PngEncodeOptions | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>
+  pngSync(options?: PngEncodeOptions | undefined | null): Buffer
+  /** default `quality` is 90 */
+  jpeg(quality?: number | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>
+  /** default `quality` is 90 */
+  jpegSync(quality?: number | undefined | null): Buffer
+  bmp(signal?: AbortSignal | undefined | null): Promise<Buffer>
+  bmpSync(): Buffer
+  ico(signal?: AbortSignal | undefined | null): Promise<Buffer>
+  icoSync(): Buffer
+  tiff(signal?: AbortSignal | undefined | null): Promise<Buffer>
+  tiffSync(): Buffer
+  pnm(signal?: AbortSignal | undefined | null): Promise<Buffer>
+  pnmSync(): Buffer
+  tga(signal?: AbortSignal | undefined | null): Promise<Buffer>
+  tgaSync(): Buffer
+  farbfeld(signal?: AbortSignal | undefined | null): Promise<Buffer>
+  farbfeldSync(): Buffer
 }

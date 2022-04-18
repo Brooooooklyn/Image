@@ -2,6 +2,82 @@ use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use rgb::FromSlice;
 
+#[napi]
+pub enum CompressionType {
+  /// Default compression level
+  Default,
+  /// Fast, minimal compression
+  Fast,
+  /// High compression level
+  Best,
+  /// Huffman coding compression
+  Huffman,
+  /// Run-length encoding compression
+  Rle,
+}
+
+impl Default for CompressionType {
+  fn default() -> Self {
+    CompressionType::Default
+  }
+}
+
+impl From<CompressionType> for image::codecs::png::CompressionType {
+  fn from(compression_type: CompressionType) -> Self {
+    match compression_type {
+      CompressionType::Default => image::codecs::png::CompressionType::Default,
+      CompressionType::Fast => image::codecs::png::CompressionType::Fast,
+      CompressionType::Best => image::codecs::png::CompressionType::Best,
+      CompressionType::Huffman => image::codecs::png::CompressionType::Huffman,
+      CompressionType::Rle => image::codecs::png::CompressionType::Rle,
+    }
+  }
+}
+
+#[napi]
+pub enum FilterType {
+  /// No processing done, best used for low bit depth greyscale or data with a
+  /// low color count
+  NoFilter,
+  /// Filters based on previous pixel in the same scanline
+  Sub,
+  /// Filters based on the scanline above
+  Up,
+  /// Filters based on the average of left and right neighbor pixels
+  Avg,
+  /// Algorithm that takes into account the left, upper left, and above pixels
+  Paeth,
+  /// Uses a heuristic to select one of the preceding filters for each
+  /// scanline rather than one filter for the entire image
+  Adaptive,
+}
+
+impl Default for FilterType {
+  fn default() -> Self {
+    FilterType::NoFilter
+  }
+}
+
+impl From<FilterType> for image::codecs::png::FilterType {
+  fn from(filter: FilterType) -> Self {
+    match filter {
+      FilterType::NoFilter => image::codecs::png::FilterType::NoFilter,
+      FilterType::Sub => image::codecs::png::FilterType::Sub,
+      FilterType::Up => image::codecs::png::FilterType::Up,
+      FilterType::Avg => image::codecs::png::FilterType::Avg,
+      FilterType::Paeth => image::codecs::png::FilterType::Paeth,
+      FilterType::Adaptive => image::codecs::png::FilterType::Adaptive,
+    }
+  }
+}
+
+#[napi(object)]
+#[derive(Default)]
+pub struct PngEncodeOptions {
+  pub compression_type: Option<CompressionType>,
+  pub filter_type: Option<FilterType>,
+}
+
 #[napi(object, js_name = "PNGLosslessOptions")]
 #[derive(Default)]
 pub struct PNGLosslessOptions {
