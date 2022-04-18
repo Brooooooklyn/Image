@@ -158,8 +158,8 @@ jobs:
       - name: Cache NPM dependencies
         uses: actions/cache@v3
         with:
-          path: node_modules
-          key: npm-cache-${{ matrix.settings.target }}-node@16-${{ hashFiles('yarn.lock') }}
+          path: .yarn/cache
+          key: npm-cache-${{ matrix.settings.target }}-node@16
       - name: Setup toolchain
         run: ${{ matrix.settings.setup }}
         if: ${{ matrix.settings.setup }}
@@ -274,12 +274,12 @@ jobs:
       - name: Cache NPM dependencies
         uses: actions/cache@v3
         with:
-          path: node_modules
-          key: npm-cache-test-${{ matrix.settings.target }}-${{ matrix.node }}-${{ hashFiles('yarn.lock') }}
+          path: .yarn/cache
+          key: npm-cache-test-${{ matrix.settings.target }}-${{ matrix.node }}
       - name: Install dependencies
         run: yarn install --immutable --mode=skip-build
       - name: Download artifacts
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: bindings-${{ matrix.settings.target }}
           path: artifacts
@@ -314,12 +314,12 @@ jobs:
       - name: Cache NPM dependencies
         uses: actions/cache@v3
         with:
-          path: node_modules
-          key: npm-cache-test-linux-x64-gnu-${{ matrix.node }}-${{ hashFiles('yarn.lock') }}
+          path: .yarn/cache
+          key: npm-cache-test-linux-x64-gnu-${{ matrix.node }}
       - name: Install dependencies
         run: yarn install --immutable --mode=skip-build
       - name: Download artifacts
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: bindings-x86_64-unknown-linux-gnu
           path: artifacts
@@ -354,12 +354,12 @@ jobs:
       - name: Cache NPM dependencies
         uses: actions/cache@v3
         with:
-          path: node_modules
-          key: npm-cache-test-x86_64-unknown-linux-musl-${{ matrix.node }}-${{ hashFiles('yarn.lock') }}
+          path: .yarn/cache
+          key: npm-cache-test-x86_64-unknown-linux-musl-${{ matrix.node }}
       - name: Install dependencies
         run: yarn install --immutable --mode=skip-build
       - name: Download artifacts
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: bindings-x86_64-unknown-linux-musl
           path: artifacts
@@ -387,15 +387,15 @@ jobs:
       - run: docker run --rm --privileged multiarch/qemu-user-static:register --reset
       - uses: actions/checkout@v3
       - name: Download artifacts
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: bindings-aarch64-unknown-linux-gnu
           path: artifacts
       - name: Cache NPM dependencies
         uses: actions/cache@v3
         with:
-          path: node_modules
-          key: npm-cache-test-linux-aarch64-gnu-${{ matrix.node }}-${{ hashFiles('yarn.lock') }}
+          path: .yarn/cache
+          key: npm-cache-test-linux-aarch64-gnu-${{ matrix.node }}
       - name: Install dependencies
         run: yarn install --immutable --mode=skip-build
       - name: Move artifacts
@@ -429,15 +429,15 @@ jobs:
       - run: docker run --rm --privileged multiarch/qemu-user-static:register --reset
       - uses: actions/checkout@v3
       - name: Download artifacts
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: bindings-armv7-unknown-linux-gnueabihf
           path: artifacts
       - name: Cache NPM dependencies
         uses: actions/cache@v3
         with:
-          path: node_modules
-          key: npm-cache-test-linux-arm-gnueabihf-${{ matrix.node }}-${{ hashFiles('yarn.lock') }}
+          path: .yarn/cache
+          key: npm-cache-test-linux-arm-gnueabihf-${{ matrix.node }}
       - name: Install dependencies
         run: yarn install --immutable --mode=skip-build
       - name: Move artifacts
@@ -476,14 +476,12 @@ jobs:
       - name: Cache NPM dependencies
         uses: actions/cache@v3
         with:
-          path: node_modules
-          key: npm-cache-ubuntu-latest-${{ hashFiles('yarn.lock') }}
-          restore-keys: |
-            npm-cache-
+          path: .yarn/cache
+          key: npm-cache-ubuntu-latest-publish
       - name: Install dependencies
         run: yarn install --immutable --mode=skip-build
       - name: Download all artifacts
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           path: artifacts
       - name: Move artifacts
