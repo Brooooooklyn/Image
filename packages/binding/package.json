@@ -56,7 +56,7 @@
     "format": "run-p format:prettier format:rs",
     "format:prettier": "prettier --config ./package.json -w .",
     "format:rs": "cargo fmt --all",
-    "prepublishOnly": "napi prepublish -t npm",
+    "prepublishOnly": "napi prepublish",
     "version": "napi version"
   },
   "repository": "git@github.com:Brooooooklyn/Image.git"
