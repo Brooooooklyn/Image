@@ -32,6 +32,10 @@ console.timeEnd('@napi-rs/image webp')
 
 writeFileSync('output-exif.image.webp', imageOutputWebp)
 
+const imageOutputWithoutRotateWebp = await new Transformer(WITH_EXIF).resize(450 / 2).webp(75)
+
+writeFileSync('output-exif.no-rotate.image.webp', imageOutputWithoutRotateWebp)
+
 console.time('sharp avif')
 
 const sharpOutputAvif = await sharp(WITH_EXIF)

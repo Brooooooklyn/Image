@@ -31,7 +31,7 @@ test('should be able to get metadata from jpg', async (t) => {
 test('should be able to get exif from jpg', async (t) => {
   const decoder = new Transformer(WITH_EXIF_JPG)
   const metadata = await decoder.metadata(true)
-  t.snapshot(metadata.exif)
+  t.snapshot(metadata)
   t.is(metadata.orientation, 5)
   t.is(metadata.format, 'jpeg')
 })
