@@ -74,7 +74,9 @@ impl From<FilterType> for image::codecs::png::FilterType {
 #[napi(object)]
 #[derive(Default)]
 pub struct PngEncodeOptions {
+  /// Default is `CompressionType::Default`
   pub compression_type: Option<CompressionType>,
+  /// Default is `FilterType::NoFilter`
   pub filter_type: Option<FilterType>,
 }
 

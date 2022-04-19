@@ -623,8 +623,11 @@ impl Transformer {
 
   #[napi]
   /// Rotate with exif orientation
-  pub fn rotate(&mut self) -> &Self {
+  /// If the orientation param is not null,
+  /// the new orientation value will override the exif orientation value
+  pub fn rotate(&mut self, orientation: Option<Orientation>) -> &Self {
     self.image_transform_args.rotate = true;
+    self.image_transform_args.orientation = orientation;
     self
   }
 
@@ -729,26 +732,18 @@ impl Transformer {
   }
 
   #[napi]
-  /// Set the new orientation
-  /// the new orientation value will override the exif orientation value
-  pub fn orientation(&mut self, orientation: Orientation) -> &Self {
-    self.image_transform_args.orientation = Some(orientation);
-    self
-  }
-
-  #[napi]
   /// The quality factor `quality_factor` ranges from 0 to 100 and controls the loss and quality during compression.
   /// The value 0 corresponds to low quality and small output sizes, whereas 100 is the highest quality and largest output size.
   /// https://developers.google.com/speed/webp/docs/api#simple_encoding_api
   pub fn webp(
     &mut self,
-    quality_factor: u32,
+    quality_factor: Option<u32>,
     signal: Option<AbortSignal>,
   ) -> AsyncTask<EncodeTask> {
     AsyncTask::with_optional_signal(
       EncodeTask {
         image: self.dynamic_image.clone(),
-        options: EncodeOptions::Webp(quality_factor),
+        options: EncodeOptions::Webp(quality_factor.unwrap_or(90)),
         image_transform_args: self.image_transform_args,
       },
       signal,
@@ -759,10 +754,10 @@ impl Transformer {
   /// The quality factor `quality_factor` ranges from 0 to 100 and controls the loss and quality during compression.
   /// The value 0 corresponds to low quality and small output sizes, whereas 100 is the highest quality and largest output size.
   /// https://developers.google.com/speed/webp/docs/api#simple_encoding_api
-  pub fn webp_sync(&mut self, env: Env, quality_factor: u32) -> Result<JsBuffer> {
+  pub fn webp_sync(&mut self, env: Env, quality_factor: Option<u32>) -> Result<JsBuffer> {
     let mut encoder = EncodeTask {
       image: self.dynamic_image.clone(),
-      options: EncodeOptions::Webp(quality_factor),
+      options: EncodeOptions::Webp(quality_factor.unwrap_or(90)),
       image_transform_args: self.image_transform_args,
     };
     let output = encoder.compute()?;
