@@ -3,6 +3,17 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [1.1.1](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.1.0...@napi-rs/image@1.1.1) (2022-04-21)
+
+
+### Bug Fixes
+
+* **binding:** resize options and jpeg compress implementation ([b23c53b](https://github.com/Brooooooklyn/Image/commit/b23c53bf1085ef16b345a995fe130144dcf16a8f))
+
+
+
+
+
 # 1.1.0 (2022-04-19)
 
 ### Features
