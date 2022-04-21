@@ -354,7 +354,7 @@ struct ImageTransformArgs {
   grayscale: bool,
   invert: bool,
   rotate: bool,
-  resize: (u32, Option<u32>, ResizeFilterType),
+  resize: Option<(u32, Option<u32>, ResizeFilterType)>,
   contrast: Option<f32>,
   blur: Option<f32>,
   unsharpen: Option<(f32, i32)>,
@@ -409,14 +409,15 @@ impl Task for EncodeTask {
     let raw_width = meta.image.width();
     let raw_height = meta.image.height();
     match self.image_transform_args.resize {
-      (w, Some(h), filter_type) => meta.image = meta.image.resize(w, h, filter_type.into()),
-      (w, None, filter_type) => {
+      Some((w, Some(h), filter_type)) => meta.image = meta.image.resize(w, h, filter_type.into()),
+      Some((w, None, filter_type)) => {
         meta.image = meta.image.resize(
           w,
           ((w as f32 / raw_width as f32) * (raw_height as f32)) as u32,
           filter_type.into(),
         )
       }
+      None => {}
     }
     if self.image_transform_args.grayscale {
       meta.image.grayscale();
@@ -444,14 +445,16 @@ impl Task for EncodeTask {
     }
     let dynamic_image = &mut meta.image;
     let color_type = &meta.color_type;
+    let width = dynamic_image.width();
+    let height = dynamic_image.height();
     let format = match self.options {
       EncodeOptions::Webp(quality_factor) => {
         let (output_buf, size) = unsafe {
           crate::webp::encode_webp_inner(
             dynamic_image.as_bytes(),
             quality_factor,
-            dynamic_image.width(),
-            dynamic_image.height(),
+            width,
+            height,
             color_type,
           )
         }?;
@@ -461,8 +464,8 @@ impl Task for EncodeTask {
         let (output_buf, size) = unsafe {
           crate::webp::lossless_encode_webp_inner(
             dynamic_image.as_bytes(),
-            dynamic_image.width(),
-            dynamic_image.height(),
+            width,
+            height,
             color_type,
           )
         }?;
@@ -657,7 +660,7 @@ impl Transformer {
     height: Option<u32>,
     filter_type: Option<ResizeFilterType>,
   ) -> &Self {
-    self.image_transform_args.resize = (width, height, filter_type.unwrap_or_default());
+    self.image_transform_args.resize = Some((width, height, filter_type.unwrap_or_default()));
     self
   }
 
