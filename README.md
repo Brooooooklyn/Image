@@ -79,6 +79,8 @@ In avif suite, fastest is @napi-rs/image
 
 ## `@napi-rs/image`
 
+See [Full documentation for `@napi-rs/image`](./packages/binding/README.md)
+
 ### Example
 
 You can clone this repo and run the following command to taste the example below:
@@ -86,15 +88,27 @@ You can clone this repo and run the following command to taste the example below
 - `yarn install`
 - `node example.mjs`
 
+| Optimization                                                                                            | Raw                                          | Raw Size | Optimized Size |
+| ------------------------------------------------------------------------------------------------------- | -------------------------------------------- | -------- | -------------- |
+| `losslessCompressPng()` <br/>**Lossless**                                                               | <img src="./un-optimized.png" width="400" /> | `888K`   | `736K`         |
+| `pngQuantize({ maxQuality: 75 })` <br/>**Lossy**                                                        | <img src="./un-optimized.png" width="400" /> | `888K`   | `248K`         |
+| `compressJpeg()` <br/>**Lossless**                                                                      | <img src="./un-optimized.jpg" width="400" /> | `192K`   | `184K`         |
+| `compressJpeg(75)` <br/>**Lossy**                                                                       | <img src="./un-optimized.jpg" width="400" /> | `192K`   | `104K`         |
+| `new Transformer(PNG).webpLossless()`<br/>**Lossless**                                                  | <img src="./un-optimized.png" width="400" /> | `888K`   | `588K`         |
+| `new Transformer(PNG).webp(75)`<br/>**Lossy**                                                           | <img src="./un-optimized.png" width="400" /> | `888K`   | `64K`          |
+| `Transformer(PNG).avif({ quality: 100 })`<br/>**Lossless**                                              | <img src="./un-optimized.png" width="400" /> | `888K`   | `536K`         |
+| `new Transformer(PNG).avif({ quality: 75, chromaSubsampling: ChromaSubsampling.Yuv420 })`<br/>**Lossy** | <img src="./un-optimized.png" width="400" /> | `888K`   | `64K`          |
+
 ```js
 import { readFileSync, writeFileSync } from 'fs'
 
 import {
-  losslessCompressPngSync,
-  compressJpegSync,
-  pngQuantizeSync,
+  losslessCompressPng,
+  compressJpeg,
+  pngQuantize,
   Transformer,
   ResizeFilterType,
+  ChromaSubsampling,
 } from '@napi-rs/image'
 import chalk from 'chalk'
 
@@ -103,33 +117,45 @@ const JPEG = readFileSync('./un-optimized.jpg')
 // https://github.com/ianare/exif-samples/blob/master/jpg/orientation/portrait_5.jpg
 const WITH_EXIF = readFileSync('./with-exif.jpg')
 
-writeFileSync('optimized-lossless.png', losslessCompressPngSync(PNG))
+writeFileSync('optimized-lossless.png', await losslessCompressPng(PNG))
 
 console.info(chalk.green('Lossless compression png done'))
 
-writeFileSync('optimized-lossy.png', pngQuantizeSync(PNG))
+writeFileSync(
+  'optimized-lossy.png',
+  await pngQuantize(PNG, {
+    maxQuality: 75,
+  }),
+)
 
 console.info(chalk.green('Lossy compression png done'))
 
-writeFileSync('optimized-lossless.jpg', compressJpegSync(readFileSync('./un-optimized.jpg')))
+writeFileSync('optimized-lossless.jpg', await compressJpeg(readFileSync('./un-optimized.jpg')))
 
 console.info(chalk.green('Lossless compression jpeg done'))
 
-writeFileSync('optimized-lossless.webp', new Transformer(PNG).webpLosslessSync())
+writeFileSync('optimized-lossy.jpg', await compressJpeg(readFileSync('./un-optimized.jpg'), { quality: 75 }))
+
+console.info(chalk.green('Lossy compression jpeg done'))
+
+writeFileSync('optimized-lossless.webp', await new Transformer(PNG).webpLossless())
 
 console.info(chalk.green('Lossless encoding webp from PNG done'))
 
-writeFileSync('optimized-lossy-jpeg.webp', new Transformer(JPEG).webpSync(90))
-
-console.info(chalk.green('Encoding webp from JPEG done'))
-
-writeFileSync('optimized-lossy.webp', new Transformer(PNG).webpSync(90))
+writeFileSync('optimized-lossy-png.webp', await new Transformer(PNG).webp(75))
 
 console.info(chalk.green('Encoding webp from PNG done'))
 
-writeFileSync('optimized.avif', new Transformer(PNG).avifSync())
+writeFileSync('optimized-lossless-png.avif', await new Transformer(PNG).avif({ quality: 100 }))
 
-console.info(chalk.green('Encoding avif from PNG done'))
+console.info(chalk.green('Lossless encoding avif from PNG done'))
+
+writeFileSync(
+  'optimized-lossy-png.avif',
+  await new Transformer(PNG).avif({ quality: 75, chromaSubsampling: ChromaSubsampling.Yuv420 }),
+)
+
+console.info(chalk.green('Lossy encoding avif from PNG done'))
 
 writeFileSync(
   'output-exif.webp',
@@ -141,5 +167,3 @@ writeFileSync(
 
 console.info(chalk.green('Encoding webp from JPEG with EXIF done'))
 ```
-
-See [Full documentation for `@napi-rs/image`](./packages/binding/README.md)

@@ -55,7 +55,7 @@ export const enum ChromaSubsampling {
    * What if the chroma subsampling model is 4:0:0?
    * That says to use every pixel of luma data, but that each row has 0 chroma samples applied to it. The resulting image, then, is comprised solely of the luminance data—a greyscale image.
    */
-  Yuv400 = 3
+  Yuv400 = 3,
 }
 export interface JpegCompressOptions {
   /** Output quality, default is 100 (lossless) */
@@ -67,7 +67,11 @@ export interface JpegCompressOptions {
   optimizeScans?: boolean | undefined | null
 }
 export function compressJpegSync(input: Buffer, options?: JpegCompressOptions | undefined | null): Buffer
-export function compressJpeg(input: Buffer, options?: JpegCompressOptions | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>
+export function compressJpeg(
+  input: Buffer,
+  options?: JpegCompressOptions | undefined | null,
+  signal?: AbortSignal | undefined | null,
+): Promise<Buffer>
 export const enum CompressionType {
   /** Default compression level */
   Default = 0,
@@ -78,7 +82,7 @@ export const enum CompressionType {
   /** Huffman coding compression */
   Huffman = 3,
   /** Run-length encoding compression */
-  Rle = 4
+  Rle = 4,
 }
 export const enum FilterType {
   /**
@@ -98,7 +102,7 @@ export const enum FilterType {
    * Uses a heuristic to select one of the preceding filters for each
    * scanline rather than one filter for the entire image
    */
-  Adaptive = 5
+  Adaptive = 5,
 }
 export interface PngEncodeOptions {
   /** Default is `CompressionType::Default` */
@@ -151,7 +155,11 @@ export interface PNGLosslessOptions {
   useHeuristics?: boolean | undefined | null
 }
 export function losslessCompressPngSync(input: Buffer, options?: PNGLosslessOptions | undefined | null): Buffer
-export function losslessCompressPng(input: Buffer, options?: PNGLosslessOptions | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>
+export function losslessCompressPng(
+  input: Buffer,
+  options?: PNGLosslessOptions | undefined | null,
+  signal?: AbortSignal | undefined | null,
+): Promise<Buffer>
 export interface PngQuantOptions {
   /** default is 70 */
   minQuality?: number | undefined | null
@@ -170,7 +178,11 @@ export interface PngQuantOptions {
   posterization?: number | undefined | null
 }
 export function pngQuantizeSync(input: Buffer, options?: PngQuantOptions | undefined | null): Buffer
-export function pngQuantize(input: Buffer, options?: PngQuantOptions | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>
+export function pngQuantize(
+  input: Buffer,
+  options?: PngQuantOptions | undefined | null,
+  signal?: AbortSignal | undefined | null,
+): Promise<Buffer>
 export const enum Orientation {
   /** Normal */
   Horizontal = 1,
@@ -180,7 +192,7 @@ export const enum Orientation {
   MirrorHorizontalAndRotate270Cw = 5,
   Rotate90Cw = 6,
   MirrorHorizontalAndRotate90Cw = 7,
-  Rotate270Cw = 8
+  Rotate270Cw = 8,
 }
 /**
  * Available Sampling Filters.
@@ -260,7 +272,7 @@ export const enum ResizeFilterType {
   /** Gaussian Filter */
   Gaussian = 3,
   /** Lanczos with window 3 */
-  Lanczos3 = 4
+  Lanczos3 = 4,
 }
 export const enum JsColorType {
   /** Pixel is 8-bit luminance */
@@ -282,7 +294,7 @@ export const enum JsColorType {
   /** Pixel is 32-bit float RGB */
   Rgb32F = 8,
   /** Pixel is 32-bit float RGBA */
-  Rgba32F = 9
+  Rgba32F = 9,
 }
 export interface Metadata {
   width: number
