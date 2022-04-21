@@ -61,7 +61,9 @@ function bench(name, options = {}) {
             takeUntil(timer(maxDuration)),
           ),
         )
-        await lastValueFrom(finish$)
+        if (finishedIterations !== totalIterations) {
+          await lastValueFrom(finish$)
+        }
         const duration = Number(hrtime.bigint() - start)
         const currentPerf = totalIterations / duration
         if (currentPerf > fastest.perf) {
