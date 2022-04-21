@@ -15,6 +15,7 @@ env:
       - '**/*.gitignore'
       - .editorconfig
       - docs/**
+      - website/**
   pull_request: null
 jobs:
   build:
