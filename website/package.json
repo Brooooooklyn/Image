@@ -1,0 +1,21 @@
+{
+  "name": "website",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "dependencies": {
+    "@napi-rs/image": "^1.1.1",
+    "markdown-to-jsx": "^7.1.7",
+    "next": "^12.1.6-canary.4",
+    "nextra": "2.0.0-alpha.49",
+    "nextra-theme-docs": "2.0.0-alpha.50",
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0",
+    "sharp": "^0.30.4"
+  },
+  "scripts": {
+    "build": "node generate-img.js && next build",
+    "dev": "next dev",
+    "start": "next start"
+  }
+}
