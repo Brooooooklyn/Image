@@ -1,3 +1,5 @@
+use std::io::Cursor;
+
 use napi::{bindgen_prelude::*, JsBuffer};
 use napi_derive::napi;
 
@@ -17,8 +19,30 @@ pub fn compress_jpeg_sync(
   input: Buffer,
   options: Option<JpegCompressOptions>,
 ) -> Result<JsBuffer> {
+  let options = options.unwrap_or_default();
+  let quality = options.quality.unwrap_or(100);
+  if quality != 100 {
+    let img = image::load_from_memory_with_format(input.as_ref(), image::ImageFormat::Jpeg)
+      .map_err(|err| {
+        Error::new(
+          Status::InvalidArg,
+          format!("Load input jpeg image failed {}", err),
+        )
+      })?;
+    let mut dest = Cursor::new(Vec::with_capacity(input.len()));
+    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut dest, quality as u8);
+    encoder.encode_image(&img).map_err(|err| {
+      Error::new(
+        Status::GenericFailure,
+        format!("Encode image from input jpeg failed {}", err),
+      )
+    })?;
+    return env
+      .create_buffer_with_data(dest.into_inner())
+      .map(|b| b.into_raw());
+  }
   let (buf, outsize, de_c_info, compress_c_info) =
-    unsafe { moz_jpeg_compress(input.as_ref(), &options.unwrap_or_default()) }?;
+    unsafe { moz_jpeg_compress(input.as_ref(), &options) }?;
   unsafe {
     env.create_buffer_with_borrowed_data(
       buf,
@@ -63,9 +87,6 @@ unsafe fn moz_jpeg_compress(
     mozjpeg_sys::jpeg_read_header(&mut de_c_info, 1);
     let src_coef_arrays = mozjpeg_sys::jpeg_read_coefficients(&mut de_c_info);
     mozjpeg_sys::jpeg_copy_critical_parameters(&de_c_info, &mut compress_c_info);
-    if let Some(quality) = opts.quality {
-      mozjpeg_sys::jpeg_set_quality(&mut compress_c_info, quality as i32, 0);
-    }
     if opts.optimize_scans.unwrap_or(true) {
       mozjpeg_sys::jpeg_c_set_bool_param(
         &mut compress_c_info,
@@ -138,40 +159,69 @@ pub struct CompressJpegTask {
   input: Buffer,
 }
 
+pub enum JpegOptimizeOutput {
+  Lossless(ThreadsafeMozjpegCompressOutput),
+  Lossy(Vec<u8>),
+}
+
 #[napi]
 impl Task for CompressJpegTask {
-  type Output = ThreadsafeMozjpegCompressOutput;
+  type Output = JpegOptimizeOutput;
   type JsValue = JsBuffer;
 
   fn compute(&mut self) -> Result<Self::Output> {
+    let quality = self.options.quality.unwrap_or(100);
+    if quality != 100 {
+      let img = image::load_from_memory_with_format(self.input.as_ref(), image::ImageFormat::Jpeg)
+        .map_err(|err| {
+          Error::new(
+            Status::InvalidArg,
+            format!("Load input jpeg image failed {}", err),
+          )
+        })?;
+      let mut dest = Cursor::new(Vec::with_capacity(self.input.len()));
+      let mut encoder =
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut dest, quality as u8);
+      encoder.encode_image(&img).map_err(|err| {
+        Error::new(
+          Status::GenericFailure,
+          format!("Encode image from input jpeg failed {}", err),
+        )
+      })?;
+      return Ok(JpegOptimizeOutput::Lossy(dest.into_inner()));
+    }
     unsafe { moz_jpeg_compress(self.input.as_ref(), &self.options) }.map(
-      |(buf, len, de_c_info, compress_c_info)| ThreadsafeMozjpegCompressOutput {
-        buf,
-        len,
-        de_c_info,
-        compress_c_info,
+      |(buf, len, de_c_info, compress_c_info)| {
+        JpegOptimizeOutput::Lossless(ThreadsafeMozjpegCompressOutput {
+          buf,
+          len,
+          de_c_info,
+          compress_c_info,
+        })
       },
     )
   }
 
   fn resolve(&mut self, env: Env, output: Self::Output) -> Result<Self::JsValue> {
-    let ThreadsafeMozjpegCompressOutput {
-      buf,
-      len,
-      de_c_info,
-      compress_c_info,
-    } = output;
-    unsafe {
-      env.create_buffer_with_borrowed_data(
+    match output {
+      JpegOptimizeOutput::Lossless(ThreadsafeMozjpegCompressOutput {
         buf,
         len,
-        (de_c_info, compress_c_info, buf),
-        |(mut input, mut output, buf), _| {
-          mozjpeg_sys::jpeg_destroy_decompress(&mut input);
-          mozjpeg_sys::jpeg_destroy_compress(&mut output);
-          libc::free(buf as *mut std::ffi::c_void);
-        },
-      )
+        de_c_info,
+        compress_c_info,
+      }) => unsafe {
+        env.create_buffer_with_borrowed_data(
+          buf,
+          len,
+          (de_c_info, compress_c_info, buf),
+          |(mut input, mut output, buf), _| {
+            mozjpeg_sys::jpeg_destroy_decompress(&mut input);
+            mozjpeg_sys::jpeg_destroy_compress(&mut output);
+            libc::free(buf as *mut std::ffi::c_void);
+          },
+        )
+      },
+      JpegOptimizeOutput::Lossy(buf) => env.create_buffer_with_data(buf),
     }
     .map(|v| v.into_raw())
   }
