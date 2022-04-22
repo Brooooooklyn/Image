@@ -420,28 +420,28 @@ impl Task for EncodeTask {
       None => {}
     }
     if self.image_transform_args.grayscale {
-      meta.image.grayscale();
+      meta.image = meta.image.grayscale();
     }
     if self.image_transform_args.invert {
       meta.image.invert();
     }
     if let Some(contrast) = self.image_transform_args.contrast {
-      meta.image.adjust_contrast(contrast);
+      meta.image = meta.image.adjust_contrast(contrast);
     }
     if let Some(blur) = self.image_transform_args.blur {
-      meta.image.blur(blur);
+      meta.image = meta.image.blur(blur);
     }
     if let Some((sigma, threshold)) = self.image_transform_args.unsharpen {
-      meta.image.unsharpen(sigma, threshold);
+      meta.image = meta.image.unsharpen(sigma, threshold);
     }
     if let Some(filter) = self.image_transform_args.filter3x3 {
-      meta.image.filter3x3(filter.as_ref());
+      meta.image = meta.image.filter3x3(filter.as_ref());
     }
     if let Some(brighten) = self.image_transform_args.brightness {
-      meta.image.brighten(brighten);
+      meta.image = meta.image.brighten(brighten);
     }
     if let Some(hue) = self.image_transform_args.huerotate {
-      meta.image.huerotate(hue);
+      meta.image = meta.image.huerotate(hue);
     }
     let dynamic_image = &mut meta.image;
     let color_type = &meta.color_type;
@@ -450,13 +450,7 @@ impl Task for EncodeTask {
     let format = match self.options {
       EncodeOptions::Webp(quality_factor) => {
         let (output_buf, size) = unsafe {
-          crate::webp::encode_webp_inner(
-            dynamic_image.as_bytes(),
-            quality_factor,
-            width,
-            height,
-            color_type,
-          )
+          crate::webp::encode_webp_inner(dynamic_image, quality_factor, width, height, color_type)
         }?;
         return Ok(EncodeOutput::Raw(output_buf, size));
       }
