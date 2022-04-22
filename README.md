@@ -26,7 +26,7 @@ See [index.d.ts](./packages/binding/index.d.ts) for API reference.
 
 ## Support matrix
 
-|                       | node10 | node12 | node14 | node16 | node17 |
+|                       | node10 | node12 | node14 | node16 | node18 |
 | --------------------- | ------ | ------ | ------ | ------ | ------ |
 | Windows x64           | ✓      | ✓      | ✓      | ✓      | ✓      |
 | Windows x32           | ✓      | ✓      | ✓      | ✓      | ✓      |
@@ -88,16 +88,16 @@ You can clone this repo and run the following command to taste the example below
 - `yarn install`
 - `node example.mjs`
 
-| Optimization                                                                                            | Raw                                          | Raw Size | Optimized Size |
-| ------------------------------------------------------------------------------------------------------- | -------------------------------------------- | -------- | -------------- |
-| `losslessCompressPng()` <br/>**Lossless**                                                               | <img src="./un-optimized.png" width="400" /> | `888K`   | `736K`         |
-| `pngQuantize({ maxQuality: 75 })` <br/>**Lossy**                                                        | <img src="./un-optimized.png" width="400" /> | `888K`   | `248K`         |
-| `compressJpeg()` <br/>**Lossless**                                                                      | <img src="./un-optimized.jpg" width="400" /> | `192K`   | `184K`         |
-| `compressJpeg(75)` <br/>**Lossy**                                                                       | <img src="./un-optimized.jpg" width="400" /> | `192K`   | `104K`         |
-| `new Transformer(PNG).webpLossless()`<br/>**Lossless**                                                  | <img src="./un-optimized.png" width="400" /> | `888K`   | `588K`         |
-| `new Transformer(PNG).webp(75)`<br/>**Lossy**                                                           | <img src="./un-optimized.png" width="400" /> | `888K`   | `64K`          |
-| `Transformer(PNG).avif({ quality: 100 })`<br/>**Lossless**                                              | <img src="./un-optimized.png" width="400" /> | `888K`   | `536K`         |
-| `new Transformer(PNG).avif({ quality: 75, chromaSubsampling: ChromaSubsampling.Yuv420 })`<br/>**Lossy** | <img src="./un-optimized.png" width="400" /> | `888K`   | `64K`          |
+| Optimization                                                                                            | Raw                                                                                                                                                                 | Raw Size | Optimized Size |
+| ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | -------------- |
+| `losslessCompressPng()` <br/>**Lossless**                                                               | <img src="./un-optimized.png" width="400" />[CC-BY-SA 3.0](https://creativecommons.org/licenses/by/3.0) by [Niabot](https://commons.wikimedia.org/wiki/User:Niabot) | `888K`   | `736K`         |
+| `pngQuantize({ maxQuality: 75 })` <br/>**Lossy**                                                        | <img src="./un-optimized.png" width="400" />[CC-BY-SA 3.0](https://creativecommons.org/licenses/by/3.0) by [Niabot](https://commons.wikimedia.org/wiki/User:Niabot) | `888K`   | `248K`         |
+| `compressJpeg()` <br/>**Lossless**                                                                      | <img src="./un-optimized.jpg" width="400" />                                                                                                                        | `192K`   | `184K`         |
+| `compressJpeg(75)` <br/>**Lossy**                                                                       | <img src="./un-optimized.jpg" width="400" />                                                                                                                        | `192K`   | `104K`         |
+| `new Transformer(PNG).webpLossless()`<br/>**Lossless**                                                  | <img src="./un-optimized.png" width="400" />[CC-BY-SA 3.0](https://creativecommons.org/licenses/by/3.0) by [Niabot](https://commons.wikimedia.org/wiki/User:Niabot) | `888K`   | `588K`         |
+| `new Transformer(PNG).webp(75)`<br/>**Lossy**                                                           | <img src="./un-optimized.png" width="400" />[CC-BY-SA 3.0](https://creativecommons.org/licenses/by/3.0) by [Niabot](https://commons.wikimedia.org/wiki/User:Niabot) | `888K`   | `64K`          |
+| `Transformer(PNG).avif({ quality: 100 })`<br/>**Lossless**                                              | <img src="./un-optimized.png" width="400" />[CC-BY-SA 3.0](https://creativecommons.org/licenses/by/3.0) by [Niabot](https://commons.wikimedia.org/wiki/User:Niabot) | `888K`   | `536K`         |
+| `new Transformer(PNG).avif({ quality: 75, chromaSubsampling: ChromaSubsampling.Yuv420 })`<br/>**Lossy** | <img src="./un-optimized.png" width="400" />[CC-BY-SA 3.0](https://creativecommons.org/licenses/by/3.0) by [Niabot](https://commons.wikimedia.org/wiki/User:Niabot) | `888K`   | `64K`          |
 
 ```js
 import { readFileSync, writeFileSync } from 'fs'

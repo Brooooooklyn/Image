@@ -28,11 +28,11 @@ writeFileSync(
 
 console.info(chalk.green('Lossy compression png done'))
 
-writeFileSync('optimized-lossless.jpg', await compressJpeg(readFileSync('./un-optimized.jpg')))
+writeFileSync('optimized-lossless.jpg', await compressJpeg(JPEG))
 
 console.info(chalk.green('Lossless compression jpeg done'))
 
-writeFileSync('optimized-lossy.jpg', await compressJpeg(readFileSync('./un-optimized.jpg'), { quality: 75 }))
+writeFileSync('optimized-lossy.jpg', await compressJpeg(JPEG, { quality: 75 }))
 
 console.info(chalk.green('Lossy compression jpeg done'))
 

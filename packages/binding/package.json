@@ -59,5 +59,8 @@
     "prepublishOnly": "napi prepublish",
     "version": "napi version"
   },
-  "repository": "git@github.com:Brooooooklyn/Image.git"
+  "repository": "git@github.com:Brooooooklyn/Image.git",
+  "devDependencies": {
+    "@napi-rs/cli": "^2.6.2"
+  }
 }

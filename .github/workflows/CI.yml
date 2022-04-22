@@ -27,17 +27,17 @@ jobs:
           - host: macos-latest
             target: x86_64-apple-darwin
             build: |
-              yarn build -- --features with_simd
+              yarn workspace @napi-rs/image build --features with_simd
               strip -x packages/*/*.node
           - host: windows-latest
             build: |
-              yarn build -- --features with_simd
+              yarn workspace @napi-rs/image build --features with_simd
             target: x86_64-pc-windows-msvc
           - host: windows-2022-xl
             build: |
               $Env:PATH="C:\Cargo\bin;$Env:PATH"
               $Env:LIBAVIF_CROSS_WIN32=1
-              yarn build -- --features with_simd --target i686-pc-windows-msvc
+              yarn workspace @napi-rs/image build --features with_simd --target i686-pc-windows-msvc
               node -e "console.log(process.arch)"
               yarn test
             target: i686-pc-windows-msvc
@@ -48,7 +48,7 @@ jobs:
             build: |
               set -e && \
               apt install libaom-dev -y && \
-              yarn build -- --features with_simd --target x86_64-unknown-linux-gnu && \
+              yarn workspace @napi-rs/image build --features with_simd --target x86_64-unknown-linux-gnu && \
               strip packages/*/*.node
           - host: ubuntu-latest
             target: x86_64-unknown-linux-musl
@@ -62,12 +62,12 @@ jobs:
               export LIB_AOM_STATIC_LIB_PATH=/usr/lib &&
               export LIB_AOM_INCLUDE_PATH=/usr/include/aom/aom &&
               export LIB_AOM_PKG_CONFIG_PATH=/usr/lib/pkgconfig &&
-              yarn build -- --features with_simd &&
+              yarn workspace @napi-rs/image build --features with_simd &&
               strip packages/*/*.node
           - host: macos-latest
             target: aarch64-apple-darwin
             build: |
-              yarn build -- --features with_simd
+              yarn workspace @napi-rs/image build --features with_simd
               strip -x packages/*/*.node
           - host: ubuntu-18.04
             architecture: x64
@@ -76,7 +76,7 @@ jobs:
               sudo apt-get update
               sudo apt-get install g++-aarch64-linux-gnu gcc-aarch64-linux-gnu -y
             build: |
-              yarn build -- --features with_simd
+              yarn workspace @napi-rs/image build --features with_simd
               aarch64-linux-gnu-strip packages/*/*.node
           - host: ubuntu-18.04
             architecture: x64
@@ -85,7 +85,7 @@ jobs:
               sudo apt-get update
               sudo apt-get install gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf -y
             build: |
-              yarn build -- --features oxipng_libdeflater
+              yarn workspace @napi-rs/image build --features oxipng_libdeflater
               arm-linux-gnueabihf-strip packages/*/*.node
           - host: ubuntu-latest
             architecture: x64
@@ -95,7 +95,7 @@ jobs:
               export CC="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
               export CXX="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++"
               export PATH="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin:${PATH}"
-              yarn build -- --features with_simd
+              yarn workspace @napi-rs/image build --features with_simd
               ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android-strip packages/*/*.node
           - host: ubuntu-latest
             architecture: x64
@@ -106,7 +106,7 @@ jobs:
               export CXX="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi24-clang++"
               export PATH="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin:${PATH}"
               export C_INCLUDE_PATH="${ANDROID_NDK_HOME}/sources/android/cpufeatures"; 
-              yarn build -- --features oxipng_libdeflater
+              yarn workspace @napi-rs/image build --features oxipng_libdeflater
               ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/arm-linux-androideabi-strip packages/*/*.node
           - host: ubuntu-latest
             architecture: x64
@@ -119,7 +119,7 @@ jobs:
               unset CC &&
               unset CXX &&
               apk add --update --repository http://dl-cdn.alpinelinux.org/alpine/edge/testing --no-cache aom-dev perl &&
-              yarn build -- --target aarch64-unknown-linux-musl --features with_simd &&
+              yarn workspace @napi-rs/image build --target aarch64-unknown-linux-musl --features with_simd &&
               /aarch64-linux-musl-cross/bin/aarch64-linux-musl-strip packages/*/*.node
     name: stable - ${{ matrix.settings.target }} - node@16
     runs-on: ${{ matrix.settings.host }}
@@ -238,7 +238,7 @@ jobs:
             env
             freebsd-version
             yarn install --immutable --mode=skip-build
-            yarn build -- --features with_simd
+            yarn workspace @napi-rs/image build --features with_simd
             strip -x packages/*/*.node
             yarn test
             rm -rf node_modules
@@ -262,7 +262,7 @@ jobs:
         node:
           - '14'
           - '16'
-          - '17'
+          - '18'
     runs-on: ${{ matrix.settings.host }}
     steps:
       - uses: actions/checkout@v3
@@ -302,7 +302,7 @@ jobs:
         node:
           - '14'
           - '16'
-          - '17'
+          - '18'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -342,7 +342,7 @@ jobs:
         node:
           - '14'
           - '16'
-          - '17'
+          - '18'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -382,7 +382,7 @@ jobs:
         node:
           - '14'
           - '16'
-          - '17'
+          - '18'
     runs-on: ubuntu-latest
     steps:
       - run: docker run --rm --privileged multiarch/qemu-user-static:register --reset
@@ -424,7 +424,7 @@ jobs:
         node:
           - '14'
           - '16'
-          - '17'
+          - '18'
     runs-on: ubuntu-latest
     steps:
       - run: docker run --rm --privileged multiarch/qemu-user-static:register --reset
