@@ -3,6 +3,18 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [1.1.2](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.1.1...@napi-rs/image@1.1.2) (2022-04-22)
+
+
+### Bug Fixes
+
+* **image:** manipulate image has no effect ([e224c25](https://github.com/Brooooooklyn/Image/commit/e224c259d709bba704549ca34fa7851da41a6a3d))
+* **image:** webp encode LumaA8 and Luma8 ([2473680](https://github.com/Brooooooklyn/Image/commit/24736809eaa38237bd618b5860b12ae0ebe91bd6))
+
+
+
+
+
 ## [1.1.1](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.1.0...@napi-rs/image@1.1.1) (2022-04-21)
 
 ### Bug Fixes
