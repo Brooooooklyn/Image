@@ -2,3 +2,4 @@
 .yarn
 public/img/example.mjs
 public/img/sharp.mjs
+public/img/*.manipulated.webp

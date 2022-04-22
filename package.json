@@ -8,7 +8,8 @@
     "url": "https://lyn.one"
   },
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "website"
   ],
   "devDependencies": {
     "@napi-rs/cli": "^2.6.2",
@@ -27,7 +28,6 @@
   },
   "scripts": {
     "artifacts": "lerna run artifacts",
-    "build": "lerna run build --stream --concurrency 1 --no-prefix",
     "build:ts": "tsc -b tsconfig.project.json",
     "format": "run-p format:prettier format:rs format:toml",
     "format:prettier": "prettier . -w",

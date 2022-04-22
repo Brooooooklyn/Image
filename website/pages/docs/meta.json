@@ -1,7 +1,4 @@
 {
-  "*": {
-    "theme": {
-      "sidebar": false
-    }
-  }
+  "index": "Docs",
+  "credits": "Credits"
 }

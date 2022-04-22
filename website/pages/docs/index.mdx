@@ -54,6 +54,7 @@ import { decode } from 'blurhash'
 const pixels = decode('LEHV6nWB2yk8pyo0adR*.7kCMdnj', 32, 32)
 const transformer = Transformer.fromRgbaPixels(pixels, 32, 32)
 ```
+
 ### Metadata
 
 ```ts
@@ -141,8 +142,7 @@ await fs.writeFile('optimized.webp)
 #### webp
 
 > The quality factor `quality_factor` ranges from 0 to 100 and controls the loss and quality during compression. <br/>
-> The value 0 corresponds to low quality and small output sizes, whereas 100 is the highest quality and largest output size. <br/>
-> https://developers.google.com/speed/webp/docs/api#simple_encoding_api <br/>
+> The value 0 corresponds to low quality and small output sizes, whereas 100 is the highest quality and largest output size. <br/> > https://developers.google.com/speed/webp/docs/api#simple_encoding_api <br/>
 > Default is 90
 
 ```ts
@@ -390,6 +390,10 @@ writeFileSync('output-exif.image.webp', imageOutputWebp)
 grayscale(): this
 ```
 
+| Image                     | Output                              |
+| ------------------------- | ----------------------------------- |
+| ![](img/un-optimized.png) | ![](img/grayscale.manipulated.webp) |
+
 #### `invert`
 
 > Invert the colors of this image.
@@ -397,6 +401,10 @@ grayscale(): this
 ```ts
 invert(): this
 ```
+
+| Image                     | Output                           |
+| ------------------------- | -------------------------------- |
+| ![](img/un-optimized.png) | ![](img/invert.manipulated.webp) |
 
 #### `resize`
 
@@ -442,7 +450,7 @@ that has been scaled down to 300x225 px:
 Time required to create each of the examples above, tested on an Intel
 i7-4770 CPU with Rust 1.37 in release mode:
 
-<br/>
+<br />
 
 | Filter Type    | Time Cost |
 | -------------- | --------- |
@@ -452,3 +460,225 @@ i7-4770 CPU with Rust 1.37 in release mode:
 | **Gaussian**   | 1180 ms   |
 | **Lanczos3**   | 1170 ms   |
 
+#### `blur`
+
+> Performs a Gaussian blur on this image. <br/>
+> sigma` is a measure of how much to blur by.
+
+```ts
+blur(sigma: number): this
+```
+
+`blur(10)`
+
+| Image                     | Output                         |
+| ------------------------- | ------------------------------ |
+| ![](img/un-optimized.png) | ![](img/blur.manipulated.webp) |
+
+#### `unsharpen`
+
+> Performs an unsharpen mask on this image. <br/> `sigma` is the amount to blur the image by. <br/> > `threshold` is a control of how much to sharpen. <br />
+> See [Digital_unsharp_masking](https://en.wikipedia.org/wiki/Unsharp_masking#Digital_unsharp_masking)
+
+```ts
+unsharpen(sigma: number, threshold: number): this
+```
+
+`unsharpen(10, 10)`
+
+| Image                 | Output                              |
+| --------------------- | ----------------------------------- |
+| ![](img/taj_orig.jpg) | ![](img/unsharpen.manipulated.webp) |
+
+#### `filter3x3`
+
+Filters this image with the specified 3x3 kernel. Error will thrown if the kernel length is not `9`.
+
+```ts
+filter3x3(kernel: Array<number>): this
+```
+
+> https://en.wikipedia.org/wiki/Kernel_(image_processing)#Details <br/>
+> Sharpen:
+
+`filter3x3([0, -1, 0, -1, 5, -1, 0, -1, 0])`
+
+| Image                     | Output                              |
+| ------------------------- | ----------------------------------- |
+| ![](img/un-optimized.png) | ![](img/filter3x3.manipulated.webp) |
+
+#### `adjustContrast`
+
+> Adjust the contrast of this image.<br/> `contrast` is the amount to adjust the contrast by.<br/>
+> Negative values decrease the contrast and positive values increase the contrast.
+
+```ts
+adjustContrast(contrast: number): this
+```
+
+`adjustContrast(50)`
+
+| Image                     | Output                             |
+| ------------------------- | ---------------------------------- |
+| ![](img/un-optimized.png) | ![](img/contrast.manipulated.webp) |
+
+#### `brighten`
+
+> Brighten the pixels of this image.<br/> `value` is the amount to brighten each pixel by. <br/>
+> Negative values decrease the brightness and positive values increase it.
+
+```ts
+brighten(brightness: number): this
+```
+
+`brighten(30)`
+
+| Image                     | Output                             |
+| ------------------------- | ---------------------------------- |
+| ![](img/un-optimized.png) | ![](img/brighten.manipulated.webp) |
+
+#### `huerotate`
+
+> Hue rotate the supplied image.<br /> > `value` is the degrees to rotate each pixel by.
+> 0 and 360 do nothing, the rest rotates by the given degree value.
+> just like the css webkit filter hue-rotate(180)
+
+```ts
+huerotate(hue: number): this
+```
+
+`huerotate(90)`
+
+| Image                     | Output                              |
+| ------------------------- | ----------------------------------- |
+| ![](img/un-optimized.png) | ![](img/huerotate.manipulated.webp) |
+
+## Optimize PNG
+
+### Lossless compression
+
+Lossless optimize PNG powered by [oxipng](https://github.com/shssoichiro/oxipng).
+
+**PNGLosslessOptions**
+
+```ts
+export interface PNGLosslessOptions {
+  /**
+   * Attempt to fix errors when decoding the input file rather than returning an Err.
+   * Default: `false`
+   */
+  fixErrors?: boolean | undefined | null
+  /**
+   * Write to output even if there was no improvement in compression.
+   * Default: `false`
+   */
+  force?: boolean | undefined | null
+  /** Which filters to try on the file (0-5) */
+  filter?: Array<number> | undefined | null
+  /**
+   * Whether to attempt bit depth reduction
+   * Default: `true`
+   */
+  bitDepthReduction?: boolean | undefined | null
+  /**
+   * Whether to attempt color type reduction
+   * Default: `true`
+   */
+  colorTypeReduction?: boolean | undefined | null
+  /**
+   * Whether to attempt palette reduction
+   * Default: `true`
+   */
+  paletteReduction?: boolean | undefined | null
+  /**
+   * Whether to attempt grayscale reduction
+   * Default: `true`
+   */
+  grayscaleReduction?: boolean | undefined | null
+  /**
+   * Whether to perform IDAT recoding
+   * If any type of reduction is performed, IDAT recoding will be performed regardless of this setting
+   * Default: `true`
+   */
+  idatRecoding?: boolean | undefined | null
+  /** Whether to remove ***All non-critical headers*** on PNG */
+  strip?: boolean | undefined | null
+  /** Whether to use heuristics to pick the best filter and compression */
+  useHeuristics?: boolean | undefined | null
+}
+```
+
+```ts
+export function losslessCompressPng(
+  input: Buffer,
+  options?: PNGLosslessOptions | undefined | null,
+  signal?: AbortSignal | undefined | null,
+): Promise<Buffer>
+export function losslessCompressPngSync(input: Buffer, options?: PNGLosslessOptions | undefined | null): Buffer
+```
+
+### Lossy compression
+
+Powered by [pngquant](https://github.com/ImageOptim/libimagequant), converts RGBA images to palette-based 8-bit indexed images, _including_ alpha component.
+
+**PngQuantOptions**:
+
+```ts
+export interface PngQuantOptions {
+  /** default is 70 */
+  minQuality?: number | undefined | null
+  /** default is 99 */
+  maxQuality?: number | undefined | null
+  /**
+   * 1- 10
+   * Faster speeds generate images of lower quality, but may be useful for real-time generation of images.
+   * default: 5
+   */
+  speed?: number | undefined | null
+  /**
+   * Number of least significant bits to ignore.
+   * Useful for generating palettes for VGA, 15-bit textures, or other retro platforms.
+   */
+  posterization?: number | undefined | null
+}
+```
+
+```ts
+export function pngQuantize(
+  input: Buffer,
+  options?: PngQuantOptions | undefined | null,
+  signal?: AbortSignal | undefined | null,
+): Promise<Buffer>
+export function pngQuantizeSync(input: Buffer, options?: PngQuantOptions | undefined | null): Buffer
+```
+
+## Optimize JPEG
+
+Lossy and Lossless JPEG compression powered by [mozjpeg](https://github.com/mozilla/mozjpeg).
+
+**JpegCompressOptions**:
+
+```ts
+export interface JpegCompressOptions {
+  /** Output quality, default is 100 (lossless) */
+  quality?: number | undefined | null
+  /**
+   * If true, it will use MozJPEG’s scan optimization. Makes progressive image files smaller.
+   * Default is `true`
+   */
+  optimizeScans?: boolean | undefined | null
+}
+```
+
+```ts
+export function compressJpeg(
+  input: Buffer,
+  options?: JpegCompressOptions | undefined | null,
+  signal?: AbortSignal | undefined | null,
+): Promise<Buffer>
+export function compressJpegSync(input: Buffer, options?: JpegCompressOptions | undefined | null): Buffer
+```
+
+## Credits
+
+See [Credits](./credits)

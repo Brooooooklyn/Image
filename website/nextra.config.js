@@ -29,7 +29,7 @@ export default {
       </>
     )
   },
-  head: ({ title, meta }) => {
+  head: ({ meta }) => {
     return (
       <>
         {/* Favicons, meta */}
@@ -40,6 +40,12 @@ export default {
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <meta httpEquiv="Content-Language" content="en" />
         <meta name="description" content={meta.description || 'Fast image processing library'} />
+        <script async src="https://www.googletagmanager.com/gtag/js?id=G-50ZQKJLY5K"></script>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `window.dataLayer = window.dataLayer || [];function gtag(){dataLayer.push(arguments);}gtag('js', new Date());gtag('config', 'G-50ZQKJLY5K');`,
+          }}
+        ></script>
       </>
     )
   },
@@ -54,11 +60,13 @@ export default {
   footerText: () => {
     return (
       <p>
-        Copyright © {new Date().getFullYear()} NAPI-RS. Powered by{' '}
+        <a href="https://vercel.com?utm_source=napi-rs&utm_campaign=oss">
+          <img src="assets/powered-by-vercel.svg" />
+        </a>
+        &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Powered by{' '}
         <a href="https://nextra.vercel.app" target="_blank">
           Nextra
         </a>
-        .
       </p>
     )
   },

@@ -93,15 +93,21 @@ You can clone this repo and run the following command to taste the example below
 - `yarn install`
 - `node example.mjs`
 
-| Optimization                                                 | <div style={{ width: '80px' }}>Raw</div> | <div style={{ width: '80px' }}>Optimized</div> | Raw Size | Optimized Size |
-| ------------------------------------------------------------ | ---------------------------------------- | ---------------------------------------------- | -------- | -------------- |
-| `losslessCompressPng()` <br/>**Lossless**                    | ![](../public/img/un-optimized.png)      | ![](../public/img/optimized-lossless.png)      | `888K`   | `736K`         |
-| `pngQuantize({ maxQuality: 75 })` <br/>**Lossy**             | ![](../public/img/un-optimized.png)      | ![](../public/img/optimized-lossy.png)         | `888K`   | `248K`         |
-| `compressJpeg()` <br/>**Lossless**                           | ![](../public/img/un-optimized.jpg)      | ![](../public/img/optimized-lossless.jpg)      | `192K`   | `184K`         |
-| `compressJpeg(75)` <br/>**Lossy**                            | ![](../public/img/un-optimized.jpg)      | ![](../public/img/optimized-lossy.jpg)         | `192K`   | `104K`         |
-| `new Transformer(PNG).webpLossless()`<br/>**Lossless**       | ![](../public/img/un-optimized.png)      | ![](../public/img/optimized-lossless.webp)     | `888K`   | `588K`         |
-| `new Transformer(PNG).webp(75)`<br/>**Lossy**                | ![](../public/img/un-optimized.png)      | ![](../public/img/optimized-lossy-png.webp)    | `888K`   | `64K`          |
-| `Transformer(PNG).avif({ quality: 100 })`<br/>**Lossless**   | ![](../public/img/un-optimized.png)      | ![](../public/img/optimized-lossless-png.avif) | `888K`   | `536K`         |
+> The anime girl <br/><br/>
+>
+> <img src="img/un-optimized.png" width="300" /> <br />
+> [CC-BY-SA 3.0](https://creativecommons.org/licenses/by/3.0) by
+> [Niabot](https://commons.wikimedia.org/wiki/User:Niabot){' '}
+
+| Optimization                                                                                            | <div style={{ width: '80px' }}>Raw</div> | <div style={{ width: '80px' }}>Optimized</div> | Raw Size | Optimized Size |
+| ------------------------------------------------------------------------------------------------------- | ---------------------------------------- | ---------------------------------------------- | -------- | -------------- |
+| `losslessCompressPng()` <br/>**Lossless**                                                               | ![](../public/img/un-optimized.png)      | ![](../public/img/optimized-lossless.png)      | `888K`   | `736K`         |
+| `pngQuantize({ maxQuality: 75 })` <br/>**Lossy**                                                        | ![](../public/img/un-optimized.png)      | ![](../public/img/optimized-lossy.png)         | `888K`   | `248K`         |
+| `compressJpeg()` <br/>**Lossless**                                                                      | ![](../public/img/un-optimized.jpg)      | ![](../public/img/optimized-lossless.jpg)      | `192K`   | `184K`         |
+| `compressJpeg(75)` <br/>**Lossy**                                                                       | ![](../public/img/un-optimized.jpg)      | ![](../public/img/optimized-lossy.jpg)         | `192K`   | `104K`         |
+| `new Transformer(PNG).webpLossless()`<br/>**Lossless**                                                  | ![](../public/img/un-optimized.png)      | ![](../public/img/optimized-lossless.webp)     | `888K`   | `588K`         |
+| `new Transformer(PNG).webp(75)`<br/>**Lossy**                                                           | ![](../public/img/un-optimized.png)      | ![](../public/img/optimized-lossy-png.webp)    | `888K`   | `64K`          |
+| `Transformer(PNG).avif({ quality: 100 })`<br/>**Lossless**                                              | ![](../public/img/un-optimized.png)      | ![](../public/img/optimized-lossless-png.avif) | `888K`   | `536K`         |
 | `new Transformer(PNG).avif({ quality: 75, chromaSubsampling: ChromaSubsampling.Yuv420 })`<br/>**Lossy** | ![](../public/img/un-optimized.png)      | ![](../public/img/optimized-lossy-png.avif)    | `888K`   | `64K`          |
 
 ```js filename="example.mjs"

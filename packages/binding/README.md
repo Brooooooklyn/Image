@@ -495,7 +495,7 @@ blur(sigma: number): this
 
 #### `unsharpen`
 
-> Performs an unsharpen mask on this image. <br/> > `sigma` is the amount to blur the image by. <br/> > `threshold` is a control of how much to sharpen.
+> Performs an unsharpen mask on this image. <br/> `sigma` is the amount to blur the image by. <br/> `threshold` is a control of how much to sharpen.
 >
 > See <https://en.wikipedia.org/wiki/Unsharp_masking#Digital_unsharp_masking>
 
@@ -513,7 +513,7 @@ filter3x3(kernel: Array<number>): this
 
 #### `adjustContrast`
 
-> Adjust the contrast of this image.<br/> > `contrast` is the amount to adjust the contrast by.<br/>
+> Adjust the contrast of this image.<br/> `contrast` is the amount to adjust the contrast by.<br/>
 > Negative values decrease the contrast and positive values increase the contrast.
 
 ```ts
@@ -522,7 +522,7 @@ adjustContrast(contrast: number): this
 
 #### `brighten`
 
-> Brighten the pixels of this image.<br/> > `value` is the amount to brighten each pixel by. <br/>
+> Brighten the pixels of this image.<br/> `value` is the amount to brighten each pixel by. <br/>
 > Negative values decrease the brightness and positive values increase it.
 
 ```ts
@@ -531,7 +531,7 @@ brighten(brightness: number): this
 
 #### `huerotate`
 
-> Hue rotate the supplied image.<br/> > `value` is the degrees to rotate each pixel by.
+> Hue rotate the supplied image.<br/> `value` is the degrees to rotate each pixel by.
 > 0 and 360 do nothing, the rest rotates by the given degree value.
 > just like the css webkit filter hue-rotate(180)
 
