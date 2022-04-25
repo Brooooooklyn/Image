@@ -362,6 +362,7 @@ struct ImageTransformArgs {
   brightness: Option<i32>,
   huerotate: Option<i32>,
   orientation: Option<Orientation>,
+  crop: Option<(u32, u32, u32, u32)>,
 }
 
 pub struct EncodeTask {
@@ -442,6 +443,9 @@ impl Task for EncodeTask {
     }
     if let Some(hue) = self.image_transform_args.huerotate {
       meta.image = meta.image.huerotate(hue);
+    }
+    if let Some((x, y, width, height)) = self.image_transform_args.crop {
+      meta.image = meta.image.crop_imm(x, y, width, height);
     }
     let dynamic_image = &mut meta.image;
     let color_type = &meta.color_type;
@@ -725,6 +729,13 @@ impl Transformer {
   /// just like the css webkit filter hue-rotate(180)
   pub fn huerotate(&mut self, hue: i32) -> &Self {
     self.image_transform_args.huerotate = Some(hue);
+    self
+  }
+
+  #[napi]
+  /// Crop a cut-out of this image delimited by the bounding rectangle.
+  pub fn crop(&mut self, x: u32, y: u32, width: u32, height: u32) -> &Self {
+    self.image_transform_args.crop = Some((x, y, width, height));
     self
   }
 
