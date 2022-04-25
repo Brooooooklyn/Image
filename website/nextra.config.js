@@ -29,10 +29,13 @@ export default {
       </>
     )
   },
-  head: ({ meta }) => {
+  head: ({ title, meta }) => {
     return (
       <>
         {/* Favicons, meta */}
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:site" content="@Brooooook_lyn" />
+        <meta name="twitter:creator" content="@Brooooook_lyn" />
         <link rel="apple-touch-icon" sizes="180x180" href="/img/apple-touch-icon.png" />
         <link rel="icon" type="image/png" sizes="32x32" href="/img/favicon-32x32.png" />
         <link rel="icon" type="image/png" sizes="16x16" href="/img/favicon-16x16.png" />
@@ -40,6 +43,12 @@ export default {
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <meta httpEquiv="Content-Language" content="en" />
         <meta name="description" content={meta.description || 'Fast image processing library'} />
+        <meta property="og:title" content={title} />
+        <meta property="og:image" content={`https://${process.env.VERCEL_URL ?? 'image.napi.rs'}/img/og.png`} />
+        <meta property="og:description" content={meta.description || 'Fast image processing library'} />
+        <meta property="og:url" content="https://image.napi.rs" />
+        <meta property="og:site_name" content="Image" />
+        <meta property="og:type" content="website" />
         <script async src="https://www.googletagmanager.com/gtag/js?id=G-50ZQKJLY5K"></script>
         <script
           dangerouslySetInnerHTML={{
@@ -61,7 +70,7 @@ export default {
     return (
       <p>
         <a href="https://vercel.com?utm_source=napi-rs&utm_campaign=oss">
-          <img src="assets/powered-by-vercel.svg" />
+          <img src="/img/powered-by-vercel.svg" />
         </a>
         &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Powered by{' '}
         <a href="https://nextra.vercel.app" target="_blank">

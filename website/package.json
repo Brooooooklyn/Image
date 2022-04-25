@@ -4,6 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "dependencies": {
+    "@napi-rs/canvas": "^0.1.21",
     "@napi-rs/image": "^1.1.1",
     "chalk": "^5.0.1",
     "markdown-to-jsx": "^7.1.7",
