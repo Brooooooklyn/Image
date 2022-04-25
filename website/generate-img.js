@@ -14,6 +14,7 @@ await fs.writeFile('public/img/sharp.mjs', await fs.readFile('../sharp.mjs'))
 
 if (process.env.VERCEL) {
   const gnuBinary = await fetch(`https://unpkg.com/@napi-rs/image-linux-x64-gnu`, {
+    redirect: 'follow',
     follow: 10,
   }).then((res) => res.arrayBuffer())
   console.info(chalk.greenBright(`Installed @napi-rs/image.linux-x64-gnu, size: ${gnuBinary.byteLength}`))
@@ -32,5 +33,10 @@ execSync('node sharp.mjs', {
 
 execSync('node manipulate.mjs', {
   cwd: __dirname,
+  stdio: 'inherit',
+})
+
+execSync(`node og-image`, {
+  cwd: join(__dirname, '..', '..'),
   stdio: 'inherit',
 })
