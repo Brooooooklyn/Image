@@ -44,7 +44,12 @@ export default {
         <meta httpEquiv="Content-Language" content="en" />
         <meta name="description" content={meta.description || 'Fast image processing library'} />
         <meta property="og:title" content={title} />
-        <meta property="og:image" content={`https://${process.env.VERCEL_URL ?? 'image.napi.rs'}/img/og.png`} />
+        <meta
+          property="og:image"
+          content={`https://${
+            process.env.VERCEL_URL && process.env.VERCEL_ENV !== 'production' ? process.env.VERCEL_URL : 'image.napi.rs'
+          }/img/og.png`}
+        />
         <meta property="og:description" content={meta.description || 'Fast image processing library'} />
         <meta property="og:url" content="https://image.napi.rs" />
         <meta property="og:site_name" content="Image" />
