@@ -3,6 +3,7 @@ env:
   DEBUG: napi:*
   APP_NAME: image
   MACOSX_DEPLOYMENT_TARGET: '10.13'
+  SYSTEM_DEPS_DAV1D_BUILD_INTERNAL: 'always'
 'on':
   push:
     branches:
@@ -27,10 +28,12 @@ jobs:
           - host: macos-latest
             target: x86_64-apple-darwin
             build: |
+              brew install meson
               yarn workspace @napi-rs/image build --features with_simd
               strip -x packages/*/*.node
           - host: windows-latest
             build: |
+              choco install meson -y
               yarn workspace @napi-rs/image build --features with_simd
             target: x86_64-pc-windows-msvc
           - host: windows-2022-xl
@@ -47,7 +50,7 @@ jobs:
             docker: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-debian
             build: |
               set -e && \
-              apt install libaom-dev -y && \
+              apt install meson -y && \
               yarn workspace @napi-rs/image build --features with_simd --target x86_64-unknown-linux-gnu && \
               strip packages/*/*.node
           - host: ubuntu-latest
@@ -58,7 +61,7 @@ jobs:
               unset RUSTFLAGS &&
               unset CC &&
               unset CXX &&
-              apk add --update --repository http://dl-cdn.alpinelinux.org/alpine/edge/testing --no-cache perl nasm aom-dev &&
+              apk add --update --repository http://dl-cdn.alpinelinux.org/alpine/edge/testing --no-cache perl nasm aom-dev meson &&
               export LIB_AOM_STATIC_LIB_PATH=/usr/lib &&
               export LIB_AOM_INCLUDE_PATH=/usr/include/aom/aom &&
               export LIB_AOM_PKG_CONFIG_PATH=/usr/lib/pkgconfig &&
@@ -67,6 +70,7 @@ jobs:
           - host: macos-latest
             target: aarch64-apple-darwin
             build: |
+              brew install meson
               yarn workspace @napi-rs/image build --features with_simd
               strip -x packages/*/*.node
           - host: ubuntu-18.04
@@ -74,7 +78,7 @@ jobs:
             target: aarch64-unknown-linux-gnu
             setup: |
               sudo apt-get update
-              sudo apt-get install g++-aarch64-linux-gnu gcc-aarch64-linux-gnu -y
+              sudo apt-get install meson g++-aarch64-linux-gnu gcc-aarch64-linux-gnu -y
             build: |
               yarn workspace @napi-rs/image build --features with_simd
               aarch64-linux-gnu-strip packages/*/*.node
@@ -83,7 +87,7 @@ jobs:
             target: armv7-unknown-linux-gnueabihf
             setup: |
               sudo apt-get update
-              sudo apt-get install gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf -y
+              sudo apt-get install meson gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf -y
             build: |
               yarn workspace @napi-rs/image build --features oxipng_libdeflater
               arm-linux-gnueabihf-strip packages/*/*.node
@@ -91,6 +95,8 @@ jobs:
             architecture: x64
             target: aarch64-linux-android
             build: |
+              sudo apt update
+              sudo apt install meson -y
               export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
               export CC="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
               export CXX="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++"
@@ -101,6 +107,8 @@ jobs:
             architecture: x64
             target: armv7-linux-androideabi
             build: |
+              sudo apt update
+              sudo apt install meson -y
               export CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi24-clang"
               export CC="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi24-clang"
               export CXX="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi24-clang++"
@@ -118,7 +126,7 @@ jobs:
               unset RUSTFLAGS &&
               unset CC &&
               unset CXX &&
-              apk add --update --repository http://dl-cdn.alpinelinux.org/alpine/edge/testing --no-cache aom-dev perl &&
+              apk add --update --repository http://dl-cdn.alpinelinux.org/alpine/edge/testing --no-cache aom-dev perl meson &&
               yarn workspace @napi-rs/image build --target aarch64-unknown-linux-musl --features with_simd &&
               /aarch64-linux-musl-cross/bin/aarch64-linux-musl-strip packages/*/*.node
     name: stable - ${{ matrix.settings.target }} - node@16
