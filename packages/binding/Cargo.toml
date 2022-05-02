@@ -25,6 +25,7 @@ image = { version = "0.24", default-features = false, features = [
   "tga",
   "tiff",
   "bmp",
+  "webp",
   "hdr",
   "dxt",
   "dds",

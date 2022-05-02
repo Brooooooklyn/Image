@@ -41,6 +41,20 @@ test('should be able to encode into webp', async (t) => {
   await t.notThrowsAsync(() => decoder.webp(75))
 })
 
+test('should be able to decode from avif', async (t) => {
+  const decoder = new Transformer(PNG)
+  const AVIF = await decoder.avif()
+  const avifDecoder = new Transformer(AVIF)
+  await t.notThrowsAsync(() => avifDecoder.png())
+})
+
+test('should be able to decode from webp', async (t) => {
+  const decoder = new Transformer(PNG)
+  const WEBP = await decoder.webpLossless()
+  const webpDecoder = new Transformer(WEBP)
+  await t.notThrowsAsync(() => webpDecoder.png())
+})
+
 test('should be able to create transformer from raw rgba pixels', async (t) => {
   const pixels = decode('LEHV6nWB2yk8pyo0adR*.7kCMdnj', 32, 32)
   await t.notThrowsAsync(() => Transformer.fromRgbaPixels(pixels, 32, 32).webpLossless())

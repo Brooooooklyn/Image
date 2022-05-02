@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::Arc;
 
-use image::{imageops::FilterType, ColorType, DynamicImage, ImageEncoder, ImageFormat};
+use image::{
+  imageops::FilterType, ColorType, DynamicImage, ImageBuffer, ImageEncoder, ImageFormat,
+};
 use libavif::AvifData;
 use napi::{bindgen_prelude::*, JsBuffer};
 use napi_derive::napi;
@@ -220,8 +222,34 @@ impl ThreadSafeDynamicImage {
           orientation = _orientation;
         }
       }
-      let dynamic_image = image::load_from_memory_with_format(input_buf, image_format.clone())
-        .map_err(|err| Error::new(Status::InvalidArg, format!("Decode image failed {}", err)))?;
+      let dynamic_image = if image_format == ImageFormat::Avif {
+        let avif = libavif::decode_rgb(input_buf).map_err(|err| {
+          Error::new(
+            Status::InvalidArg,
+            format!("Decode avif image failed {}", err),
+          )
+        })?;
+        let decoded_rgb = avif.to_vec();
+        let decoded_length = decoded_rgb.len();
+        let width = avif.width();
+        let height = avif.height();
+        if (width * height * 3) as usize == decoded_length {
+          ImageBuffer::from_raw(width, height, decoded_rgb)
+            .map(|buf| DynamicImage::ImageRgb8(buf))
+            .ok_or_else(|| Error::new(Status::InvalidArg, "Decode avif image failed".to_owned()))?
+        } else if (width * height * 4) as usize == decoded_length {
+          ImageBuffer::from_raw(width, height, decoded_rgb)
+            .map(|buf| DynamicImage::ImageRgba8(buf))
+            .ok_or_else(|| Error::new(Status::InvalidArg, "Decode avif image failed".to_owned()))?
+        } else {
+          ImageBuffer::from_raw(width, height, decoded_rgb)
+            .map(|buf| DynamicImage::ImageLuma8(buf))
+            .ok_or_else(|| Error::new(Status::InvalidArg, "Decode avif image failed".to_owned()))?
+        }
+      } else {
+        image::load_from_memory_with_format(input_buf, image_format.clone())
+          .map_err(|err| Error::new(Status::InvalidArg, format!("Decode image failed {}", err)))?
+      };
       let color_type = dynamic_image.color();
       image.replace(ImageMetaData {
         image: dynamic_image,
