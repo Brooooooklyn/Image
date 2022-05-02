@@ -1,6 +1,6 @@
 {
   "name": "@napi-rs/image-android-arm-eabi",
-  "version": "1.1.2",
+  "version": "1.2.0",
   "os": [
     "android"
   ],
