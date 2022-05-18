@@ -5,15 +5,15 @@
 
 export interface AvifConfig {
   /** 0-100 scale, 100 is lossless */
-  quality?: number | undefined | null
+  quality?: number
   /** 0-100 scale */
-  alphaQuality?: number | undefined | null
+  alphaQuality?: number
   /** rav1e preset 1 (slow) 10 (fast but crappy), default is 4 */
-  speed?: number | undefined | null
+  speed?: number
   /** How many threads should be used (0 = match core count) */
-  threads?: number | undefined | null
+  threads?: number
   /** set to '4:2:0' to use chroma subsampling, default '4:4:4' */
-  chromaSubsampling?: ChromaSubsampling | undefined | null
+  chromaSubsampling?: ChromaSubsampling
 }
 /**
  * https://en.wikipedia.org/wiki/Chroma_subsampling#Types_of_sampling_and_subsampling
@@ -59,12 +59,12 @@ export const enum ChromaSubsampling {
 }
 export interface JpegCompressOptions {
   /** Output quality, default is 100 (lossless) */
-  quality?: number | undefined | null
+  quality?: number
   /**
    * If true, it will use MozJPEG’s scan optimization. Makes progressive image files smaller.
    * Default is `true`
    */
-  optimizeScans?: boolean | undefined | null
+  optimizeScans?: boolean
 }
 export function compressJpegSync(input: Buffer, options?: JpegCompressOptions | undefined | null): Buffer
 export function compressJpeg(input: Buffer, options?: JpegCompressOptions | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>
@@ -102,72 +102,72 @@ export const enum FilterType {
 }
 export interface PngEncodeOptions {
   /** Default is `CompressionType::Default` */
-  compressionType?: CompressionType | undefined | null
+  compressionType?: CompressionType
   /** Default is `FilterType::NoFilter` */
-  filterType?: FilterType | undefined | null
+  filterType?: FilterType
 }
 export interface PNGLosslessOptions {
   /**
    * Attempt to fix errors when decoding the input file rather than returning an Err.
    * Default: `false`
    */
-  fixErrors?: boolean | undefined | null
+  fixErrors?: boolean
   /**
    * Write to output even if there was no improvement in compression.
    * Default: `false`
    */
-  force?: boolean | undefined | null
+  force?: boolean
   /** Which filters to try on the file (0-5) */
-  filter?: Array<number> | undefined | null
+  filter?: Array<number>
   /**
    * Whether to attempt bit depth reduction
    * Default: `true`
    */
-  bitDepthReduction?: boolean | undefined | null
+  bitDepthReduction?: boolean
   /**
    * Whether to attempt color type reduction
    * Default: `true`
    */
-  colorTypeReduction?: boolean | undefined | null
+  colorTypeReduction?: boolean
   /**
    * Whether to attempt palette reduction
    * Default: `true`
    */
-  paletteReduction?: boolean | undefined | null
+  paletteReduction?: boolean
   /**
    * Whether to attempt grayscale reduction
    * Default: `true`
    */
-  grayscaleReduction?: boolean | undefined | null
+  grayscaleReduction?: boolean
   /**
    * Whether to perform IDAT recoding
    * If any type of reduction is performed, IDAT recoding will be performed regardless of this setting
    * Default: `true`
    */
-  idatRecoding?: boolean | undefined | null
+  idatRecoding?: boolean
   /** Whether to remove ***All non-critical headers*** on PNG */
-  strip?: boolean | undefined | null
+  strip?: boolean
   /** Whether to use heuristics to pick the best filter and compression */
-  useHeuristics?: boolean | undefined | null
+  useHeuristics?: boolean
 }
 export function losslessCompressPngSync(input: Buffer, options?: PNGLosslessOptions | undefined | null): Buffer
 export function losslessCompressPng(input: Buffer, options?: PNGLosslessOptions | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>
 export interface PngQuantOptions {
   /** default is 70 */
-  minQuality?: number | undefined | null
+  minQuality?: number
   /** default is 99 */
-  maxQuality?: number | undefined | null
+  maxQuality?: number
   /**
    * 1- 10
    * Faster speeds generate images of lower quality, but may be useful for real-time generation of images.
    * default: 5
    */
-  speed?: number | undefined | null
+  speed?: number
   /**
    * Number of least significant bits to ignore.
    * Useful for generating palettes for VGA, 15-bit textures, or other retro platforms.
    */
-  posterization?: number | undefined | null
+  posterization?: number
 }
 export function pngQuantizeSync(input: Buffer, options?: PngQuantOptions | undefined | null): Buffer
 export function pngQuantize(input: Buffer, options?: PngQuantOptions | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>
@@ -287,8 +287,8 @@ export const enum JsColorType {
 export interface Metadata {
   width: number
   height: number
-  exif?: Record<string, string> | undefined | null
-  orientation?: number | undefined | null
+  exif?: Record<string, string>
+  orientation?: number
   format: string
   colorType: JsColorType
 }
@@ -352,6 +352,10 @@ export class Transformer {
   huerotate(hue: number): this
   /** Crop a cut-out of this image delimited by the bounding rectangle. */
   crop(x: number, y: number, width: number, height: number): this
+  /** Return this image's pixels as a native endian byte slice. */
+  rawPixels(signal?: AbortSignal | undefined | null): Promise<Buffer>
+  /** Return this image's pixels as a native endian byte slice. */
+  rawPixelsSync(): Buffer
   /**
    * The quality factor `quality_factor` ranges from 0 to 100 and controls the loss and quality during compression.
    * The value 0 corresponds to low quality and small output sizes, whereas 100 is the highest quality and largest output size.
