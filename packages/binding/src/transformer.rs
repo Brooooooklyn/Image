@@ -26,6 +26,7 @@ pub enum EncodeOptions {
   Pnm,
   Tga,
   Farbfeld,
+  RawPixels,
 }
 
 #[napi]
@@ -545,6 +546,9 @@ impl Task for EncodeTask {
       EncodeOptions::Pnm => ImageFormat::Pnm,
       EncodeOptions::Tga => ImageFormat::Tga,
       EncodeOptions::Farbfeld => ImageFormat::Farbfeld,
+      EncodeOptions::RawPixels => {
+        return Ok(EncodeOutput::Buffer(dynamic_image.as_bytes().to_vec()));
+      }
     };
     let mut output: Cursor<Vec<u8>> = Cursor::new(Vec::with_capacity(
       (dynamic_image.width() * dynamic_image.height() * 4) as usize,
@@ -765,6 +769,26 @@ impl Transformer {
   pub fn crop(&mut self, x: u32, y: u32, width: u32, height: u32) -> &Self {
     self.image_transform_args.crop = Some((x, y, width, height));
     self
+  }
+
+  #[napi]
+  /// Return this image's pixels as a native endian byte slice.
+  pub fn raw_pixels(&self, signal: Option<AbortSignal>) -> AsyncTask<EncodeTask> {
+    AsyncTask::with_optional_signal(
+      EncodeTask {
+        image: self.dynamic_image.clone(),
+        options: EncodeOptions::RawPixels,
+        image_transform_args: self.image_transform_args,
+      },
+      signal,
+    )
+  }
+
+  #[napi]
+  /// Return this image's pixels as a native endian byte slice.
+  pub fn raw_pixels_sync(&self) -> Result<Buffer> {
+    let meta = self.dynamic_image.get(false)?;
+    Ok(meta.image.as_bytes().to_vec().into())
   }
 
   #[napi]
