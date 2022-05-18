@@ -59,4 +59,4 @@ default-features = false
 version = "1"
 
 [build-dependencies]
-napi-build = "1"
+napi-build = "2"
