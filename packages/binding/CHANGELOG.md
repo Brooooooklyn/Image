@@ -3,6 +3,17 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+# [1.3.0](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.2.0...@napi-rs/image@1.3.0) (2022-05-18)
+
+
+### Features
+
+* **image:** implement rawPixels and rawPixelsSync ([43e3938](https://github.com/Brooooooklyn/Image/commit/43e393860029cd3668aabf4d4362f8048faf4a6b))
+
+
+
+
+
 # [1.2.0](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.1.2...@napi-rs/image@1.2.0) (2022-05-02)
 
 
