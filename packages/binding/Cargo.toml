@@ -38,7 +38,7 @@ libavif = { version = "0.10", default-features = false, features = [
   "codec-aom",
 ] }
 libc = "0.2"
-libwebp-sys = { version = "0.6", features = ["avx2", "sse41", "neon"] }
+libwebp-sys = { version = "0.7", features = ["avx2", "sse41", "neon"] }
 lodepng = "3"
 napi = { version = "2", default-features = false, features = ["napi3"] }
 napi-derive = { version = "2", default-features = false, features = [
