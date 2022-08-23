@@ -3,6 +3,17 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+# [1.4.0](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.3.0...@napi-rs/image@1.4.0) (2022-08-23)
+
+
+### Features
+
+* **image:** upgrade libwebp to 0.7 ([#22](https://github.com/Brooooooklyn/Image/issues/22)) ([d3cde1c](https://github.com/Brooooooklyn/Image/commit/d3cde1c0e22bbd2b0e42ce604dcc668b6e364eb7))
+
+
+
+
+
 # [1.3.0](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.2.0...@napi-rs/image@1.3.0) (2022-05-18)
 
 
