@@ -192,7 +192,7 @@ struct ThreadSafeDynamicImage {
 impl Drop for ThreadSafeDynamicImage {
   fn drop(&mut self) {
     unsafe {
-      Box::from_raw(self.image);
+      drop(Box::from_raw(self.image));
     }
   }
 }
@@ -236,19 +236,19 @@ impl ThreadSafeDynamicImage {
         let height = avif.height();
         if (width * height * 3) as usize == decoded_length {
           ImageBuffer::from_raw(width, height, decoded_rgb)
-            .map(|buf| DynamicImage::ImageRgb8(buf))
+            .map(DynamicImage::ImageRgb8)
             .ok_or_else(|| Error::new(Status::InvalidArg, "Decode avif image failed".to_owned()))?
         } else if (width * height * 4) as usize == decoded_length {
           ImageBuffer::from_raw(width, height, decoded_rgb)
-            .map(|buf| DynamicImage::ImageRgba8(buf))
+            .map(DynamicImage::ImageRgba8)
             .ok_or_else(|| Error::new(Status::InvalidArg, "Decode avif image failed".to_owned()))?
         } else {
           ImageBuffer::from_raw(width, height, decoded_rgb)
-            .map(|buf| DynamicImage::ImageLuma8(buf))
+            .map(DynamicImage::ImageLuma8)
             .ok_or_else(|| Error::new(Status::InvalidArg, "Decode avif image failed".to_owned()))?
         }
       } else {
-        image::load_from_memory_with_format(input_buf, image_format.clone())
+        image::load_from_memory_with_format(input_buf, image_format)
           .map_err(|err| Error::new(Status::InvalidArg, format!("Decode image failed {}", err)))?
       };
       let color_type = dynamic_image.color();
@@ -370,7 +370,7 @@ impl Task for MetadataTask {
     Ok(Metadata {
       width: output.0,
       height: output.1,
-      exif: (output.2.len() > 0).then(|| output.2),
+      exif: (!output.2.is_empty()).then_some(output.2),
       orientation: output.3.map(|o| o as u32),
       format: format!("{:?}", output.4).to_lowercase(),
       color_type: output.5.into(),
@@ -553,14 +553,12 @@ impl Task for EncodeTask {
     let mut output: Cursor<Vec<u8>> = Cursor::new(Vec::with_capacity(
       (dynamic_image.width() * dynamic_image.height() * 4) as usize,
     ));
-    dynamic_image
-      .write_to(&mut output, format.clone())
-      .map_err(|err| {
-        Error::new(
-          Status::InvalidArg,
-          format!("Encode to [{:?}] error {}", &format, err),
-        )
-      })?;
+    dynamic_image.write_to(&mut output, format).map_err(|err| {
+      Error::new(
+        Status::InvalidArg,
+        format!("Encode to [{:?}] error {}", &format, err),
+      )
+    })?;
     Ok(EncodeOutput::Buffer(output.into_inner()))
   }
 
@@ -634,7 +632,7 @@ impl Transformer {
     } else {
       Err(Error::new(
         Status::InvalidArg,
-        format!("Input buffer is not matched the width and height"),
+        "Input buffer is not matched the width and height".to_string(),
       ))
     }
   }
@@ -1087,7 +1085,7 @@ fn parse_exif(
           .iter()
           .find(|t| t.tag == rexif::ExifTag::Orientation)
           .and_then(|exif| match &exif.value {
-            rexif::TagValue::U16(v) => v.get(0).map(|v| *v),
+            rexif::TagValue::U16(v) => v.first().copied(),
             _ => None,
           });
         return Some((exif, orientation));

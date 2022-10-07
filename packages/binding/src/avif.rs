@@ -87,7 +87,7 @@ impl From<AvifConfig> for Config {
       threads: config
         .threads
         .map(|n| n as usize)
-        .unwrap_or(num_cpus::get()),
+        .unwrap_or_else(num_cpus::get),
       chroma_subsampling: config
         .chroma_subsampling
         .unwrap_or(ChromaSubsampling::Yuv444),

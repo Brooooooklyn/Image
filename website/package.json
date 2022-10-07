@@ -4,9 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "dependencies": {
-    "@napi-rs/canvas": "^0.1.28",
-    "@napi-rs/image": "^1.3.0",
-    "chalk": "^5.0.1",
+    "@napi-rs/canvas": "^0.1.30",
+    "@napi-rs/image": "^1.4.0",
+    "chalk": "^5.1.0",
     "markdown-to-jsx": "^7.1.7",
     "next": "canary",
     "nextra": "2.0.0-alpha.49",
@@ -14,7 +14,7 @@
     "node-fetch": "^3.2.10",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "sharp": "^0.30.7"
+    "sharp": "^0.31.1"
   },
   "scripts": {
     "build": "node generate-img.js && next build",
