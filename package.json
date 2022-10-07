@@ -12,19 +12,19 @@
     "website"
   ],
   "devDependencies": {
-    "@napi-rs/cli": "^2.11.4",
-    "@taplo/cli": "^0.4.2",
-    "@types/node": "^18.7.11",
-    "@types/sharp": "^0.30.5",
-    "ava": "^4.3.1",
-    "blurhash": "^1.1.5",
-    "chalk": "^5.0.1",
-    "lerna": "^5.4.3",
+    "@napi-rs/cli": "^2.12.0",
+    "@taplo/cli": "^0.5.2",
+    "@types/node": "^18.8.3",
+    "@types/sharp": "^0.31.0",
+    "ava": "^4.3.3",
+    "blurhash": "^2.0.3",
+    "chalk": "^5.1.0",
+    "lerna": "^5.6.1",
     "npm-run-all": "^4.1.5",
     "prettier": "^2.7.1",
-    "rxjs": "^7.5.6",
-    "sharp": "^0.30.7",
-    "typescript": "^4.7.4"
+    "rxjs": "^7.5.7",
+    "sharp": "^0.31.1",
+    "typescript": "^4.8.4"
   },
   "scripts": {
     "artifacts": "lerna run artifacts",
@@ -68,6 +68,6 @@
       "pre-commit": "lint-staged && cargo fmt --all"
     }
   },
-  "packageManager": "yarn@3.2.2",
+  "packageManager": "yarn@3.2.4",
   "repository": "git@github.com:Brooooooklyn/Image.git"
 }

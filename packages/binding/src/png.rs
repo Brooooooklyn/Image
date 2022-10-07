@@ -10,10 +10,6 @@ pub enum CompressionType {
   Fast,
   /// High compression level
   Best,
-  /// Huffman coding compression
-  Huffman,
-  /// Run-length encoding compression
-  Rle,
 }
 
 impl Default for CompressionType {
@@ -28,8 +24,6 @@ impl From<CompressionType> for image::codecs::png::CompressionType {
       CompressionType::Default => image::codecs::png::CompressionType::Default,
       CompressionType::Fast => image::codecs::png::CompressionType::Fast,
       CompressionType::Best => image::codecs::png::CompressionType::Best,
-      CompressionType::Huffman => image::codecs::png::CompressionType::Huffman,
-      CompressionType::Rle => image::codecs::png::CompressionType::Rle,
     }
   }
 }
@@ -121,7 +115,7 @@ fn to_oxipng_options(opt: &PNGLosslessOptions) -> oxipng::Options {
     filter: opt
       .filter
       .as_ref()
-      .map(|v| v.into_iter().map(|i| *i as u8).collect())
+      .map(|v| v.iter().map(|i| *i as u8).collect())
       .unwrap_or_else(|| oxipng::IndexSet::from_iter(0..5)),
     bit_depth_reduction: opt.bit_depth_reduction.unwrap_or(true),
     color_type_reduction: opt.color_type_reduction.unwrap_or(true),

@@ -74,11 +74,7 @@ export const enum CompressionType {
   /** Fast, minimal compression */
   Fast = 1,
   /** High compression level */
-  Best = 2,
-  /** Huffman coding compression */
-  Huffman = 3,
-  /** Run-length encoding compression */
-  Rle = 4
+  Best = 2
 }
 export const enum FilterType {
   /**
