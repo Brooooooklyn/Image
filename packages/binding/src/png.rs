@@ -219,9 +219,12 @@ fn png_quantize_inner(input: &[u8], options: &PngQuantOptions) -> Result<Vec<u8>
   let output_info = reader
     .next_frame(&mut decoded_buf)
     .map_err(|err| Error::new(Status::InvalidArg, format!("Read png frame failed {}", err)))?;
-
   let width = output_info.width;
   let height = output_info.height;
+  // The input png quality is too low
+  if decoded_buf.len() < (width * height * 4) as usize {
+    return Ok(input.to_vec());
+  }
   let mut liq = imagequant::new();
   liq
     .set_speed(options.speed.unwrap_or(5) as i32)
