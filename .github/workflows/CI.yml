@@ -36,11 +36,9 @@ jobs:
               choco install meson -y
               yarn workspace @napi-rs/image build --features with_simd
             target: x86_64-pc-windows-msvc
-          - host: windows-2022-xl
+          - host: windows-latest
             build: |
-              $Env:PATH="C:\Cargo\bin;$Env:PATH"
-              $Env:LIBAVIF_CROSS_WIN32=1
-              yarn workspace @napi-rs/image build --features with_simd --target i686-pc-windows-msvc
+              $Env:LIBAVIF_CROSS_WIN32=1; yarn workspace @napi-rs/image build --features with_simd --target i686-pc-windows-msvc
               node -e "console.log(process.arch)"
               yarn test
             target: i686-pc-windows-msvc
@@ -51,7 +49,7 @@ jobs:
             build: |
               set -e && \
               apt install meson -y && \
-              yarn workspace @napi-rs/image build --features with_simd --target x86_64-unknown-linux-gnu && \
+              CFLAGS="-march=haswell" yarn workspace @napi-rs/image build --features with_simd --target x86_64-unknown-linux-gnu && \
               strip packages/*/*.node
           - host: ubuntu-latest
             target: x86_64-unknown-linux-musl
@@ -115,7 +113,8 @@ jobs:
               export CXX="${ANDROID_NDK_LATEST_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi24-clang++"
               export AR="${ANDROID_NDK_LATEST_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
               export PATH="${ANDROID_NDK_LATEST_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin:${PATH}"
-              export C_INCLUDE_PATH="${ANDROID_NDK_LATEST_HOME}/sources/android/cpufeatures"; 
+              export C_INCLUDE_PATH="${ANDROID_NDK_LATEST_HOME}/sources/android/cpufeatures";
+              export CMAKE_TOOLCHAIN_FILE_armv7_linux_androideabi="${ANDROID_NDK_LATEST_HOME}/build/cmake/android.toolchain.cmake";
               yarn workspace @napi-rs/image build --features oxipng_libdeflater
               ${ANDROID_NDK_LATEST_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip packages/*/*.node
           - host: ubuntu-latest
