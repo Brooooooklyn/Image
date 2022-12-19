@@ -74,12 +74,14 @@ jobs:
               strip -x packages/*/*.node
           - host: ubuntu-latest
             target: aarch64-unknown-linux-gnu
-            setup: |
-              sudo apt-get update
-              sudo apt-get install meson gcc-aarch64-linux-gnu -y
-            build: |
-              yarn workspace @napi-rs/image build --features with_simd --target aarch64-unknown-linux-gnu
-              aarch64-linux-gnu-strip packages/*/*.node
+            docker: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-debian-aarch64
+            build: >-
+              set -e &&
+              export LDFLAGS="-L/usr/aarch64-unknown-linux-gnu/lib/gcc/aarch64-unknown-linux-gnu/4.8.5" &&
+              export CFLAGS="-fuse-ld=lld -mcrc -B/usr/aarch64-unknown-linux-gnu/lib/gcc/aarch64-unknown-linux-gnu/4.8.5 --sysroot=/usr/aarch64-unknown-linux-gnu/aarch64-unknown-linux-gnu/sysroot" &&
+              export CXXFLAGS="-fuse-ld=lld -mcrc -B/usr/aarch64-unknown-linux-gnu/lib/gcc/aarch64-unknown-linux-gnu/4.8.5 --sysroot=/usr/aarch64-unknown-linux-gnu/aarch64-unknown-linux-gnu/sysroot" &&
+              yarn workspace @napi-rs/image build --features with_simd --target aarch64-unknown-linux-gnu &&
+              llvm-strip packages/*/*.node
           - host: ubuntu-18.04
             target: armv7-unknown-linux-gnueabihf
             setup: |
