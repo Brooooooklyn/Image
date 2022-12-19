@@ -42,16 +42,21 @@ jobs:
               sudo apt install meson -y
               cargo install cargo-xwin
             build: |
-              XWIN_ARCH=x86 CFLAGS="-msse -msse2 -msse3 -mssse3 -msse4a -msse4.1 -msse4.2" yarn workspace @napi-rs/image build --features with_simd --target i686-pc-windows-msvc
+              export XWIN_ARCH=x86
+              export CFLAGS="-msse -msse2 -msse3 -mssse3 -msse4a -msse4.1 -msse4.2"
+              export CXXFLAGS="-msse -msse2 -msse3 -mssse3 -msse4a -msse4.1 -msse4.2"
+              yarn workspace @napi-rs/image build --features with_simd --target i686-pc-windows-msvc
             target: i686-pc-windows-msvc
           - host: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             docker: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-debian
-            build: |
-              set -e && \
-              apt install meson -y && \
-              CFLAGS="-msse -msse2 -msse3 -mssse3 -msse4a -msse4.1 -msse4.2" yarn workspace @napi-rs/image build --features with_simd --target x86_64-unknown-linux-gnu && \
-              strip packages/*/*.node
+            build: >-
+              set -e &&
+              apt install meson -y &&
+              export CFLAGS="-msse -msse2 -msse3 -mssse3 -msse4a -msse4.1 -msse4.2" &&
+              export CXXFLAGS="-msse -msse2 -msse3 -mssse3 -msse4a -msse4.1 -msse4.2" &&
+              yarn workspace @napi-rs/image build --features with_simd --target x86_64-unknown-linux-gnu &&
+              llvm-strip packages/*/*.node
           - host: ubuntu-latest
             target: x86_64-unknown-linux-musl
             docker: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-alpine
