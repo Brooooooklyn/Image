@@ -209,6 +209,7 @@ pub fn png_quantize_sync(input: Buffer, options: Option<PngQuantOptions>) -> Res
   Ok(output.into())
 }
 
+#[inline(never)]
 fn png_quantize_inner(input: &[u8], options: &PngQuantOptions) -> Result<Vec<u8>> {
   let decoder = png::Decoder::new(input);
   let mut reader = decoder

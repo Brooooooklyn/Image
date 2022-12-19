@@ -2,4 +2,4 @@
 members = ["./packages/binding"]
 
 [profile.release]
-lto = true
+lto = 'thin'

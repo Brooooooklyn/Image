@@ -43,8 +43,8 @@ jobs:
               cargo install cargo-xwin
             build: |
               export XWIN_ARCH=x86
-              export CFLAGS="-msse -msse2 -msse3 -mssse3 -msse4a -msse4.1 -msse4.2"
-              export CXXFLAGS="-msse -msse2 -msse3 -mssse3 -msse4a -msse4.1 -msse4.2"
+              export CFLAGS="-msse4.2"
+              export CXXFLAGS="-msse4.2"
               yarn workspace @napi-rs/image build --features with_simd --target i686-pc-windows-msvc
             target: i686-pc-windows-msvc
           - host: ubuntu-latest
@@ -52,9 +52,10 @@ jobs:
             docker: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-debian
             build: >-
               set -e &&
-              apt install meson -y &&
-              export CFLAGS="-msse -msse2 -msse3 -mssse3 -msse4a -msse4.1 -msse4.2" &&
-              export CXXFLAGS="-msse -msse2 -msse3 -mssse3 -msse4a -msse4.1 -msse4.2" &&
+              apt-get update &&
+              apt-get install meson -y &&
+              export CFLAGS="-msse4.2" &&
+              export CXXFLAGS="-msse4.2" &&
               yarn workspace @napi-rs/image build --features with_simd --target x86_64-unknown-linux-gnu &&
               llvm-strip packages/*/*.node
           - host: ubuntu-latest
@@ -163,7 +164,7 @@ jobs:
         uses: KyleMayes/install-llvm-action@v1
         if: ${{ matrix.settings.target == 'i686-pc-windows-msvc' }}
         with:
-          version: "15"
+          version: '15'
       - name: Setup toolchain
         run: ${{ matrix.settings.setup }}
         if: ${{ matrix.settings.setup }}
