@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [1.4.2](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.4.1...@napi-rs/image@1.4.2) (2022-12-20)
+
+### Bug Fixes
+
+- **binding:** early return when input images are optimized ([#28](https://github.com/Brooooooklyn/Image/issues/28)) ([b695642](https://github.com/Brooooooklyn/Image/commit/b695642560e5aa43741e6a166119aa7b6d55145f))
+
 ## [1.4.1](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.4.0...@napi-rs/image@1.4.1) (2022-10-07)
 
 **Note:** Version bump only for package @napi-rs/image
