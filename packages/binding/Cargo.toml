@@ -33,7 +33,7 @@ image = { version = "0.24", default-features = false, features = [
   "jpeg_rayon",
   "openexr",
 ] }
-jpeg-decoder = "0.2"
+jpeg-decoder = "0.3"
 libavif = { version = "0.10", default-features = false, features = [
   "codec-aom",
 ] }
