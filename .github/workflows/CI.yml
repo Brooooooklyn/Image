@@ -54,9 +54,8 @@ jobs:
               set -e &&
               apt-get update &&
               apt-get install meson -y &&
-              export CFLAGS="-msse4.2" &&
-              export CXXFLAGS="-msse4.2" &&
-              yarn workspace @napi-rs/image build --features with_simd --target x86_64-unknown-linux-gnu &&
+              unset LDFLAGS &&
+              CXX_x86_64_unknown_linux_gnu=g++ CC_x86_64_unknown_linux_gnu=gcc yarn workspace @napi-rs/image build --features with_simd --target x86_64-unknown-linux-gnu &&
               llvm-strip packages/*/*.node
           - host: ubuntu-latest
             target: x86_64-unknown-linux-musl
