@@ -1,6 +1,6 @@
 {
   "name": "@napi-rs/image-freebsd-x64",
-  "version": "1.4.3",
+  "version": "1.4.4",
   "os": [
     "freebsd"
   ],
