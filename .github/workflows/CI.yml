@@ -45,6 +45,7 @@ jobs:
               export XWIN_ARCH=x86
               export CFLAGS="-msse4.2"
               export CXXFLAGS="-msse4.2"
+              export CARGO_PROFILE_RELEASE_LTO="false"
               yarn workspace @napi-rs/image build --features with_simd --target i686-pc-windows-msvc
             target: i686-pc-windows-msvc
           - host: ubuntu-latest
