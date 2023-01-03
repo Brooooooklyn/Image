@@ -102,6 +102,18 @@ export interface PngEncodeOptions {
   /** Default is `FilterType::NoFilter` */
   filterType?: FilterType
 }
+export const enum PngRowFilter {
+  None = 0,
+  Sub = 1,
+  Up = 2,
+  Average = 3,
+  Paeth = 4,
+  MinSum = 5,
+  Entropy = 6,
+  Bigrams = 7,
+  BigEnt = 8,
+  Brute = 9
+}
 export interface PNGLosslessOptions {
   /**
    * Attempt to fix errors when decoding the input file rather than returning an Err.
@@ -114,7 +126,7 @@ export interface PNGLosslessOptions {
    */
   force?: boolean
   /** Which filters to try on the file (0-5) */
-  filter?: Array<number>
+  filter?: Array<PngRowFilter>
   /**
    * Whether to attempt bit depth reduction
    * Default: `true`
@@ -143,8 +155,6 @@ export interface PNGLosslessOptions {
   idatRecoding?: boolean
   /** Whether to remove ***All non-critical headers*** on PNG */
   strip?: boolean
-  /** Whether to use heuristics to pick the best filter and compression */
-  useHeuristics?: boolean
 }
 export function losslessCompressPngSync(input: Buffer, options?: PNGLosslessOptions | undefined | null): Buffer
 export function losslessCompressPng(input: Buffer, options?: PNGLosslessOptions | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>

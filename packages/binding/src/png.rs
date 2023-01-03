@@ -74,6 +74,39 @@ pub struct PngEncodeOptions {
   pub filter_type: Option<FilterType>,
 }
 
+#[napi]
+pub enum PngRowFilter {
+  // Standard filter types
+  None,
+  Sub,
+  Up,
+  Average,
+  Paeth,
+  // Heuristic strategies
+  MinSum,
+  Entropy,
+  Bigrams,
+  BigEnt,
+  Brute,
+}
+
+impl From<&PngRowFilter> for oxipng::RowFilter {
+  fn from(value: &PngRowFilter) -> Self {
+    match value {
+      PngRowFilter::None => oxipng::RowFilter::None,
+      PngRowFilter::Sub => oxipng::RowFilter::Sub,
+      PngRowFilter::Up => oxipng::RowFilter::Up,
+      PngRowFilter::Average => oxipng::RowFilter::Average,
+      PngRowFilter::Paeth => oxipng::RowFilter::Paeth,
+      PngRowFilter::MinSum => oxipng::RowFilter::MinSum,
+      PngRowFilter::Entropy => oxipng::RowFilter::Entropy,
+      PngRowFilter::Bigrams => oxipng::RowFilter::Bigrams,
+      PngRowFilter::BigEnt => oxipng::RowFilter::BigEnt,
+      PngRowFilter::Brute => oxipng::RowFilter::Brute,
+    }
+  }
+}
+
 #[napi(object, js_name = "PNGLosslessOptions")]
 #[derive(Default)]
 pub struct PNGLosslessOptions {
@@ -84,7 +117,7 @@ pub struct PNGLosslessOptions {
   /// Default: `false`
   pub force: Option<bool>,
   /// Which filters to try on the file (0-5)
-  pub filter: Option<Vec<u32>>,
+  pub filter: Option<Vec<PngRowFilter>>,
   /// Whether to attempt bit depth reduction
   /// Default: `true`
   pub bit_depth_reduction: Option<bool>,
@@ -103,8 +136,6 @@ pub struct PNGLosslessOptions {
   pub idat_recoding: Option<bool>,
   /// Whether to remove ***All non-critical headers*** on PNG
   pub strip: Option<bool>,
-  /// Whether to use heuristics to pick the best filter and compression
-  pub use_heuristics: Option<bool>,
 }
 
 #[inline(always)]
@@ -115,8 +146,16 @@ fn to_oxipng_options(opt: &PNGLosslessOptions) -> oxipng::Options {
     filter: opt
       .filter
       .as_ref()
-      .map(|v| v.iter().map(|i| *i as u8).collect())
-      .unwrap_or_else(|| oxipng::IndexSet::from_iter(0..5)),
+      .map(|v| v.iter().map(|i| i.into()).collect())
+      .unwrap_or_else(|| {
+        oxipng::IndexSet::from_iter([
+          oxipng::RowFilter::None,
+          oxipng::RowFilter::Sub,
+          oxipng::RowFilter::Up,
+          oxipng::RowFilter::Average,
+          oxipng::RowFilter::Paeth,
+        ])
+      }),
     bit_depth_reduction: opt.bit_depth_reduction.unwrap_or(true),
     color_type_reduction: opt.color_type_reduction.unwrap_or(true),
     palette_reduction: opt.palette_reduction.unwrap_or(true),
@@ -132,9 +171,8 @@ fn to_oxipng_options(opt: &PNGLosslessOptions) -> oxipng::Options {
         }
       })
       .unwrap_or(oxipng::Headers::All),
-    use_heuristics: opt.use_heuristics.unwrap_or(true),
     #[cfg(target_arch = "arm")]
-    deflate: oxipng::Deflaters::Libdeflater,
+    deflate: oxipng::Deflaters::Libdeflater { compression: 12 },
     ..Default::default()
   }
 }
