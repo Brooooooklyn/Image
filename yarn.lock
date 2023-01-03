@@ -1014,12 +1014,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@napi-rs/cli@npm:^2.13.2, @napi-rs/cli@npm:^2.14.0":
-  version: 2.14.0
-  resolution: "@napi-rs/cli@npm:2.14.0"
+"@napi-rs/cli@npm:^2.14.1":
+  version: 2.14.1
+  resolution: "@napi-rs/cli@npm:2.14.1"
   bin:
     napi: scripts/index.js
-  checksum: 9f16b93c7f9ee6f8bd3fe1bf6ee8135f6e1a14120b9d7f7f1991508ae1ad0762fef3fd4569ef4eb4375effce5e010a6e33af7192d06610aff2cec1b8add4bbcb
+  checksum: ac93f7ce67b9b5ab839fadc7afbaa0a33126325807578133df016ed9d88455f403e7ceb9f225d2996d65e4a9d67960516533bab155a47998192f42febe35de24
   languageName: node
   linkType: hard
 
@@ -1033,7 +1033,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@napi-rs/image@workspace:packages/binding"
   dependencies:
-    "@napi-rs/cli": ^2.13.2
+    "@napi-rs/cli": ^2.14.1
   languageName: unknown
   linkType: soft
 
@@ -4470,7 +4470,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "image@workspace:."
   dependencies:
-    "@napi-rs/cli": ^2.14.0
+    "@napi-rs/cli": ^2.14.1
     "@taplo/cli": ^0.5.2
     "@types/node": ^18.11.18
     "@types/sharp": ^0.31.1
