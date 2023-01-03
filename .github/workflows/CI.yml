@@ -45,6 +45,7 @@ jobs:
               export XWIN_ARCH=x86
               export CFLAGS="-msse4.2"
               export CXXFLAGS="-msse4.2"
+              export CARGO_PROFILE_RELEASE_LTO="false"
               yarn workspace @napi-rs/image build --features with_simd --target i686-pc-windows-msvc
             target: i686-pc-windows-msvc
           - host: ubuntu-latest
@@ -87,13 +88,13 @@ jobs:
               export CXXFLAGS="-fuse-ld=lld -mcrc -B/usr/aarch64-unknown-linux-gnu/lib/gcc/aarch64-unknown-linux-gnu/4.8.5 --sysroot=/usr/aarch64-unknown-linux-gnu/aarch64-unknown-linux-gnu/sysroot" &&
               yarn workspace @napi-rs/image build --features with_simd --target aarch64-unknown-linux-gnu &&
               llvm-strip packages/*/*.node
-          - host: ubuntu-18.04
+          - host: ubuntu-latest
             target: armv7-unknown-linux-gnueabihf
             setup: |
               sudo apt-get update
               sudo apt-get install meson gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf -y
             build: |
-              yarn workspace @napi-rs/image build --features oxipng_libdeflater
+              yarn workspace @napi-rs/image build --features oxipng_libdeflater --zig --zig-link-only
               arm-linux-gnueabihf-strip packages/*/*.node
           - host: ubuntu-latest
             target: aarch64-linux-android
@@ -123,7 +124,7 @@ jobs:
               apk add --update --repository http://dl-cdn.alpinelinux.org/alpine/edge/testing --no-cache aom-dev perl meson &&
               yarn workspace @napi-rs/image build --target aarch64-unknown-linux-musl --features with_simd &&
               /aarch64-linux-musl-cross/bin/aarch64-linux-musl-strip packages/*/*.node
-    name: stable - ${{ matrix.settings.target }} - node@16
+    name: stable - ${{ matrix.settings.target }} - node@18
     runs-on: ${{ matrix.settings.host }}
     env:
       RUST_TARGET: ${{ matrix.settings.target }}
@@ -132,19 +133,17 @@ jobs:
       - name: Setup node
         uses: actions/setup-node@v3
         with:
-          node-version: 16
+          node-version: 18
           check-latest: true
           cache: yarn
       - name: Setup nasm
         uses: ilammy/setup-nasm@v1
         if: matrix.settings.target == 'x86_64-pc-windows-msvc' || matrix.settings.target == 'x86_64-apple-darwin' || matrix.settings.target == 'i686-pc-windows-msvc'
       - name: Install
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          profile: minimal
-          override: true
           toolchain: stable
-          target: ${{ matrix.settings.target }}
+          targets: ${{ matrix.settings.target }}
       - name: Cache cargo registry
         uses: actions/cache@v3
         with:
@@ -156,7 +155,7 @@ jobs:
             target/
           key: ${{ matrix.settings.target }}-cargo-cache
       - uses: goto-bus-stop/setup-zig@v2
-        if: ${{ matrix.settings.target == 'aarch64-unknown-linux-gnu' }}
+        if: ${{ matrix.settings.target == 'armv7-unknown-linux-gnueabihf' }}
         with:
           version: 0.10.0
       - name: Install LLVM and Clang
@@ -200,8 +199,9 @@ jobs:
           RUSTUP_HOME: /usr/local/rustup
           CARGO_HOME: /usr/local/cargo
           RUSTUP_IO_THREADS: 1
+          CARGO_PROFILE_RELEASE_LTO: false
         with:
-          envs: DEBUG RUSTUP_HOME CARGO_HOME RUSTUP_IO_THREADS
+          envs: DEBUG RUSTUP_HOME CARGO_HOME RUSTUP_IO_THREADS CARGO_PROFILE_RELEASE_LTO
           usesh: true
           mem: 3000
           prepare: |
@@ -226,11 +226,13 @@ jobs:
             env
             freebsd-version
             yarn install --immutable --mode=skip-build
-            yarn workspace @napi-rs/image build --features with_simd
+            yarn workspace @napi-rs/image build --features oxipng_libdeflater
             strip -x packages/*/*.node
             yarn test
             rm -rf node_modules
             rm -rf target
+            rm -rf .yarn/cache
+            rm -f *.core
       - name: Upload artifact
         uses: actions/upload-artifact@v3
         with:
@@ -260,11 +262,6 @@ jobs:
           node-version: ${{ matrix.node }}
           check-latest: true
           cache: yarn
-      - name: Cache NPM dependencies
-        uses: actions/cache@v3
-        with:
-          path: .yarn/cache
-          key: npm-cache-test-${{ matrix.settings.target }}-${{ matrix.node }}
       - name: Install dependencies
         run: yarn install --immutable --mode=skip-build
       - name: Download artifacts
@@ -300,11 +297,6 @@ jobs:
           node-version: ${{ matrix.node }}
           check-latest: true
           cache: yarn
-      - name: Cache NPM dependencies
-        uses: actions/cache@v3
-        with:
-          path: .yarn/cache
-          key: npm-cache-test-linux-x64-gnu-${{ matrix.node }}
       - name: Install dependencies
         run: yarn install --immutable --mode=skip-build
       - name: Download artifacts
@@ -340,11 +332,6 @@ jobs:
           node-version: ${{ matrix.node }}
           check-latest: true
           cache: yarn
-      - name: Cache NPM dependencies
-        uses: actions/cache@v3
-        with:
-          path: .yarn/cache
-          key: npm-cache-test-x86_64-unknown-linux-musl-${{ matrix.node }}
       - name: Install dependencies
         run: yarn install --immutable --mode=skip-build
       - name: Download artifacts
@@ -380,11 +367,6 @@ jobs:
         with:
           name: bindings-aarch64-unknown-linux-gnu
           path: artifacts
-      - name: Cache NPM dependencies
-        uses: actions/cache@v3
-        with:
-          path: .yarn/cache
-          key: npm-cache-test-linux-aarch64-gnu-${{ matrix.node }}
       - name: Install dependencies
         run: yarn install --immutable --mode=skip-build
       - name: Move artifacts
@@ -422,11 +404,6 @@ jobs:
         with:
           name: bindings-armv7-unknown-linux-gnueabihf
           path: artifacts
-      - name: Cache NPM dependencies
-        uses: actions/cache@v3
-        with:
-          path: .yarn/cache
-          key: npm-cache-test-linux-arm-gnueabihf-${{ matrix.node }}
       - name: Install dependencies
         run: yarn install --immutable --mode=skip-build
       - name: Move artifacts
@@ -459,7 +436,7 @@ jobs:
       - name: Setup node
         uses: actions/setup-node@v3
         with:
-          node-version: 16
+          node-version: 18
           check-latest: true
           cache: yarn
       - name: Install dependencies

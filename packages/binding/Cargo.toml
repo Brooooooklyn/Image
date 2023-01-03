@@ -12,7 +12,7 @@ path = "logo.rs"
 
 [features]
 default = ["oxipng/parallel"]
-oxipng_libdeflater = ["oxipng/libdeflater", "oxipng/parallel"]
+oxipng_libdeflater = ["oxipng/zopfli", "oxipng/parallel"]
 with_simd = ["mozjpeg-sys/nasm_simd_parallel_build"]
 
 [dependencies]
@@ -52,7 +52,7 @@ rgb = "0.8"
 
 [dependencies.oxipng]
 default-features = false
-version = "6"
+version = "8"
 
 [dependencies.mozjpeg-sys]
 default-features = false
