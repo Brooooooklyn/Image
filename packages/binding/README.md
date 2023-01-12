@@ -419,6 +419,28 @@ export const enum ResizeFilterType {
 }
 ```
 
+#### `overlay`
+
+```ts
+/**
+ * Overlay an image at a given coordinate (x, y)
+ */
+overlay(onTop: Buffer, x: number, y: number): this
+```
+```ts
+import { writeFileSync } from 'fs'
+
+import { Transformer } from '@napi-rs/image'
+
+
+const imageOutputPng = await new Transformer(PNG).overlay(PNG, 200, 200).png()
+
+writeFileSync(
+  'output-overlay-png.png',
+  imageOutputPng
+)
+```
+
 **ResizeFilterType**:
 
 To test the different sampling filters on a real example, you can find two

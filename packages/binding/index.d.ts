@@ -300,6 +300,8 @@ export interface Metadata {
 }
 export class Transformer {
   constructor(input: Buffer)
+  /** Overlay an image at a given coordinate (x, y) */
+  overlay(onTop: Buffer, x: number, y: number): this
   static fromRgbaPixels(input: Buffer | Uint8ClampedArray, width: number, height: number): Transformer
   metadata(withExif?: boolean | undefined | null, signal?: AbortSignal | undefined | null): Promise<Metadata>
   /**

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::Arc;
 
+use image::imageops::overlay;
 use image::{
   imageops::FilterType, ColorType, DynamicImage, ImageBuffer, ImageEncoder, ImageFormat,
 };
@@ -70,7 +71,7 @@ impl TryFrom<u16> for Orientation {
       8 => Ok(Orientation::Rotate270Cw),
       _ => Err(Error::new(
         Status::InvalidArg,
-        format!("Invalid orientation {}", value),
+        format!("Invalid orientation {value}"),
       )),
     }
   }
@@ -214,7 +215,7 @@ impl ThreadSafeDynamicImage {
       let image_format = image::guess_format(input_buf).map_err(|err| {
         Error::new(
           Status::InvalidArg,
-          format!("Guess format from input image failed {}", err),
+          format!("Guess format from input image failed {err}"),
         )
       })?;
       if with_exif {
@@ -227,7 +228,7 @@ impl ThreadSafeDynamicImage {
         let avif = libavif::decode_rgb(input_buf).map_err(|err| {
           Error::new(
             Status::InvalidArg,
-            format!("Decode avif image failed {}", err),
+            format!("Decode avif image failed {err}"),
           )
         })?;
         let decoded_rgb = avif.to_vec();
@@ -249,7 +250,7 @@ impl ThreadSafeDynamicImage {
         }
       } else {
         image::load_from_memory_with_format(input_buf, image_format)
-          .map_err(|err| Error::new(Status::InvalidArg, format!("Decode image failed {}", err)))?
+          .map_err(|err| Error::new(Status::InvalidArg, format!("Decode image failed {err}")))?
       };
       let color_type = dynamic_image.color();
       image.replace(ImageMetaData {
@@ -476,6 +477,7 @@ impl Task for EncodeTask {
     if let Some((x, y, width, height)) = self.image_transform_args.crop {
       meta.image = meta.image.crop_imm(x, y, width, height);
     }
+
     let dynamic_image = &mut meta.image;
     let color_type = &meta.color_type;
     let width = dynamic_image.width();
@@ -521,7 +523,7 @@ impl Task for EncodeTask {
           .map_err(|err| {
             Error::new(
               Status::GenericFailure,
-              format!("Encode output png failed {}", err),
+              format!("Encode output png failed {err}"),
             )
           })?;
         return Ok(EncodeOutput::Buffer(output.into_inner()));
@@ -535,7 +537,7 @@ impl Task for EncodeTask {
         encoder.encode_image(dynamic_image).map_err(|err| {
           Error::new(
             Status::GenericFailure,
-            format!("Encode output jpeg failed {}", err),
+            format!("Encode output jpeg failed {err}"),
           )
         })?;
         return Ok(EncodeOutput::Buffer(output.into_inner()));
@@ -598,6 +600,16 @@ impl Transformer {
       dynamic_image: Arc::new(ThreadSafeDynamicImage::new(input)),
       image_transform_args: ImageTransformArgs::default(),
     }
+  }
+
+  #[napi]
+  /// Overlay an image at a given coordinate (x, y)
+  pub fn overlay(&self, on_top: Buffer, x: i64, y: i64) -> Result<&Self> {
+    let bottom = self.dynamic_image.get(true)?;
+    let top = ThreadSafeDynamicImage::new(on_top);
+    let top_image_meta = top.get(true)?;
+    overlay(&mut bottom.image, &top_image_meta.image, x, y);
+    Ok(self)
   }
 
   #[napi]
