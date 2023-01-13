@@ -5,7 +5,7 @@ use fast_image_resize as fr;
 use fr::FilterType;
 use image::codecs::png::PngEncoder;
 use image::io::Reader as ImageReader;
-use image::{ColorType, ImageEncoder};
+use image::ImageEncoder;
 use napi::{bindgen_prelude::*, JsBuffer};
 use napi_derive::napi;
 
@@ -74,6 +74,7 @@ pub fn fast_resize(data: JsBuffer, options: FastResizeOptions) -> Result<Buffer>
     .map_err(|err| Error::new(Status::GenericFailure, format!("{err}")))?
     .decode()
     .map_err(|e| Error::new(Status::GenericFailure, format!("{e}")))?;
+  let cs = img.color();
   let width = NonZeroU32::new(img.width())
     .ok_or_else(|| Error::new(Status::InvalidArg, "Image width should not be 0".to_owned()))?;
   let height = NonZeroU32::new(img.height()).ok_or_else(|| {
@@ -100,10 +101,11 @@ pub fn fast_resize(data: JsBuffer, options: FastResizeOptions) -> Result<Buffer>
       "Resized width should not be 0".to_owned(),
     )
   })?;
-  let dst_height = NonZeroU32::new(options.height.unwrap_or_else(|| {
-    <NonZeroU32 as Into<u32>>::into(dst_width) / <NonZeroU32 as Into<u32>>::into(width)
-      * <NonZeroU32 as Into<u32>>::into(height)
-  }))
+  let dst_height = NonZeroU32::new(
+    options
+      .height
+      .unwrap_or_else(|| (options.width as f32 / img.width() as f32 * img.height() as f32) as u32),
+  )
   .ok_or_else(|| {
     Error::new(
       Status::InvalidArg,
@@ -132,12 +134,7 @@ pub fn fast_resize(data: JsBuffer, options: FastResizeOptions) -> Result<Buffer>
   // Write destination image as PNG-file
   let mut result_buf = BufWriter::new(Vec::new());
   PngEncoder::new(&mut result_buf)
-    .write_image(
-      dst_image.buffer(),
-      dst_width.get(),
-      dst_height.get(),
-      ColorType::Rgba8,
-    )
+    .write_image(dst_image.buffer(), dst_width.get(), dst_height.get(), cs)
     .map_err(|err| Error::new(Status::GenericFailure, format!("{err}")))?;
   let output = result_buf
     .into_inner()

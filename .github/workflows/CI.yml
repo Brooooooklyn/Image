@@ -58,7 +58,7 @@ jobs:
               rm /usr/lib/llvm-15/lib/libc++.so &&
               export LDFLAGS="-L/usr/lib/llvm-15/lib -L/usr/x86_64-unknown-linux-gnu/lib/gcc/x86_64-unknown-linux-gnu/4.8.5" &&
               export CFLAGS="-fuse-ld=lld -B/usr/aarch64-unknown-linux-gnu/lib/gcc/aarch64-unknown-linux-gnu/4.8.5 --sysroot=/usr/x86_64-unknown-linux-gnu/x86_64-unknown-linux-gnu/sysroot" &&
-              export CXXFLAGS="-stdlib=libc++ -fuse-ld=lld -B/usr/aarch64-unknown-linux-gnu/lib/gcc/aarch64-unknown-linux-gnu/4.8.5 --sysroot=/usr/x86_64-unknown-linux-gnu/x86_64-unknown-linux-gnu/sysroot -L/usr/lib/llvm-15/lib"
+              export CXXFLAGS="-stdlib=libc++ -fuse-ld=lld -B/usr/aarch64-unknown-linux-gnu/lib/gcc/aarch64-unknown-linux-gnu/4.8.5 --sysroot=/usr/x86_64-unknown-linux-gnu/x86_64-unknown-linux-gnu/sysroot -L/usr/lib/llvm-15/lib" &&
               yarn workspace @napi-rs/image build --features with_simd --target x86_64-unknown-linux-gnu &&
               llvm-strip packages/*/*.node
           - host: ubuntu-latest

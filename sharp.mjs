@@ -63,27 +63,30 @@ writeFileSync('output-exif.image.avif', imageOutputAvif)
 
 console.time('sharp resize')
 
-await sharp(NASA)
-  .resize(1024, 768, {
-    kernel: sharp.kernel.lanczos3,
-  })
+const outputSharp = await sharp(NASA)
+  .resize(1024)
   .png()
   .toBuffer()
 
 console.timeEnd('sharp resize')
 
+writeFileSync('nasa-small.sharp.png', outputSharp)
+
 console.time('@napi-rs/image resize')
 
-await new Transformer(NASA).resize(1024, 768, ResizeFilterType.Lanczos3).png()
+const outputImage = await new Transformer(NASA).resize(1024, null, ResizeFilterType.Lanczos3).png()
 
 console.timeEnd('@napi-rs/image resize')
 
+writeFileSync('nasa-small.image.png', outputImage)
+
 console.time('fast resize')
 
-fastResize(NASA, {
+const output = fastResize(NASA, {
   width: 1024,
-  height: 768,
   filter: FastResizeFilter.Lanczos3,
 })
 
 console.timeEnd('fast resize')
+
+writeFileSync('nasa-small.png', output)
