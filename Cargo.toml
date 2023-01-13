@@ -2,4 +2,5 @@
 members = ["./packages/binding"]
 
 [profile.release]
-lto = 'thin'
+lto = 'fat'
+codegen-units = 1

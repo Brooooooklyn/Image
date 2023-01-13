@@ -16,6 +16,7 @@ oxipng_libdeflater = ["oxipng/zopfli", "oxipng/parallel"]
 with_simd = ["mozjpeg-sys/nasm_simd_parallel_build"]
 
 [dependencies]
+fast_image_resize = "2"
 imagequant = "4.0.0"
 image = { version = "0.24", default-features = false, features = [
   "jpeg",

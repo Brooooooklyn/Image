@@ -57,6 +57,51 @@ export const enum ChromaSubsampling {
    */
   Yuv400 = 3
 }
+export const enum FastResizeFilter {
+  /**
+   * Each pixel of source image contributes to one pixel of the
+   * destination image with identical weights. For upscaling is equivalent
+   * of `Nearest` resize algorithm.
+   */
+  Box = 0,
+  /**
+   * Bilinear filter calculate the output pixel value using linear
+   * interpolation on all pixels that may contribute to the output value.
+   */
+  Bilinear = 1,
+  /**
+   * Hamming filter has the same performance as `Bilinear` filter while
+   * providing the image downscaling quality comparable to bicubic
+   * (`CatmulRom` or `Mitchell`). Produces a sharper image than `Bilinear`,
+   * doesn't have dislocations on local level like with `Box`.
+   * The filter don’t show good quality for the image upscaling.
+   */
+  Hamming = 2,
+  /**
+   * Catmull-Rom bicubic filter calculate the output pixel value using
+   * cubic interpolation on all pixels that may contribute to the output
+   * value.
+   */
+  CatmullRom = 3,
+  /**
+   * Mitchell–Netravali bicubic filter calculate the output pixel value
+   * using cubic interpolation on all pixels that may contribute to the
+   * output value.
+   */
+  Mitchell = 4,
+  /**
+   * Lanczos3 filter calculate the output pixel value using a high-quality
+   * Lanczos filter (a truncated sinc) on all pixels that may contribute
+   * to the output value.
+   */
+  Lanczos3 = 5
+}
+export interface FastResizeOptions {
+  width: number
+  height?: number
+  filter?: FastResizeFilter
+}
+export function fastResize(data: Buffer, options: FastResizeOptions): Buffer
 export interface JpegCompressOptions {
   /** Output quality, default is 100 (lossless) */
   quality?: number

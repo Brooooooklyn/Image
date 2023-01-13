@@ -4,10 +4,33 @@ import { readFileSync, writeFileSync } from 'fs'
 
 import sharp from 'sharp'
 
-import { ChromaSubsampling, Transformer } from '@napi-rs/image'
+import { ChromaSubsampling, Transformer, fastResize, FastResizeFilter } from '@napi-rs/image'
 
 // https://github.com/ianare/exif-samples/blob/master/jpg/orientation/portrait_5.jpg
 const WITH_EXIF = readFileSync('./with-exif.jpg')
+
+const NASA = readFileSync('./nasa-4928x3279.png')
+
+console.time('sharp resize')
+
+await sharp(NASA)
+  .resize(1024, 768, {
+    kernel: sharp.kernel.lanczos3,
+  })
+  .png()
+  .toBuffer()
+
+console.timeEnd('sharp resize')
+
+console.time('fast resize')
+
+fastResize(NASA, {
+  width: 1024,
+  height: 768,
+  filter: FastResizeFilter.Lanczos3,
+})
+
+console.timeEnd('fast resize')
 
 console.time('sharp webp')
 
