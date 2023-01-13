@@ -33,7 +33,7 @@ jobs:
               strip -x packages/*/*.node
           - host: windows-latest
             build: |
-              choco install meson -y
+              python -m pip install meson
               yarn workspace @napi-rs/image build --features with_simd
             target: x86_64-pc-windows-msvc
           - host: ubuntu-latest
