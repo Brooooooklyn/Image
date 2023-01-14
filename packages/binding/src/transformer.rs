@@ -399,7 +399,7 @@ pub struct ResizeOptions {
   pub fit: Option<ResizeFit>,
 }
 
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone)]
 struct ImageTransformArgs {
   grayscale: bool,
   invert: bool,
@@ -414,6 +414,7 @@ struct ImageTransformArgs {
   huerotate: Option<i32>,
   orientation: Option<Orientation>,
   crop: Option<(u32, u32, u32, u32)>,
+  overlay: Vec<(Buffer, i64, i64)>,
 }
 
 pub struct EncodeTask {
@@ -535,6 +536,13 @@ impl Task for EncodeTask {
     }
     if let Some((x, y, width, height)) = self.image_transform_args.crop {
       meta.image = meta.image.crop_imm(x, y, width, height);
+    }
+    for (buffer, x, y) in
+      std::mem::replace(&mut self.image_transform_args.overlay, vec![]).into_iter()
+    {
+      let top = ThreadSafeDynamicImage::new(buffer);
+      let top_image_meta = top.get(true)?;
+      overlay(&mut meta.image, &top_image_meta.image, x, y);
     }
 
     let dynamic_image = &mut meta.image;
@@ -659,16 +667,6 @@ impl Transformer {
       dynamic_image: Arc::new(ThreadSafeDynamicImage::new(input)),
       image_transform_args: ImageTransformArgs::default(),
     }
-  }
-
-  #[napi]
-  /// Overlay an image at a given coordinate (x, y)
-  pub fn overlay(&self, on_top: Buffer, x: i64, y: i64) -> Result<&Self> {
-    let bottom = self.dynamic_image.get(true)?;
-    let top = ThreadSafeDynamicImage::new(on_top);
-    let top_image_meta = top.get(true)?;
-    overlay(&mut bottom.image, &top_image_meta.image, x, y);
-    Ok(self)
   }
 
   #[napi]
@@ -864,13 +862,20 @@ impl Transformer {
   }
 
   #[napi]
+  /// Overlay an image at a given coordinate (x, y)
+  pub fn overlay(&mut self, on_top: Buffer, x: i64, y: i64) -> Result<&Self> {
+    self.image_transform_args.overlay.push((on_top, x, y));
+    Ok(self)
+  }
+
+  #[napi]
   /// Return this image's pixels as a native endian byte slice.
   pub fn raw_pixels(&self, signal: Option<AbortSignal>) -> AsyncTask<EncodeTask> {
     AsyncTask::with_optional_signal(
       EncodeTask {
         image: self.dynamic_image.clone(),
         options: EncodeOptions::RawPixels,
-        image_transform_args: self.image_transform_args,
+        image_transform_args: self.image_transform_args.clone(),
       },
       signal,
     )
@@ -896,7 +901,7 @@ impl Transformer {
       EncodeTask {
         image: self.dynamic_image.clone(),
         options: EncodeOptions::Webp(quality_factor.unwrap_or(90)),
-        image_transform_args: self.image_transform_args,
+        image_transform_args: self.image_transform_args.clone(),
       },
       signal,
     )
@@ -910,7 +915,7 @@ impl Transformer {
     let mut encoder = EncodeTask {
       image: self.dynamic_image.clone(),
       options: EncodeOptions::Webp(quality_factor.unwrap_or(90)),
-      image_transform_args: self.image_transform_args,
+      image_transform_args: self.image_transform_args.clone(),
     };
     let output = encoder.compute()?;
     encoder.resolve(env, output)
@@ -922,7 +927,7 @@ impl Transformer {
       EncodeTask {
         image: self.dynamic_image.clone(),
         options: EncodeOptions::WebpLossless,
-        image_transform_args: self.image_transform_args,
+        image_transform_args: self.image_transform_args.clone(),
       },
       signal,
     )
@@ -933,7 +938,7 @@ impl Transformer {
     let mut encoder = EncodeTask {
       image: self.dynamic_image.clone(),
       options: EncodeOptions::WebpLossless,
-      image_transform_args: self.image_transform_args,
+      image_transform_args: self.image_transform_args.clone(),
     };
     let output = encoder.compute()?;
     encoder.resolve(env, output)
@@ -949,7 +954,7 @@ impl Transformer {
       EncodeTask {
         image: self.dynamic_image.clone(),
         options: EncodeOptions::Avif(options),
-        image_transform_args: self.image_transform_args,
+        image_transform_args: self.image_transform_args.clone(),
       },
       signal,
     )
@@ -960,7 +965,7 @@ impl Transformer {
     let mut encoder = EncodeTask {
       image: self.dynamic_image.clone(),
       options: EncodeOptions::Avif(options),
-      image_transform_args: self.image_transform_args,
+      image_transform_args: self.image_transform_args.clone(),
     };
     let output = encoder.compute()?;
     encoder.resolve(env, output)
@@ -976,7 +981,7 @@ impl Transformer {
       EncodeTask {
         image: self.dynamic_image.clone(),
         options: EncodeOptions::Png(options.unwrap_or_default()),
-        image_transform_args: self.image_transform_args,
+        image_transform_args: self.image_transform_args.clone(),
       },
       signal,
     )
@@ -987,7 +992,7 @@ impl Transformer {
     let mut encoder = EncodeTask {
       image: self.dynamic_image.clone(),
       options: EncodeOptions::Png(options.unwrap_or_default()),
-      image_transform_args: self.image_transform_args,
+      image_transform_args: self.image_transform_args.clone(),
     };
     let output = encoder.compute()?;
     encoder.resolve(env, output)
@@ -1004,7 +1009,7 @@ impl Transformer {
       EncodeTask {
         image: self.dynamic_image.clone(),
         options: EncodeOptions::Jpeg(quality.unwrap_or(90)),
-        image_transform_args: self.image_transform_args,
+        image_transform_args: self.image_transform_args.clone(),
       },
       signal,
     )
@@ -1016,7 +1021,7 @@ impl Transformer {
     let mut encoder = EncodeTask {
       image: self.dynamic_image.clone(),
       options: EncodeOptions::Jpeg(quality.unwrap_or(90)),
-      image_transform_args: self.image_transform_args,
+      image_transform_args: self.image_transform_args.clone(),
     };
     let output = encoder.compute()?;
     encoder.resolve(env, output)
@@ -1028,7 +1033,7 @@ impl Transformer {
       EncodeTask {
         image: self.dynamic_image.clone(),
         options: EncodeOptions::Bmp,
-        image_transform_args: self.image_transform_args,
+        image_transform_args: self.image_transform_args.clone(),
       },
       signal,
     )
@@ -1039,7 +1044,7 @@ impl Transformer {
     let mut encoder = EncodeTask {
       image: self.dynamic_image.clone(),
       options: EncodeOptions::Bmp,
-      image_transform_args: self.image_transform_args,
+      image_transform_args: self.image_transform_args.clone(),
     };
     let output = encoder.compute()?;
     encoder.resolve(env, output)
@@ -1051,7 +1056,7 @@ impl Transformer {
       EncodeTask {
         image: self.dynamic_image.clone(),
         options: EncodeOptions::Ico,
-        image_transform_args: self.image_transform_args,
+        image_transform_args: self.image_transform_args.clone(),
       },
       signal,
     )
@@ -1062,7 +1067,7 @@ impl Transformer {
     let mut encoder = EncodeTask {
       image: self.dynamic_image.clone(),
       options: EncodeOptions::Ico,
-      image_transform_args: self.image_transform_args,
+      image_transform_args: self.image_transform_args.clone(),
     };
     let output = encoder.compute()?;
     encoder.resolve(env, output)
@@ -1074,7 +1079,7 @@ impl Transformer {
       EncodeTask {
         image: self.dynamic_image.clone(),
         options: EncodeOptions::Tiff,
-        image_transform_args: self.image_transform_args,
+        image_transform_args: self.image_transform_args.clone(),
       },
       signal,
     )
@@ -1085,7 +1090,7 @@ impl Transformer {
     let mut encoder = EncodeTask {
       image: self.dynamic_image.clone(),
       options: EncodeOptions::Tiff,
-      image_transform_args: self.image_transform_args,
+      image_transform_args: self.image_transform_args.clone(),
     };
     let output = encoder.compute()?;
     encoder.resolve(env, output)
@@ -1097,7 +1102,7 @@ impl Transformer {
       EncodeTask {
         image: self.dynamic_image.clone(),
         options: EncodeOptions::Pnm,
-        image_transform_args: self.image_transform_args,
+        image_transform_args: self.image_transform_args.clone(),
       },
       signal,
     )
@@ -1108,7 +1113,7 @@ impl Transformer {
     let mut encoder = EncodeTask {
       image: self.dynamic_image.clone(),
       options: EncodeOptions::Pnm,
-      image_transform_args: self.image_transform_args,
+      image_transform_args: self.image_transform_args.clone(),
     };
     let output = encoder.compute()?;
     encoder.resolve(env, output)
@@ -1120,7 +1125,7 @@ impl Transformer {
       EncodeTask {
         image: self.dynamic_image.clone(),
         options: EncodeOptions::Tga,
-        image_transform_args: self.image_transform_args,
+        image_transform_args: self.image_transform_args.clone(),
       },
       signal,
     )
@@ -1131,7 +1136,7 @@ impl Transformer {
     let mut encoder = EncodeTask {
       image: self.dynamic_image.clone(),
       options: EncodeOptions::Tga,
-      image_transform_args: self.image_transform_args,
+      image_transform_args: self.image_transform_args.clone(),
     };
     let output = encoder.compute()?;
     encoder.resolve(env, output)
@@ -1143,7 +1148,7 @@ impl Transformer {
       EncodeTask {
         image: self.dynamic_image.clone(),
         options: EncodeOptions::Farbfeld,
-        image_transform_args: self.image_transform_args,
+        image_transform_args: self.image_transform_args.clone(),
       },
       signal,
     )
@@ -1154,7 +1159,7 @@ impl Transformer {
     let mut encoder = EncodeTask {
       image: self.dynamic_image.clone(),
       options: EncodeOptions::Farbfeld,
-      image_transform_args: self.image_transform_args,
+      image_transform_args: self.image_transform_args.clone(),
     };
     let output = encoder.compute()?;
     encoder.resolve(env, output)

@@ -21,3 +21,4 @@ output-exif.*
 !output-exif.no-rotate.image.webp
 !output-exif.image.webp
 nasa-small.*
+output-overlay-png.png
