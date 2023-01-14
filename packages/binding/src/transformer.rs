@@ -211,29 +211,12 @@ impl ThreadSafeDynamicImage {
     let image = Box::leak(unsafe { Box::from_raw(self.image) });
     let mut exif = HashMap::new();
     let mut orientation = None;
-    if image.is_none() {
-      let input_buf = self.raw.as_ref();
-      let image_format = image::guess_format(input_buf).map_err(|err| {
-        Error::new(
-          Status::InvalidArg,
-          format!("Guess format from input image failed {err}"),
-        )
-      })?;
-      if with_exif {
-        if let Some((_exif, _orientation)) = parse_exif(input_buf, &image_format) {
-          exif = _exif;
-          orientation = _orientation;
-        }
-      }
-      let dynamic_image = if image_format == ImageFormat::Avif {
-        let avif = libavif::decode_rgb(input_buf).map_err(|err| {
     match image {
       None => {
         let input_buf = self.raw.as_ref();
         let image_format = image::guess_format(input_buf).map_err(|err| {
           Error::new(
             Status::InvalidArg,
-            format!("Decode avif image failed {err}"),
             format!("Guess format from input image failed {}", err),
           )
         })?;
@@ -243,25 +226,6 @@ impl ThreadSafeDynamicImage {
             orientation = _orientation;
           }
         }
-      } else {
-        image::load_from_memory_with_format(input_buf, image_format)
-          .map_err(|err| Error::new(Status::InvalidArg, format!("Decode image failed {err}")))?
-      };
-      let color_type = dynamic_image.color();
-      image.replace(ImageMetaData {
-        image: dynamic_image,
-        exif,
-        orientation,
-        format: image_format,
-        has_parsed_exif: true,
-        color_type,
-      });
-    }
-    let mut res = image.as_mut().unwrap();
-    if !res.has_parsed_exif && with_exif {
-      if let Some((exif, orientation)) = parse_exif(self.raw.as_ref(), &res.format) {
-        res.exif = exif;
-        res.orientation = orientation;
         let dynamic_image = if image_format == ImageFormat::Avif {
           let avif = libavif::decode_rgb(input_buf).map_err(|err| {
             Error::new(
@@ -508,24 +472,21 @@ impl Task for EncodeTask {
         ResizeFit::Cover => {
           meta.image = meta.image.resize_to_fill(
             width,
-            height
-              .unwrap_or_else(|| ((width as f32 / raw_width as f32) * (raw_height as f32)) as u32),
+            height.unwrap_or(((width as f32 / raw_width as f32) * (raw_height as f32)) as u32),
             filter.unwrap_or_default().into(),
           )
         }
         ResizeFit::Fill => {
           meta.image = meta.image.resize_exact(
             width,
-            height
-              .unwrap_or_else(|| ((width as f32 / raw_width as f32) * (raw_height as f32)) as u32),
+            height.unwrap_or(((width as f32 / raw_width as f32) * (raw_height as f32)) as u32),
             filter.unwrap_or_default().into(),
           )
         }
         ResizeFit::Inside => {
           meta.image = meta.image.resize(
             width,
-            height
-              .unwrap_or_else(|| ((width as f32 / raw_width as f32) * (raw_height as f32)) as u32),
+            height.unwrap_or(((width as f32 / raw_width as f32) * (raw_height as f32)) as u32),
             filter.unwrap_or_default().into(),
           )
         }
