@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use image::imageops::overlay;
 use image::{
-  imageops::FilterType, ColorType, DynamicImage, ImageBuffer, ImageEncoder, ImageFormat,
+  imageops::FilterType, ColorType, DynamicImage, ImageBuffer, ImageEncoder, ImageFormat, RgbaImage,
 };
 use libavif::AvifData;
 use napi::{bindgen_prelude::*, JsBuffer};
@@ -12,6 +12,7 @@ use napi_derive::napi;
 
 use crate::{
   avif::{encode_avif_inner, AvifConfig},
+  fast_resize::{fast_resize, FastResizeOptions, ResizeFit},
   png::PngEncodeOptions,
 };
 
@@ -175,17 +176,17 @@ impl From<ResizeFilterType> for FilterType {
   }
 }
 
-struct ImageMetaData {
-  image: DynamicImage,
-  color_type: ColorType,
-  exif: HashMap<String, String>,
-  orientation: Option<u16>,
-  format: ImageFormat,
-  has_parsed_exif: bool,
+pub(crate) struct ImageMetaData {
+  pub(crate) image: DynamicImage,
+  pub(crate) color_type: ColorType,
+  pub(crate) exif: HashMap<String, String>,
+  pub(crate) orientation: Option<u16>,
+  pub(crate) format: ImageFormat,
+  pub(crate) has_parsed_exif: bool,
 }
 
 /// `env` from `Node.js` can ensure the thread safe.
-struct ThreadSafeDynamicImage {
+pub(crate) struct ThreadSafeDynamicImage {
   raw: Buffer,
   image: *mut Option<ImageMetaData>,
 }
@@ -206,7 +207,7 @@ impl ThreadSafeDynamicImage {
     }
   }
 
-  fn get(&self, with_exif: bool) -> Result<&mut ImageMetaData> {
+  pub(crate) fn get(&self, with_exif: bool) -> Result<&mut ImageMetaData> {
     let image = Box::leak(unsafe { Box::from_raw(self.image) });
     let mut exif = HashMap::new();
     let mut orientation = None;
@@ -226,27 +227,21 @@ impl ThreadSafeDynamicImage {
       }
       let dynamic_image = if image_format == ImageFormat::Avif {
         let avif = libavif::decode_rgb(input_buf).map_err(|err| {
+    match image {
+      None => {
+        let input_buf = self.raw.as_ref();
+        let image_format = image::guess_format(input_buf).map_err(|err| {
           Error::new(
             Status::InvalidArg,
             format!("Decode avif image failed {err}"),
+            format!("Guess format from input image failed {}", err),
           )
         })?;
-        let decoded_rgb = avif.to_vec();
-        let decoded_length = decoded_rgb.len();
-        let width = avif.width();
-        let height = avif.height();
-        if (width * height * 3) as usize == decoded_length {
-          ImageBuffer::from_raw(width, height, decoded_rgb)
-            .map(DynamicImage::ImageRgb8)
-            .ok_or_else(|| Error::new(Status::InvalidArg, "Decode avif image failed".to_owned()))?
-        } else if (width * height * 4) as usize == decoded_length {
-          ImageBuffer::from_raw(width, height, decoded_rgb)
-            .map(DynamicImage::ImageRgba8)
-            .ok_or_else(|| Error::new(Status::InvalidArg, "Decode avif image failed".to_owned()))?
-        } else {
-          ImageBuffer::from_raw(width, height, decoded_rgb)
-            .map(DynamicImage::ImageLuma8)
-            .ok_or_else(|| Error::new(Status::InvalidArg, "Decode avif image failed".to_owned()))?
+        if with_exif {
+          if let Some((_exif, _orientation)) = parse_exif(input_buf, &image_format) {
+            exif = _exif;
+            orientation = _orientation;
+          }
         }
       } else {
         image::load_from_memory_with_format(input_buf, image_format)
@@ -267,10 +262,62 @@ impl ThreadSafeDynamicImage {
       if let Some((exif, orientation)) = parse_exif(self.raw.as_ref(), &res.format) {
         res.exif = exif;
         res.orientation = orientation;
+        let dynamic_image = if image_format == ImageFormat::Avif {
+          let avif = libavif::decode_rgb(input_buf).map_err(|err| {
+            Error::new(
+              Status::InvalidArg,
+              format!("Decode avif image failed {}", err),
+            )
+          })?;
+          let decoded_rgb = avif.to_vec();
+          let decoded_length = decoded_rgb.len();
+          let width = avif.width();
+          let height = avif.height();
+          if (width * height * 3) as usize == decoded_length {
+            ImageBuffer::from_raw(width, height, decoded_rgb)
+              .map(DynamicImage::ImageRgb8)
+              .ok_or_else(|| {
+                Error::new(Status::InvalidArg, "Decode avif image failed".to_owned())
+              })?
+          } else if (width * height * 4) as usize == decoded_length {
+            ImageBuffer::from_raw(width, height, decoded_rgb)
+              .map(DynamicImage::ImageRgba8)
+              .ok_or_else(|| {
+                Error::new(Status::InvalidArg, "Decode avif image failed".to_owned())
+              })?
+          } else {
+            ImageBuffer::from_raw(width, height, decoded_rgb)
+              .map(DynamicImage::ImageLuma8)
+              .ok_or_else(|| {
+                Error::new(Status::InvalidArg, "Decode avif image failed".to_owned())
+              })?
+          }
+        } else {
+          image::load_from_memory_with_format(input_buf, image_format)
+            .map_err(|err| Error::new(Status::InvalidArg, format!("Decode image failed {}", err)))?
+        };
+        let color_type = dynamic_image.color();
+        image.replace(ImageMetaData {
+          image: dynamic_image,
+          exif,
+          orientation,
+          format: image_format,
+          has_parsed_exif: true,
+          color_type,
+        });
+        Ok(image.as_mut().unwrap())
       }
-      res.has_parsed_exif = true;
+      Some(res) => {
+        if !res.has_parsed_exif && with_exif {
+          if let Some((exif, orientation)) = parse_exif(self.raw.as_ref(), &res.format) {
+            res.exif = exif;
+            res.orientation = orientation;
+          }
+          res.has_parsed_exif = true;
+        }
+        Ok(res)
+      }
     }
-    Ok(res)
   }
 }
 
@@ -379,12 +426,22 @@ impl Task for MetadataTask {
   }
 }
 
+#[napi(object)]
+#[derive(Clone, Copy)]
+pub struct ResizeOptions {
+  pub width: u32,
+  pub height: Option<u32>,
+  pub filter: Option<ResizeFilterType>,
+  pub fit: Option<ResizeFit>,
+}
+
 #[derive(Default, Clone, Copy)]
 struct ImageTransformArgs {
   grayscale: bool,
   invert: bool,
   rotate: bool,
-  resize: Option<(u32, Option<u32>, ResizeFilterType)>,
+  resize: Option<ResizeOptions>,
+  fast_resize: Option<FastResizeOptions>,
   contrast: Option<f32>,
   blur: Option<f32>,
   unsharpen: Option<(f32, i32)>,
@@ -439,17 +496,58 @@ impl Task for EncodeTask {
     }
     let raw_width = meta.image.width();
     let raw_height = meta.image.height();
-    match self.image_transform_args.resize {
-      Some((w, Some(h), filter_type)) => meta.image = meta.image.resize(w, h, filter_type.into()),
-      Some((w, None, filter_type)) => {
-        meta.image = meta.image.resize(
-          w,
-          ((w as f32 / raw_width as f32) * (raw_height as f32)) as u32,
-          filter_type.into(),
-        )
+    if let Some(ResizeOptions {
+      width,
+      height,
+      filter,
+      fit,
+    }) = self.image_transform_args.resize
+    {
+      match fit.unwrap_or_default() {
+        // the `resize_to_fill` is behavior like cover
+        ResizeFit::Cover => {
+          meta.image = meta.image.resize_to_fill(
+            width,
+            height
+              .unwrap_or_else(|| ((width as f32 / raw_width as f32) * (raw_height as f32)) as u32),
+            filter.unwrap_or_default().into(),
+          )
+        }
+        ResizeFit::Fill => {
+          meta.image = meta.image.resize_exact(
+            width,
+            height
+              .unwrap_or_else(|| ((width as f32 / raw_width as f32) * (raw_height as f32)) as u32),
+            filter.unwrap_or_default().into(),
+          )
+        }
+        ResizeFit::Inside => {
+          meta.image = meta.image.resize(
+            width,
+            height
+              .unwrap_or_else(|| ((width as f32 / raw_width as f32) * (raw_height as f32)) as u32),
+            filter.unwrap_or_default().into(),
+          )
+        }
       }
-      None => {}
     }
+    if let Some(options) = self.image_transform_args.fast_resize {
+      let resized_image = fast_resize(&meta.image, options)?;
+      meta.image = DynamicImage::ImageRgba8(
+        RgbaImage::from_raw(
+          resized_image.width().get(),
+          resized_image.height().get(),
+          resized_image.into_vec(),
+        )
+        .ok_or_else(|| {
+          Error::new(
+            Status::GenericFailure,
+            "Resized image is not valid".to_owned(),
+          )
+        })?,
+      );
+    }
+
     if self.image_transform_args.grayscale {
       meta.image = meta.image.grayscale();
     }
@@ -588,7 +686,7 @@ impl Task for EncodeTask {
 
 #[napi]
 pub struct Transformer {
-  dynamic_image: Arc<ThreadSafeDynamicImage>,
+  pub(crate) dynamic_image: Arc<ThreadSafeDynamicImage>,
   image_transform_args: ImageTransformArgs,
 }
 
@@ -696,11 +794,34 @@ impl Transformer {
   /// within the bounds specified by `width` and `height`.
   pub fn resize(
     &mut self,
-    width: u32,
+    width_or_options: Either<u32, ResizeOptions>,
     height: Option<u32>,
-    filter_type: Option<ResizeFilterType>,
+    filter: Option<ResizeFilterType>,
+    fit: Option<ResizeFit>,
   ) -> &Self {
-    self.image_transform_args.resize = Some((width, height, filter_type.unwrap_or_default()));
+    match width_or_options {
+      Either::A(width) => {
+        self.image_transform_args.resize = Some(ResizeOptions {
+          width,
+          height,
+          filter,
+          fit,
+        });
+      }
+      Either::B(options) => self.image_transform_args.resize = Some(options),
+    }
+    self
+  }
+
+  #[napi]
+  /// Resize this image using the specified filter algorithm.
+  /// The image is scaled to the maximum possible size that fits
+  /// within the bounds specified by `width` and `height`.
+  ///
+  /// This is using faster SIMD based resize implementation
+  /// the resize filter is different from `resize` method
+  pub fn fast_resize(&mut self, options: FastResizeOptions) -> &Self {
+    self.image_transform_args.fast_resize = Some(options);
     self
   }
 

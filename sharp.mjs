@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync } from 'fs'
 
 import sharp from 'sharp'
 
-import { ChromaSubsampling, Transformer, fastResize, FastResizeFilter, ResizeFilterType } from '@napi-rs/image'
+import { ChromaSubsampling, Transformer, FastResizeFilter, ResizeFilterType } from '@napi-rs/image'
 
 // https://github.com/ianare/exif-samples/blob/master/jpg/orientation/portrait_5.jpg
 const WITH_EXIF = readFileSync('./with-exif.jpg')
@@ -63,7 +63,7 @@ writeFileSync('output-exif.image.avif', imageOutputAvif)
 
 console.time('sharp resize')
 
-const outputSharp = await sharp(NASA)
+const outputSharp = await sharp(NASA, { sequentialRead: true })
   .resize(1024)
   .png()
   .toBuffer()
@@ -82,10 +82,10 @@ writeFileSync('nasa-small.image.png', outputImage)
 
 console.time('fast resize')
 
-const output = fastResize(NASA, {
+const output = await new Transformer(NASA).fastResize({
   width: 1024,
   filter: FastResizeFilter.Lanczos3,
-})
+}).png()
 
 console.timeEnd('fast resize')
 

@@ -1,12 +1,9 @@
-use std::io::{BufWriter, Cursor};
 use std::num::NonZeroU32;
 
 use fast_image_resize as fr;
 use fr::FilterType;
-use image::codecs::png::PngEncoder;
-use image::io::Reader as ImageReader;
-use image::ImageEncoder;
-use napi::{bindgen_prelude::*, JsBuffer};
+use image::DynamicImage;
+use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
 #[napi]
@@ -57,24 +54,34 @@ impl From<FastResizeFilter> for FilterType {
   }
 }
 
+#[napi]
+pub enum ResizeFit {
+  /// (default) Preserving aspect ratio
+  /// ensure the image covers both provided dimensions by cropping/clipping to fit.
+  Cover,
+  /// Ignore the aspect ratio of the input and stretch to both provided dimensions.
+  Fill,
+  /// Preserving aspect ratio
+  /// resize the image to be as large as possible while ensuring its dimensions are less than or equal to both those specified.
+  Inside,
+}
+
+impl Default for ResizeFit {
+  fn default() -> Self {
+    Self::Cover
+  }
+}
+
 #[napi(object)]
+#[derive(Clone, Copy)]
 pub struct FastResizeOptions {
   pub width: u32,
   pub height: Option<u32>,
   pub filter: Option<FastResizeFilter>,
+  pub fit: Option<ResizeFit>,
 }
 
-#[napi]
-pub fn fast_resize(data: JsBuffer, options: FastResizeOptions) -> Result<Buffer> {
-  // Read source image from file
-  let input = data.into_value()?;
-  let reader = Cursor::new(&*input);
-  let img = ImageReader::new(reader)
-    .with_guessed_format()
-    .map_err(|err| Error::new(Status::GenericFailure, format!("{err}")))?
-    .decode()
-    .map_err(|e| Error::new(Status::GenericFailure, format!("{e}")))?;
-  let cs = img.color();
+pub fn fast_resize(img: &DynamicImage, options: FastResizeOptions) -> Result<fr::Image> {
   let width = NonZeroU32::new(img.width())
     .ok_or_else(|| Error::new(Status::InvalidArg, "Image width should not be 0".to_owned()))?;
   let height = NonZeroU32::new(img.height()).ok_or_else(|| {
@@ -95,13 +102,13 @@ pub fn fast_resize(data: JsBuffer, options: FastResizeOptions) -> Result<Buffer>
     .map_err(|err| Error::new(Status::GenericFailure, format!("{err}")))?;
 
   // Create container for data of destination image
-  let dst_width = NonZeroU32::new(options.width).ok_or_else(|| {
+  let mut dst_width = NonZeroU32::new(options.width).ok_or_else(|| {
     Error::new(
       Status::InvalidArg,
       "Resized width should not be 0".to_owned(),
     )
   })?;
-  let dst_height = NonZeroU32::new(
+  let mut dst_height = NonZeroU32::new(
     options
       .height
       .unwrap_or_else(|| (options.width as f32 / img.width() as f32 * img.height() as f32) as u32),
@@ -112,6 +119,26 @@ pub fn fast_resize(data: JsBuffer, options: FastResizeOptions) -> Result<Buffer>
       "Resized height should not be 0".to_owned(),
     )
   })?;
+
+  match options.fit.unwrap_or_default() {
+    ResizeFit::Cover => {
+      src_image
+        .view()
+        .set_crop_box_to_fit_dst_size(dst_width, dst_height, None);
+    }
+    ResizeFit::Fill => {}
+    ResizeFit::Inside => {
+      let (width, height) = crate::utils::resize_dimensions(
+        width.get(),
+        height.get(),
+        dst_width.get(),
+        dst_height.get(),
+        false,
+      );
+      dst_width = NonZeroU32::new(width).unwrap();
+      dst_height = NonZeroU32::new(height).unwrap();
+    }
+  }
   let mut dst_image = fr::Image::new(dst_width, dst_height, src_image.pixel_type());
 
   // Get mutable view of destination image data
@@ -130,14 +157,5 @@ pub fn fast_resize(data: JsBuffer, options: FastResizeOptions) -> Result<Buffer>
   alpha_mul_div
     .divide_alpha_inplace(&mut dst_view)
     .map_err(|err| Error::new(Status::GenericFailure, format!("{err}")))?;
-
-  // Write destination image as PNG-file
-  let mut result_buf = BufWriter::new(Vec::new());
-  PngEncoder::new(&mut result_buf)
-    .write_image(dst_image.buffer(), dst_width.get(), dst_height.get(), cs)
-    .map_err(|err| Error::new(Status::GenericFailure, format!("{err}")))?;
-  let output = result_buf
-    .into_inner()
-    .map_err(|err| Error::new(Status::GenericFailure, format!("{err}")))?;
-  Ok(output.into())
+  Ok(dst_image)
 }
