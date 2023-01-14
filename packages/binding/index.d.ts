@@ -365,8 +365,6 @@ export interface ResizeOptions {
 }
 export class Transformer {
   constructor(input: Buffer)
-  /** Overlay an image at a given coordinate (x, y) */
-  overlay(onTop: Buffer, x: number, y: number): this
   static fromRgbaPixels(input: Buffer | Uint8ClampedArray, width: number, height: number): Transformer
   metadata(withExif?: boolean | undefined | null, signal?: AbortSignal | undefined | null): Promise<Metadata>
   /**
@@ -434,6 +432,8 @@ export class Transformer {
   huerotate(hue: number): this
   /** Crop a cut-out of this image delimited by the bounding rectangle. */
   crop(x: number, y: number, width: number, height: number): this
+  /** Overlay an image at a given coordinate (x, y) */
+  overlay(onTop: Buffer, x: number, y: number): this
   /** Return this image's pixels as a native endian byte slice. */
   rawPixels(signal?: AbortSignal | undefined | null): Promise<Buffer>
   /** Return this image's pixels as a native endian byte slice. */
