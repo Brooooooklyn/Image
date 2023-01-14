@@ -57,6 +57,65 @@ export const enum ChromaSubsampling {
    */
   Yuv400 = 3
 }
+export const enum FastResizeFilter {
+  /**
+   * Each pixel of source image contributes to one pixel of the
+   * destination image with identical weights. For upscaling is equivalent
+   * of `Nearest` resize algorithm.
+   */
+  Box = 0,
+  /**
+   * Bilinear filter calculate the output pixel value using linear
+   * interpolation on all pixels that may contribute to the output value.
+   */
+  Bilinear = 1,
+  /**
+   * Hamming filter has the same performance as `Bilinear` filter while
+   * providing the image downscaling quality comparable to bicubic
+   * (`CatmulRom` or `Mitchell`). Produces a sharper image than `Bilinear`,
+   * doesn't have dislocations on local level like with `Box`.
+   * The filter don’t show good quality for the image upscaling.
+   */
+  Hamming = 2,
+  /**
+   * Catmull-Rom bicubic filter calculate the output pixel value using
+   * cubic interpolation on all pixels that may contribute to the output
+   * value.
+   */
+  CatmullRom = 3,
+  /**
+   * Mitchell–Netravali bicubic filter calculate the output pixel value
+   * using cubic interpolation on all pixels that may contribute to the
+   * output value.
+   */
+  Mitchell = 4,
+  /**
+   * Lanczos3 filter calculate the output pixel value using a high-quality
+   * Lanczos filter (a truncated sinc) on all pixels that may contribute
+   * to the output value.
+   */
+  Lanczos3 = 5
+}
+export const enum ResizeFit {
+  /**
+   * (default) Preserving aspect ratio
+   * ensure the image covers both provided dimensions by cropping/clipping to fit.
+   */
+  Cover = 0,
+  /** Ignore the aspect ratio of the input and stretch to both provided dimensions. */
+  Fill = 1,
+  /**
+   * Preserving aspect ratio
+   * resize the image to be as large as possible while ensuring its dimensions are less than or equal to both those specified.
+   */
+  Inside = 2
+}
+export interface FastResizeOptions {
+  width: number
+  height?: number
+  filter?: FastResizeFilter
+  fit?: ResizeFit
+}
 export interface JpegCompressOptions {
   /** Output quality, default is 100 (lossless) */
   quality?: number
@@ -298,6 +357,12 @@ export interface Metadata {
   format: string
   colorType: JsColorType
 }
+export interface ResizeOptions {
+  width: number
+  height?: number
+  filter?: ResizeFilterType
+  fit?: ResizeFit
+}
 export class Transformer {
   constructor(input: Buffer)
   /** Overlay an image at a given coordinate (x, y) */
@@ -323,7 +388,16 @@ export class Transformer {
    * The image is scaled to the maximum possible size that fits
    * within the bounds specified by `width` and `height`.
    */
-  resize(width: number, height?: number | undefined | null, filterType?: ResizeFilterType | undefined | null): this
+  resize(widthOrOptions: number | ResizeOptions, height?: number | undefined | null, filter?: ResizeFilterType | undefined | null, fit?: ResizeFit | undefined | null): this
+  /**
+   * Resize this image using the specified filter algorithm.
+   * The image is scaled to the maximum possible size that fits
+   * within the bounds specified by `width` and `height`.
+   *
+   * This is using faster SIMD based resize implementation
+   * the resize filter is different from `resize` method
+   */
+  fastResize(options: FastResizeOptions): this
   /**
    * Performs a Gaussian blur on this image.
    * `sigma` is a measure of how much to blur by.
