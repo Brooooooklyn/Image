@@ -1029,7 +1029,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@napi-rs/image@^1.4.0, @napi-rs/image@workspace:packages/binding":
+"@napi-rs/image@^1.5.0, @napi-rs/image@workspace:packages/binding":
   version: 0.0.0-use.local
   resolution: "@napi-rs/image@workspace:packages/binding"
   dependencies:
@@ -9302,7 +9302,7 @@ __metadata:
   resolution: "website@workspace:website"
   dependencies:
     "@napi-rs/canvas": ^0.1.30
-    "@napi-rs/image": ^1.4.0
+    "@napi-rs/image": ^1.5.0
     chalk: ^5.1.0
     markdown-to-jsx: ^7.1.7
     next: canary
