@@ -3,6 +3,17 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+# [1.5.0](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.4.4...@napi-rs/image@1.5.0) (2023-01-16)
+
+### Features
+
+- **image:** implement `overlay` ([#33](https://github.com/Brooooooklyn/Image/issues/33)) ([8bcc5de](https://github.com/Brooooooklyn/Image/commit/8bcc5de9762eb80dd460c4a1f7450c3961b4170c))
+- **image:** provide fast resize method ([#34](https://github.com/Brooooooklyn/Image/issues/34)) ([f52fd45](https://github.com/Brooooooklyn/Image/commit/f52fd452456151abb1271404e6f82b6e3fac3618))
+
+### Performance Improvements
+
+- **image:** make overlay lazy ([#35](https://github.com/Brooooooklyn/Image/issues/35)) ([3fd7d84](https://github.com/Brooooooklyn/Image/commit/3fd7d8434fba7e6d27461bec50bd65777f8b03fa))
+
 ## [1.4.4](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.4.3...@napi-rs/image@1.4.4) (2023-01-03)
 
 **Note:** Version bump only for package @napi-rs/image
