@@ -131,6 +131,8 @@ jobs:
     runs-on: ${{ matrix.settings.host }}
     env:
       RUST_TARGET: ${{ matrix.settings.target }}
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
     steps:
       - uses: actions/checkout@v3
       - name: Setup node
@@ -147,16 +149,21 @@ jobs:
         with:
           toolchain: stable
           targets: ${{ matrix.settings.target }}
-      - name: Cache cargo registry
-        uses: actions/cache@v3
+#      - name: Cache cargo registry
+#        uses: actions/cache@v3
+#        with:
+#          path: |
+#            ~/.cargo/registry/index/
+#            ~/.cargo/registry/cache/
+#            ~/.cargo/git/db/
+#            .cargo-cache
+#            target/
+#          key: ${{ matrix.settings.target }}-cargo-cache
+      - name: Sccache Setup
+        # Just for test, come back to upstream after released
+        uses: Xuanwo/sccache-action@c94e27bef21ab3fb4a5152c8a878c53262b4abb0
         with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            .cargo-cache
-            target/
-          key: ${{ matrix.settings.target }}-cargo-cache
+          version: "v0.4.0-pre.6"
       - uses: goto-bus-stop/setup-zig@v2
         if: ${{ matrix.settings.target == 'armv7-unknown-linux-gnueabihf' }}
         with:
