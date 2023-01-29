@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [1.5.1](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.5.0...@napi-rs/image@1.5.1) (2023-01-29)
+
+### Bug Fixes
+
+- **image:** update napi to fix electron create Buffer issues ([#39](https://github.com/Brooooooklyn/Image/issues/39)) ([e710222](https://github.com/Brooooooklyn/Image/commit/e7102224d67e390e0f897aea21a8da375676479d))
+
 # [1.5.0](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.4.4...@napi-rs/image@1.5.0) (2023-01-16)
 
 ### Features
