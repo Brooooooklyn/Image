@@ -671,7 +671,7 @@ impl Transformer {
 
   #[napi]
   pub fn from_rgba_pixels(
-    input: Either<Buffer, Uint8ClampedArray>,
+    input: Either<Uint8Array, Uint8ClampedArray>,
     width: u32,
     height: u32,
   ) -> Result<Transformer> {
