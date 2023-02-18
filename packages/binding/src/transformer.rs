@@ -7,6 +7,7 @@ use image::{
   imageops::FilterType, ColorType, DynamicImage, ImageBuffer, ImageEncoder, ImageFormat, RgbaImage,
 };
 use libavif::AvifData;
+use libheif_rs::{Channel, ColorSpace, HeifContext, RgbChroma};
 use napi::{bindgen_prelude::*, JsBuffer};
 use napi_derive::napi;
 
@@ -667,6 +668,40 @@ impl Transformer {
       dynamic_image: Arc::new(ThreadSafeDynamicImage::new(input)),
       image_transform_args: ImageTransformArgs::default(),
     }
+  }
+
+  #[napi]
+  pub fn from_heif(input: Buffer) -> Result<Transformer> {
+    let ctx = HeifContext::read_from_bytes(&input).unwrap();
+    let handle = ctx.primary_image_handle().unwrap();
+    let image = handle
+      .decode(ColorSpace::Rgb(RgbChroma::Rgb), None)
+      .unwrap();
+    let width = image.width(Channel::Interleaved).unwrap();
+    let height = image.height(Channel::Interleaved).unwrap();
+    let planes = image.planes();
+    let interleaved_plane = planes.interleaved.unwrap();
+
+    let image = ImageBuffer::from_raw(width, height, interleaved_plane.data.to_owned())
+      .map(DynamicImage::ImageRgb8)
+      .unwrap();
+
+    let image_meta = Box::new(Some(ImageMetaData {
+      color_type: ColorType::Rgba8,
+      orientation: None,
+      image,
+      exif: HashMap::new(),
+      format: ImageFormat::Png,
+      has_parsed_exif: true,
+    }));
+
+    Ok(Self {
+      dynamic_image: Arc::new(ThreadSafeDynamicImage {
+        raw: vec![0].into(),
+        image: Box::into_raw(image_meta),
+      }),
+      image_transform_args: Default::default(),
+    })
   }
 
   #[napi]
