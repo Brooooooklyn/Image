@@ -13,6 +13,7 @@ const ROOT_DIR = join(__DIRNAME, '..', '..', '..')
 const PNG = await fs.readFile(join(ROOT_DIR, 'un-optimized.png'))
 const JPEG = await fs.readFile(join(ROOT_DIR, 'un-optimized.jpg'))
 const WITH_EXIF_JPG = await fs.readFile(join(ROOT_DIR, 'with-exif.jpg'))
+const SVG = await fs.readFile(join(ROOT_DIR, 'input-debian.svg'))
 
 test('should be able to get metadata from png', async (t) => {
   const decoder = new Transformer(PNG)
@@ -59,3 +60,8 @@ test('should be able to create transformer from raw rgba pixels', async (t) => {
   const pixels = decode('LEHV6nWB2yk8pyo0adR*.7kCMdnj', 32, 32)
   await t.notThrowsAsync(() => Transformer.fromRgbaPixels(pixels, 32, 32).webpLossless())
 })
+
+test('should be able to create transformer from SVG', async (t) => {
+  await t.notThrowsAsync(() => Transformer.fromSvg(SVG).png())
+})
+

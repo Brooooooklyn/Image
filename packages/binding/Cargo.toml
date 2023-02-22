@@ -50,6 +50,8 @@ num_cpus = "1"
 png = "0.17"
 rexif = "0.7"
 rgb = "0.8"
+resvg = "0.29"
+svgtypes = "0.10"
 
 [dependencies.oxipng]
 default-features = false

@@ -9,6 +9,10 @@ use image::{
 use libavif::AvifData;
 use napi::{bindgen_prelude::*, JsBuffer};
 use napi_derive::napi;
+use resvg::usvg::{FitTo, Options, ScreenSize};
+use resvg::usvg_text_layout::fontdb::Database;
+use resvg::usvg_text_layout::TreeTextToPath;
+use resvg::{tiny_skia, usvg};
 
 use crate::{
   avif::{encode_avif_inner, AvifConfig},
@@ -33,7 +37,9 @@ pub enum EncodeOptions {
 
 #[napi]
 #[repr(u16)]
+#[derive(Default)]
 pub enum Orientation {
+  #[default]
   /// Normal
   Horizontal = 1,
   MirrorHorizontal,
@@ -43,12 +49,6 @@ pub enum Orientation {
   Rotate90Cw,
   MirrorHorizontalAndRotate90Cw,
   Rotate270Cw,
-}
-
-impl Default for Orientation {
-  fn default() -> Self {
-    Orientation::Horizontal
-  }
 }
 
 impl From<Orientation> for u16 {
@@ -79,6 +79,7 @@ impl TryFrom<u16> for Orientation {
 }
 
 #[napi]
+#[derive(Default)]
 /// Available Sampling Filters.
 ///
 /// ## Examples
@@ -154,14 +155,9 @@ pub enum ResizeFilterType {
   CatmullRom,
   /// Gaussian Filter
   Gaussian,
+  #[default]
   /// Lanczos with window 3
   Lanczos3,
-}
-
-impl Default for ResizeFilterType {
-  fn default() -> Self {
-    ResizeFilterType::Lanczos3
-  }
 }
 
 impl From<ResizeFilterType> for FilterType {
@@ -537,9 +533,7 @@ impl Task for EncodeTask {
     if let Some((x, y, width, height)) = self.image_transform_args.crop {
       meta.image = meta.image.crop_imm(x, y, width, height);
     }
-    for (buffer, x, y) in
-      std::mem::replace(&mut self.image_transform_args.overlay, vec![]).into_iter()
-    {
+    for (buffer, x, y) in std::mem::take(&mut self.image_transform_args.overlay).into_iter() {
       let top = ThreadSafeDynamicImage::new(buffer);
       let top_image_meta = top.get(true)?;
       overlay(&mut meta.image, &top_image_meta.image, x, y);
@@ -667,6 +661,54 @@ impl Transformer {
       dynamic_image: Arc::new(ThreadSafeDynamicImage::new(input)),
       image_transform_args: ImageTransformArgs::default(),
     }
+  }
+
+  #[napi]
+  /// Support CSS3 color, e.g. rgba(255, 255, 255, .8)
+  pub fn from_svg(
+    input: Either<String, Buffer>,
+    background: Option<String>,
+  ) -> Result<Transformer> {
+    let mut fontdb = Database::new();
+    fontdb.load_system_fonts();
+    let options = Options::default();
+
+    let mut tree = match input {
+      Either::A(a) => usvg::Tree::from_str(a.as_str(), &options),
+      Either::B(b) => usvg::Tree::from_data(b.as_ref(), &options),
+    }
+    .map_err(|err| Error::from_reason(format!("{err}")))?;
+    tree.convert_text(&fontdb);
+
+    let mut size = tree.size.to_screen_size();
+    let min_svg_size = 1000;
+    while size.width() < min_svg_size || size.height() < min_svg_size {
+      size = ScreenSize::new(size.width() * 2, size.height() * 2).unwrap();
+    }
+    let mut pix_map = tiny_skia::Pixmap::new(size.width(), size.height()).unwrap();
+
+    // Inspired by [resvg-js/src/options.rs/fn create_pixmap](https://github.com/yisibl/resvg-js/blob/475ed45c091ef101f62f274b8a30883440bdfd89/src/options.rs#L185)
+    let background = background
+      .map(|bg| bg.parse::<svgtypes::Color>())
+      .transpose()
+      .map_err(|err| Error::from_reason(format!("{err}")))?;
+    if let Some(bg) = background {
+      let color = tiny_skia::Color::from_rgba8(bg.red, bg.green, bg.blue, bg.alpha);
+      pix_map.fill(color);
+    }
+
+    resvg::render(
+      &tree,
+      FitTo::Size(size.width(), size.height()),
+      tiny_skia::Transform::identity(),
+      pix_map.as_mut(),
+    );
+
+    let width = pix_map.width();
+    let height = pix_map.height();
+    let data = pix_map.take();
+
+    Transformer::from_rgba_pixels(Either::A(data.into()), width, height)
   }
 
   #[napi]

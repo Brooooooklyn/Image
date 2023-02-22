@@ -33,6 +33,7 @@ This library support encode/decode these formats:
 | TGA       | ✅                                        | Rgb8, Rgba8, Bgr8, Bgra8, Gray8, GrayA8 |
 | OpenEXR   | Rgb32F, Rgba32F (no dwa compression)      | Rgb32F, Rgba32F (no dwa compression)    |
 | farbfeld  | ✅                                        | ✅                                      |
+| SVG       | ✅                                        |                                       |
 
 See [index.d.ts](https://github.com/Brooooooklyn/Image/blob/main/packages/binding/index.d.ts) for API reference.
 
@@ -53,6 +54,25 @@ import { decode } from 'blurhash'
 // Uint8ClampedArray
 const pixels = decode('LEHV6nWB2yk8pyo0adR*.7kCMdnj', 32, 32)
 const transformer = Transformer.fromRgbaPixels(pixels, 32, 32)
+```
+
+### Render the SVG to Other Image Format
+
+```ts
+import { promises as fs } from 'fs'
+
+import { Transformer } from '@napi-rs/image'
+
+const SVG = await fs.readFile('input-debian.svg')
+
+riteFileSync(
+  "output-debian.jpeg",
+  await Transformer.fromSvg(
+    SVG,
+    /** Support CSS3 color, e.g. rgba(255, 255, 255, .8) */
+    'rgba(238, 235, 230, .9)'
+  ).jpeg()
+)
 ```
 
 ### Metadata

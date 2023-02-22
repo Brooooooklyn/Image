@@ -365,6 +365,8 @@ export interface ResizeOptions {
 }
 export class Transformer {
   constructor(input: Buffer)
+  /** Support CSS3 color, e.g. rgba(255, 255, 255, .8) */
+  static fromSvg(input: string | Buffer, background?: string | undefined | null): Transformer
   static fromRgbaPixels(input: Uint8Array | Uint8ClampedArray, width: number, height: number): Transformer
   metadata(withExif?: boolean | undefined | null, signal?: AbortSignal | undefined | null): Promise<Metadata>
   /**

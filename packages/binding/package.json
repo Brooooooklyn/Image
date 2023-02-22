@@ -15,7 +15,8 @@
     "compression",
     "jpeg",
     "jpg",
-    "png"
+    "png",
+    "svg"
   ],
   "files": [
     "index.js",
