@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+# [1.6.0](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.5.1...@napi-rs/image@1.6.0) (2023-02-27)
+
+### Features
+
+- **image:** support Transformer from SVG ([#44](https://github.com/Brooooooklyn/Image/issues/44)) ([21a50aa](https://github.com/Brooooooklyn/Image/commit/21a50aaa652966040a121b4c6fcae564c104f85b))
+
 ## [1.5.1](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.5.0...@napi-rs/image@1.5.1) (2023-01-29)
 
 ### Bug Fixes
