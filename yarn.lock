@@ -934,82 +934,82 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@napi-rs/canvas-android-arm64@npm:0.1.31":
-  version: 0.1.31
-  resolution: "@napi-rs/canvas-android-arm64@npm:0.1.31"
+"@napi-rs/canvas-android-arm64@npm:0.1.37":
+  version: 0.1.37
+  resolution: "@napi-rs/canvas-android-arm64@npm:0.1.37"
   conditions: os=android & cpu=arm64
   languageName: node
   linkType: hard
 
-"@napi-rs/canvas-darwin-arm64@npm:0.1.31":
-  version: 0.1.31
-  resolution: "@napi-rs/canvas-darwin-arm64@npm:0.1.31"
+"@napi-rs/canvas-darwin-arm64@npm:0.1.37":
+  version: 0.1.37
+  resolution: "@napi-rs/canvas-darwin-arm64@npm:0.1.37"
   conditions: os=darwin & cpu=arm64
   languageName: node
   linkType: hard
 
-"@napi-rs/canvas-darwin-x64@npm:0.1.31":
-  version: 0.1.31
-  resolution: "@napi-rs/canvas-darwin-x64@npm:0.1.31"
+"@napi-rs/canvas-darwin-x64@npm:0.1.37":
+  version: 0.1.37
+  resolution: "@napi-rs/canvas-darwin-x64@npm:0.1.37"
   conditions: os=darwin & cpu=x64
   languageName: node
   linkType: hard
 
-"@napi-rs/canvas-linux-arm-gnueabihf@npm:0.1.31":
-  version: 0.1.31
-  resolution: "@napi-rs/canvas-linux-arm-gnueabihf@npm:0.1.31"
+"@napi-rs/canvas-linux-arm-gnueabihf@npm:0.1.37":
+  version: 0.1.37
+  resolution: "@napi-rs/canvas-linux-arm-gnueabihf@npm:0.1.37"
   conditions: os=linux & cpu=arm
   languageName: node
   linkType: hard
 
-"@napi-rs/canvas-linux-arm64-gnu@npm:0.1.31":
-  version: 0.1.31
-  resolution: "@napi-rs/canvas-linux-arm64-gnu@npm:0.1.31"
+"@napi-rs/canvas-linux-arm64-gnu@npm:0.1.37":
+  version: 0.1.37
+  resolution: "@napi-rs/canvas-linux-arm64-gnu@npm:0.1.37"
   conditions: os=linux & cpu=arm64 & libc=glibc
   languageName: node
   linkType: hard
 
-"@napi-rs/canvas-linux-arm64-musl@npm:0.1.31":
-  version: 0.1.31
-  resolution: "@napi-rs/canvas-linux-arm64-musl@npm:0.1.31"
+"@napi-rs/canvas-linux-arm64-musl@npm:0.1.37":
+  version: 0.1.37
+  resolution: "@napi-rs/canvas-linux-arm64-musl@npm:0.1.37"
   conditions: os=linux & cpu=arm64 & libc=musl
   languageName: node
   linkType: hard
 
-"@napi-rs/canvas-linux-x64-gnu@npm:0.1.31":
-  version: 0.1.31
-  resolution: "@napi-rs/canvas-linux-x64-gnu@npm:0.1.31"
+"@napi-rs/canvas-linux-x64-gnu@npm:0.1.37":
+  version: 0.1.37
+  resolution: "@napi-rs/canvas-linux-x64-gnu@npm:0.1.37"
   conditions: os=linux & cpu=x64 & libc=glibc
   languageName: node
   linkType: hard
 
-"@napi-rs/canvas-linux-x64-musl@npm:0.1.31":
-  version: 0.1.31
-  resolution: "@napi-rs/canvas-linux-x64-musl@npm:0.1.31"
+"@napi-rs/canvas-linux-x64-musl@npm:0.1.37":
+  version: 0.1.37
+  resolution: "@napi-rs/canvas-linux-x64-musl@npm:0.1.37"
   conditions: os=linux & cpu=x64 & libc=musl
   languageName: node
   linkType: hard
 
-"@napi-rs/canvas-win32-x64-msvc@npm:0.1.31":
-  version: 0.1.31
-  resolution: "@napi-rs/canvas-win32-x64-msvc@npm:0.1.31"
+"@napi-rs/canvas-win32-x64-msvc@npm:0.1.37":
+  version: 0.1.37
+  resolution: "@napi-rs/canvas-win32-x64-msvc@npm:0.1.37"
   conditions: os=win32 & cpu=x64
   languageName: node
   linkType: hard
 
-"@napi-rs/canvas@npm:^0.1.30":
-  version: 0.1.31
-  resolution: "@napi-rs/canvas@npm:0.1.31"
+"@napi-rs/canvas@npm:^0.1.37":
+  version: 0.1.37
+  resolution: "@napi-rs/canvas@npm:0.1.37"
   dependencies:
-    "@napi-rs/canvas-android-arm64": 0.1.31
-    "@napi-rs/canvas-darwin-arm64": 0.1.31
-    "@napi-rs/canvas-darwin-x64": 0.1.31
-    "@napi-rs/canvas-linux-arm-gnueabihf": 0.1.31
-    "@napi-rs/canvas-linux-arm64-gnu": 0.1.31
-    "@napi-rs/canvas-linux-arm64-musl": 0.1.31
-    "@napi-rs/canvas-linux-x64-gnu": 0.1.31
-    "@napi-rs/canvas-linux-x64-musl": 0.1.31
-    "@napi-rs/canvas-win32-x64-msvc": 0.1.31
+    "@napi-rs/canvas-android-arm64": 0.1.37
+    "@napi-rs/canvas-darwin-arm64": 0.1.37
+    "@napi-rs/canvas-darwin-x64": 0.1.37
+    "@napi-rs/canvas-linux-arm-gnueabihf": 0.1.37
+    "@napi-rs/canvas-linux-arm64-gnu": 0.1.37
+    "@napi-rs/canvas-linux-arm64-musl": 0.1.37
+    "@napi-rs/canvas-linux-x64-gnu": 0.1.37
+    "@napi-rs/canvas-linux-x64-musl": 0.1.37
+    "@napi-rs/canvas-win32-x64-msvc": 0.1.37
   dependenciesMeta:
     "@napi-rs/canvas-android-arm64":
       optional: true
@@ -1029,7 +1029,7 @@ __metadata:
       optional: true
     "@napi-rs/canvas-win32-x64-msvc":
       optional: true
-  checksum: a45a9083a3da20e760d9d958835850c6f0af0dfd5f83d18acd191e9c3ffe280834e5e1f2f34db644aba3f46dbe376f62f3c55efe85d27cbbfc8790054ecf500b
+  checksum: 04f432385523712cfd1e2eca224d41f6a64a01f34c58ab5198d1a6d54b57c9f17d060f1dac4e74a445ef37869dcd711eb5edf04ea72b805a4ce48b7b2cf20297
   languageName: node
   linkType: hard
 
@@ -1048,7 +1048,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@napi-rs/image@^1.5.0, @napi-rs/image@workspace:packages/binding":
+"@napi-rs/image@^1.6.0, @napi-rs/image@workspace:packages/binding":
   version: 0.0.0-use.local
   resolution: "@napi-rs/image@workspace:packages/binding"
   dependencies:
@@ -9727,8 +9727,8 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "website@workspace:website"
   dependencies:
-    "@napi-rs/canvas": ^0.1.30
-    "@napi-rs/image": ^1.5.0
+    "@napi-rs/canvas": ^0.1.37
+    "@napi-rs/image": ^1.6.0
     chalk: ^5.1.0
     markdown-to-jsx: ^7.1.7
     next: canary
