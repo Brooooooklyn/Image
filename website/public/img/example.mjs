@@ -14,6 +14,7 @@ const PNG = readFileSync('./un-optimized.png')
 const JPEG = readFileSync('./un-optimized.jpg')
 // https://github.com/ianare/exif-samples/blob/master/jpg/orientation/portrait_5.jpg
 const WITH_EXIF = readFileSync('./with-exif.jpg')
+const SVG = readFileSync('./input-debian.svg')
 
 writeFileSync('optimized-lossless.png', await losslessCompressPng(PNG))
 
@@ -71,3 +72,7 @@ writeFileSync(
 )
 
 console.info(chalk.green('Overlay an image done'))
+
+writeFileSync("output-debian.jpeg", await Transformer.fromSvg(SVG, 'rgba(238, 235, 230, .9)').jpeg())
+
+console.info(chalk.green('Encoding jpeg from SVG done'))
