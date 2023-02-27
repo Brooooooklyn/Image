@@ -6,8 +6,10 @@
   },
   "index": {
     "title": "Introduction",
-    "type": "nav",
-    "hidden": true
+    "display": "hidden",
+    "theme": {
+      "sidebar": false
+    }
   },
   "docs": {
     "title": "Docs",

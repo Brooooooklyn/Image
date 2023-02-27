@@ -4,6 +4,7 @@ export const ResizeImageTable = () => (
       <img
         src="https://raw.githubusercontent.com/image-rs/image/master/examples/scaledown/scaledown-test-near.png"
         title="Nearest"
+        alt="Nearest"
       />
       <br />
       Nearest Neighbor
@@ -12,6 +13,7 @@ export const ResizeImageTable = () => (
       <img
         src="https://raw.githubusercontent.com/image-rs/image/master/examples/scaledown/scaledown-test-tri.png"
         title="Triangle"
+        alt="Triangle"
       />
       <br />
       Linear: Triangle
@@ -20,6 +22,7 @@ export const ResizeImageTable = () => (
       <img
         src="https://raw.githubusercontent.com/image-rs/image/master/examples/scaledown/scaledown-test-cmr.png"
         title="CatmullRom"
+        alt="CatmullRom"
       />
       <br />
       Cubic: Catmull-Rom
@@ -28,6 +31,7 @@ export const ResizeImageTable = () => (
       <img
         src="https://raw.githubusercontent.com/image-rs/image/master/examples/scaledown/scaledown-test-gauss.png"
         title="Gaussian"
+        alt="Gaussian"
       />
       <br />
       Gaussian
@@ -36,6 +40,7 @@ export const ResizeImageTable = () => (
       <img
         src="https://raw.githubusercontent.com/image-rs/image/master/examples/scaledown/scaledown-test-lcz2.png"
         title="Lanczos3"
+        alt="Lanczos3"
       />
       <br />
       Lanczos with window 3

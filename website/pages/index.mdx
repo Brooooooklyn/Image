@@ -24,6 +24,7 @@ This library support encode/decode these formats:
 | TGA       | ✅                                        | Rgb8, Rgba8, Bgr8, Bgra8, Gray8, GrayA8 |
 | OpenEXR   | Rgb32F, Rgba32F (no dwa compression)      | Rgb32F, Rgba32F (no dwa compression)    |
 | farbfeld  | ✅                                        | ✅                                      |
+| SVG       | ✅                                        |                                       |
 
 See [index.d.ts](https://github.com/Brooooooklyn/Image/blob/main/packages/binding/index.d.ts) for API reference.
 
@@ -101,14 +102,14 @@ You can clone this repo and run the following command to taste the example below
 
 | Optimization                                                                                            | <div style={{ width: '80px' }}>Raw</div> | <div style={{ width: '80px' }}>Optimized</div> | Raw Size | Optimized Size |
 | ------------------------------------------------------------------------------------------------------- | ---------------------------------------- | ---------------------------------------------- | -------- | -------------- |
-| `losslessCompressPng()` <br/>**Lossless**                                                               | ![](../public/img/un-optimized.png)      | ![](../public/img/optimized-lossless.png)      | `888K`   | `736K`         |
-| `pngQuantize({ maxQuality: 75 })` <br/>**Lossy**                                                        | ![](../public/img/un-optimized.png)      | ![](../public/img/optimized-lossy.png)         | `888K`   | `248K`         |
-| `compressJpeg()` <br/>**Lossless**                                                                      | ![](../public/img/un-optimized.jpg)      | ![](../public/img/optimized-lossless.jpg)      | `192K`   | `184K`         |
-| `compressJpeg(75)` <br/>**Lossy**                                                                       | ![](../public/img/un-optimized.jpg)      | ![](../public/img/optimized-lossy.jpg)         | `192K`   | `104K`         |
-| `new Transformer(PNG).webpLossless()`<br/>**Lossless**                                                  | ![](../public/img/un-optimized.png)      | ![](../public/img/optimized-lossless.webp)     | `888K`   | `588K`         |
-| `new Transformer(PNG).webp(75)`<br/>**Lossy**                                                           | ![](../public/img/un-optimized.png)      | ![](../public/img/optimized-lossy-png.webp)    | `888K`   | `64K`          |
-| `Transformer(PNG).avif({ quality: 100 })`<br/>**Lossless**                                              | ![](../public/img/un-optimized.png)      | ![](../public/img/optimized-lossless-png.avif) | `888K`   | `536K`         |
-| `new Transformer(PNG).avif({ quality: 75, chromaSubsampling: ChromaSubsampling.Yuv420 })`<br/>**Lossy** | ![](../public/img/un-optimized.png)      | ![](../public/img/optimized-lossy-png.avif)    | `888K`   | `64K`          |
+| `losslessCompressPng()` <br/>**Lossless**                                                               | ![un-optimized.png](../public/img/un-optimized.png)      | ![optimized-lossless.png](../public/img/optimized-lossless.png)      | `888K`   | `736K`         |
+| `pngQuantize({ maxQuality: 75 })` <br/>**Lossy**                                                        | ![un-optimized.png](../public/img/un-optimized.png)      | ![optimized-lossy.png](../public/img/optimized-lossy.png)         | `888K`   | `248K`         |
+| `compressJpeg()` <br/>**Lossless**                                                                      | ![un-optimized.jpg](../public/img/un-optimized.jpg)      | ![optimized-lossless.jpg](../public/img/optimized-lossless.jpg)      | `192K`   | `184K`         |
+| `compressJpeg(75)` <br/>**Lossy**                                                                       | ![un-optimized.jpg](../public/img/un-optimized.jpg)      | ![optimized-lossy.jpg](../public/img/optimized-lossy.jpg)         | `192K`   | `104K`         |
+| `new Transformer(PNG).webpLossless()`<br/>**Lossless**                                                  | ![un-optimized.png](../public/img/un-optimized.png)      | ![optimized-lossless.webp](../public/img/optimized-lossless.webp)     | `888K`   | `588K`         |
+| `new Transformer(PNG).webp(75)`<br/>**Lossy**                                                           | ![un-optimized.png](../public/img/un-optimized.png)      | ![optimized-lossy-png.webp](../public/img/optimized-lossy-png.webp)    | `888K`   | `64K`          |
+| `Transformer(PNG).avif({ quality: 100 })`<br/>**Lossless**                                              | ![un-optimized.png](../public/img/un-optimized.png)      | ![optimized-lossless-png.avif](../public/img/optimized-lossless-png.avif) | `888K`   | `536K`         |
+| `new Transformer(PNG).avif({ quality: 75, chromaSubsampling: ChromaSubsampling.Yuv420 })`<br/>**Lossy** | ![un-optimized.png](../public/img/un-optimized.png)      | ![optimized-lossy-png.avif](../public/img/optimized-lossy-png.avif)    | `888K`   | `64K`          |
 
 ```js filename="example.mjs"
 import { readFileSync, writeFileSync } from 'fs'
