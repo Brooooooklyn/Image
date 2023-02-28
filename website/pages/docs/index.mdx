@@ -360,7 +360,7 @@ rotate(): this
 
 This image has orientation value `5` in exif:
 
-![](img/with-exif.jpg)
+![with-exif.jpg](/img/with-exif.jpg)
 
 Without rotate:
 
@@ -376,7 +376,7 @@ const imageOutputWithoutRotateWebp = await new Transformer(WITH_EXIF).resize(450
 writeFileSync('output-exif.no-rotate.image.webp', imageOutputWithoutRotateWebp)
 ```
 
-![](../../public/img/output-exif.no-rotate.image.webp)
+![output-exif.no-rotate.image.webp](../../public/img/output-exif.no-rotate.image.webp)
 
 With rotate:
 
@@ -397,7 +397,7 @@ console.timeEnd('@napi-rs/image webp')
 writeFileSync('output-exif.image.webp', imageOutputWebp)
 ```
 
-![](../../public/img/output-exif.image.webp)
+![output-exif.image.webp](../../public/img/output-exif.image.webp)
 
 #### `grayscale`
 
@@ -412,7 +412,7 @@ grayscale(): this
 
 | Image                     | Output                              |
 | ------------------------- | ----------------------------------- |
-| ![](img/un-optimized.png) | ![](img/grayscale.manipulated.webp) |
+| ![un-optimized.png](/img/un-optimized.png) | ![grayscale.manipulated.webp](/img/grayscale.manipulated.webp) |
 
 #### `invert`
 
@@ -424,7 +424,7 @@ invert(): this
 
 | Image                     | Output                           |
 | ------------------------- | -------------------------------- |
-| ![](img/un-optimized.png) | ![](img/invert.manipulated.webp) |
+| ![un-optimized.png](/img/un-optimized.png) | ![invert.manipulated.webp](/img/invert.manipulated.webp) |
 
 #### `resize`
 
@@ -493,7 +493,7 @@ blur(sigma: number): this
 
 | Image                     | Output                         |
 | ------------------------- | ------------------------------ |
-| ![](img/un-optimized.png) | ![](img/blur.manipulated.webp) |
+| ![un-optimized.png](/img/un-optimized.png) | ![blur.manipulated.webp](/img/blur.manipulated.webp) |
 
 #### `unsharpen`
 
@@ -508,7 +508,7 @@ unsharpen(sigma: number, threshold: number): this
 
 | Image                 | Output                              |
 | --------------------- | ----------------------------------- |
-| ![](img/taj_orig.jpg) | ![](img/unsharpen.manipulated.webp) |
+| ![taj_orig.jpg](/img/taj_orig.jpg) | ![unsharpen.manipulated.webp](/img/unsharpen.manipulated.webp) |
 
 #### `filter3x3`
 
@@ -525,7 +525,7 @@ filter3x3(kernel: Array<number>): this
 
 | Image                     | Output                              |
 | ------------------------- | ----------------------------------- |
-| ![](img/un-optimized.png) | ![](img/filter3x3.manipulated.webp) |
+| ![un-optimized.png](/img/un-optimized.png) | ![filter3x3.manipulated.webp](/img/filter3x3.manipulated.webp) |
 
 #### `adjustContrast`
 
@@ -540,7 +540,7 @@ adjustContrast(contrast: number): this
 
 | Image                     | Output                             |
 | ------------------------- | ---------------------------------- |
-| ![](img/un-optimized.png) | ![](img/contrast.manipulated.webp) |
+| ![un-optimized.png](/img/un-optimized.png) | ![contrast.manipulated.webp](/img/contrast.manipulated.webp) |
 
 #### `brighten`
 
@@ -555,7 +555,7 @@ brighten(brightness: number): this
 
 | Image                     | Output                             |
 | ------------------------- | ---------------------------------- |
-| ![](img/un-optimized.png) | ![](img/brighten.manipulated.webp) |
+| ![un-optimized.png](/img/un-optimized.png) | ![brighten.manipulated.webp](/img/brighten.manipulated.webp) |
 
 #### `huerotate`
 
@@ -571,7 +571,7 @@ huerotate(hue: number): this
 
 | Image                     | Output                              |
 | ------------------------- | ----------------------------------- |
-| ![](img/un-optimized.png) | ![](img/huerotate.manipulated.webp) |
+| ![un-optimized.png](/img/un-optimized.png) | ![huerotate.manipulated.webp](/img/huerotate.manipulated.webp) |
 
 #### `crop`
 
@@ -581,7 +581,7 @@ huerotate(hue: number): this
 
 | Image                     | Output                         |
 | ------------------------- | ------------------------------ |
-| ![](img/un-optimized.png) | ![](img/crop.manipulated.webp) |
+| ![un-optimized.png](/img/un-optimized.png) | ![crop.manipulated.webp](/img/crop.manipulated.webp) |
 
 ## Optimize PNG
 

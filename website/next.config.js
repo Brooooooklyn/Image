@@ -3,12 +3,16 @@ import nextra from 'nextra'
 const withNextra = nextra({
   theme: 'nextra-theme-docs',
   themeConfig: './nextra.config.js',
-  unstable_flexsearch: true,
-  unstable_staticImage: true,
+  staticImage: true,
+  latex: true,
+  flexsearch: {
+    codeblocks: false
+  },
+  defaultShowCopyCode: true
 })
 
 export default withNextra({
-  experiments: {
+  experimental: {
     esmExternals: true,
-  },
+  }
 })

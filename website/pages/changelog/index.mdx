@@ -4,9 +4,20 @@ description: '@napi-rs/image changelog.'
 ---
 
 import { Changelog, getChangelog } from '../../components/changelog-generator'
+import { serialize } from 'next-mdx-remote/serialize'
 
 # @napi-rs/image
 
-export const getStaticProps = getChangelog
+export const getStaticProps = async () => {
+  const {
+    props: { ssg },
+  } = await getChangelog('@napi-rs/image')
+  const mdx = await serialize(ssg)
+  return {
+    props: {
+      ssg: mdx,
+    },
+  }
+}
 
-<Changelog packageName="@napi-rs/image" />
+<Changelog />
