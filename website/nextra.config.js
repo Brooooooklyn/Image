@@ -25,11 +25,15 @@ export default {
     return (
       <>
         <img src="/img/favicon.png" width={32} />
-        <span style={{ width: '170px' }} className="mx-2 font-extrabold hidden md:inline select-none">
+        <span
+          style={{ width: 170 }}
+          className="nx-mx-2 nx-font-extrabold nx-md:inline nx-select-none"
+        >
           @napi-rs/image
         </span>
       </>
     )
+
   },
   head: () => {
     const { title, description } = useConfig()
@@ -85,7 +89,11 @@ export default {
             <img src="/img/powered-by-vercel.svg" />
           </a>
           &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Powered by{' '}
-          <a href="https://nextra.vercel.app" target="_blank">
+          <a
+            href="https://nextra.vercel.app"
+            className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]"
+            target="_blank"
+          >
             Nextra
           </a>
         </p>

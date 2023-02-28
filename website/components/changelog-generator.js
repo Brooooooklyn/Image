@@ -22,6 +22,21 @@ export const getChangelog = async (packageName, locale = 'en') => {
               /@([a-zA-Z0-9_-]+)(?=(,| ))/g,
               '[@$1](https://github.com/$1)',
             )
+            .replace(
+              /https:\/\/github\.com\/(\S+\/\S+\/pull\/\d+)/g, 
+              `<a 
+                href="$&"
+                target="_blank"
+                rel="noopener" 
+                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">$1</a>`)
+            .replace(
+              /https:\/\/github\.com\/(.+?)\/(.+?)\/compare\/(.+?)@(.+?)\.\.\.(.+?)@(.+?)$/g,
+              `<a 
+              href="$&"
+              target="_blank"
+              rel="noopener" 
+              className="nx-text-primary-600">$3@$4...$5@$6</a>`
+            )
           return `## <a href="${
             release.html_url
           }" target="_blank" rel="noopener">${release.tag_name}</a> 
