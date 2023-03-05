@@ -65,7 +65,7 @@ import { Transformer } from '@napi-rs/image'
 
 const SVG = await fs.readFile('input-debian.svg')
 
-riteFileSync(
+writeFileSync(
   "output-debian.jpeg",
   await Transformer.fromSvg(
     SVG,
