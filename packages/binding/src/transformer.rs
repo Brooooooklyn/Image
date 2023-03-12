@@ -20,6 +20,12 @@ use crate::{
   png::PngEncodeOptions,
 };
 
+static FONT_DB: once_cell::sync::Lazy<Database> = once_cell::sync::Lazy::new(|| {
+  let mut fontdb = Database::new();
+  fontdb.load_system_fonts();
+  fontdb
+});
+
 pub enum EncodeOptions {
   Png(PngEncodeOptions),
   Jpeg(u32),
@@ -669,8 +675,6 @@ impl Transformer {
     input: Either<String, Buffer>,
     background: Option<String>,
   ) -> Result<Transformer> {
-    let mut fontdb = Database::new();
-    fontdb.load_system_fonts();
     let options = Options::default();
 
     let mut tree = match input {
@@ -678,7 +682,7 @@ impl Transformer {
       Either::B(b) => usvg::Tree::from_data(b.as_ref(), &options),
     }
     .map_err(|err| Error::from_reason(format!("{err}")))?;
-    tree.convert_text(&fontdb);
+    tree.convert_text(&*FONT_DB);
 
     let mut size = tree.size.to_screen_size();
     let min_svg_size = 1000;
