@@ -7,6 +7,7 @@ use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
 #[napi]
+#[derive(Default)]
 pub enum FastResizeFilter {
   /// Each pixel of source image contributes to one pixel of the
   /// destination image with identical weights. For upscaling is equivalent
@@ -32,14 +33,11 @@ pub enum FastResizeFilter {
   /// Lanczos3 filter calculate the output pixel value using a high-quality
   /// Lanczos filter (a truncated sinc) on all pixels that may contribute
   /// to the output value.
+  #[default]
   Lanczos3,
 }
 
-impl Default for FastResizeFilter {
-  fn default() -> Self {
-    FastResizeFilter::Lanczos3
-  }
-}
+
 
 impl From<FastResizeFilter> for FilterType {
   fn from(value: FastResizeFilter) -> Self {
