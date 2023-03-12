@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [1.6.1](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.6.0...@napi-rs/image@1.6.1) (2023-03-12)
+
+### Performance Improvements
+
+- **image:** lazy load the Fontdb Database ([68400a9](https://github.com/Brooooooklyn/Image/commit/68400a970731457a14d81f1e85ae91fdc342d06f))
+
 # [1.6.0](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.5.1...@napi-rs/image@1.6.0) (2023-02-27)
 
 ### Features
