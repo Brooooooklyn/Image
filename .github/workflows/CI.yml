@@ -18,6 +18,9 @@ env:
       - docs/**
       - website/**
   pull_request: null
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   build:
     if: "!contains(github.event.head_commit.message, 'skip ci')"
@@ -263,7 +266,6 @@ jobs:
         uses: actions/setup-node@v3
         with:
           node-version: ${{ matrix.node }}
-          check-latest: true
           cache: yarn
       - name: Install dependencies
         run: yarn install --immutable
@@ -300,7 +302,6 @@ jobs:
         uses: actions/setup-node@v3
         with:
           node-version: ${{ matrix.node }}
-          check-latest: true
           cache: yarn
       - name: Install dependencies
         run: yarn install --immutable
@@ -335,7 +336,6 @@ jobs:
         uses: actions/setup-node@v3
         with:
           node-version: ${{ matrix.node }}
-          check-latest: true
           cache: yarn
       - name: Install dependencies
         run: yarn install --immutable --mode=skip-build
@@ -365,7 +365,6 @@ jobs:
           - '18'
     runs-on: ubuntu-latest
     steps:
-      - run: docker run --rm --privileged multiarch/qemu-user-static:register --reset
       - uses: actions/checkout@v3
       - name: Download artifacts
         uses: actions/download-artifact@v3
@@ -380,11 +379,16 @@ jobs:
       - name: List packages
         run: ls -R packages
         shell: bash
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+        with:
+          platforms: arm64
+      - run: docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
       - name: Setup and run tests
         uses: addnab/docker-run-action@v3
         with:
-          image: ghcr.io/napi-rs/napi-rs/nodejs:aarch64-${{ matrix.node }}
-          options: '-v ${{ github.workspace }}:/build -w /build'
+          image: node:${{ matrix.node }}-slim
+          options: '--platform linux/arm64 -v ${{ github.workspace }}:/build -w /build'
           run: |
             set -e
             yarn test
@@ -402,7 +406,6 @@ jobs:
           - '18'
     runs-on: ubuntu-latest
     steps:
-      - run: docker run --rm --privileged multiarch/qemu-user-static:register --reset
       - uses: actions/checkout@v3
       - name: Download artifacts
         uses: actions/download-artifact@v3
@@ -417,11 +420,16 @@ jobs:
       - name: List packages
         run: ls -R packages
         shell: bash
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+        with:
+          platforms: arm
+      - run: docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
       - name: Setup and run tests
         uses: addnab/docker-run-action@v3
         with:
-          image: ghcr.io/napi-rs/napi-rs/nodejs:armhf-${{ matrix.node }}
-          options: '-v ${{ github.workspace }}:/build -w /build'
+          image: node:${{ matrix.node }}-bullseye-slim
+          options: '--platform linux/arm/v7 -v ${{ github.workspace }}:/build -w /build'
           run: |
             set -e
             yarn test
@@ -442,7 +450,6 @@ jobs:
         uses: actions/setup-node@v3
         with:
           node-version: 18
-          check-latest: true
           cache: yarn
       - name: Install dependencies
         run: yarn install --immutable --mode=skip-build
