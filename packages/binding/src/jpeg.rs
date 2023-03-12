@@ -26,7 +26,7 @@ pub fn compress_jpeg_sync(
       .map_err(|err| {
         Error::new(
           Status::InvalidArg,
-          format!("Load input jpeg image failed {}", err),
+          format!("Load input jpeg image failed {err}"),
         )
       })?;
     let mut dest = Cursor::new(Vec::with_capacity(input.len()));
@@ -34,7 +34,7 @@ pub fn compress_jpeg_sync(
     encoder.encode_image(&img).map_err(|err| {
       Error::new(
         Status::GenericFailure,
-        format!("Encode image from input jpeg failed {}", err),
+        format!("Encode image from input jpeg failed {err}"),
       )
     })?;
     return env
@@ -110,7 +110,7 @@ unsafe fn moz_jpeg_compress(
   .map_err(|err| {
     Error::new(
       Status::GenericFailure,
-      format!("Compress JPEG failed {:?}", err),
+      format!("Compress JPEG failed {err:?}"),
     )
   })
 }
@@ -176,7 +176,7 @@ impl Task for CompressJpegTask {
         .map_err(|err| {
           Error::new(
             Status::InvalidArg,
-            format!("Load input jpeg image failed {}", err),
+            format!("Load input jpeg image failed {err}"),
           )
         })?;
       let mut dest = Cursor::new(Vec::with_capacity(self.input.len()));
@@ -185,7 +185,7 @@ impl Task for CompressJpegTask {
       encoder.encode_image(&img).map_err(|err| {
         Error::new(
           Status::GenericFailure,
-          format!("Encode image from input jpeg failed {}", err),
+          format!("Encode image from input jpeg failed {err}"),
         )
       })?;
       return Ok(JpegOptimizeOutput::Lossy(dest.into_inner()));

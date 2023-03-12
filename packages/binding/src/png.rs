@@ -3,8 +3,10 @@ use napi_derive::napi;
 use rgb::FromSlice;
 
 #[napi]
+#[derive(Default)]
 pub enum CompressionType {
   /// Default compression level
+  #[default]
   Default,
   /// Fast, minimal compression
   Fast,
@@ -12,11 +14,7 @@ pub enum CompressionType {
   Best,
 }
 
-impl Default for CompressionType {
-  fn default() -> Self {
-    CompressionType::Default
-  }
-}
+
 
 impl From<CompressionType> for image::codecs::png::CompressionType {
   fn from(compression_type: CompressionType) -> Self {
@@ -29,9 +27,11 @@ impl From<CompressionType> for image::codecs::png::CompressionType {
 }
 
 #[napi]
+#[derive(Default)]
 pub enum FilterType {
   /// No processing done, best used for low bit depth greyscale or data with a
   /// low color count
+  #[default]
   NoFilter,
   /// Filters based on previous pixel in the same scanline
   Sub,
@@ -46,11 +46,7 @@ pub enum FilterType {
   Adaptive,
 }
 
-impl Default for FilterType {
-  fn default() -> Self {
-    FilterType::NoFilter
-  }
-}
+
 
 impl From<FilterType> for image::codecs::png::FilterType {
   fn from(filter: FilterType) -> Self {
@@ -186,7 +182,7 @@ pub fn lossless_compress_png_sync(
     input.as_ref(),
     &to_oxipng_options(&options.unwrap_or_default()),
   )
-  .map_err(|err| Error::new(Status::InvalidArg, format!("Optimize failed {}", err)))?;
+  .map_err(|err| Error::new(Status::InvalidArg, format!("Optimize failed {err}")))?;
   Ok(output.into())
 }
 
@@ -202,7 +198,7 @@ impl Task for LosslessPngTask {
 
   fn compute(&mut self) -> Result<Self::Output> {
     oxipng::optimize_from_memory(self.input.as_ref(), &to_oxipng_options(&self.options))
-      .map_err(|err| Error::new(Status::InvalidArg, format!("Optimize failed {}", err)))
+      .map_err(|err| Error::new(Status::InvalidArg, format!("Optimize failed {err}")))
   }
 
   fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
@@ -252,11 +248,11 @@ fn png_quantize_inner(input: &[u8], options: &PngQuantOptions) -> Result<Vec<u8>
   let decoder = png::Decoder::new(input);
   let mut reader = decoder
     .read_info()
-    .map_err(|err| Error::new(Status::InvalidArg, format!("Read png info failed {}", err)))?;
+    .map_err(|err| Error::new(Status::InvalidArg, format!("Read png info failed {err}")))?;
   let mut decoded_buf = vec![0; reader.output_buffer_size()];
   let output_info = reader
     .next_frame(&mut decoded_buf)
-    .map_err(|err| Error::new(Status::InvalidArg, format!("Read png frame failed {}", err)))?;
+    .map_err(|err| Error::new(Status::InvalidArg, format!("Read png frame failed {err}")))?;
   let width = output_info.width;
   let height = output_info.height;
   // The input png quality is too low
@@ -266,35 +262,35 @@ fn png_quantize_inner(input: &[u8], options: &PngQuantOptions) -> Result<Vec<u8>
   let mut liq = imagequant::new();
   liq
     .set_speed(options.speed.unwrap_or(5) as i32)
-    .map_err(|err| Error::new(Status::GenericFailure, format!("{}", err)))?;
+    .map_err(|err| Error::new(Status::GenericFailure, format!("{err}")))?;
   liq
     .set_quality(
       options.min_quality.unwrap_or(70) as u8,
       options.max_quality.unwrap_or(99) as u8,
     )
-    .map_err(|err| Error::new(Status::GenericFailure, format!("{}", err)))?;
+    .map_err(|err| Error::new(Status::GenericFailure, format!("{err}")))?;
   let mut img = liq
     .new_image(decoded_buf.as_rgba(), width as usize, height as usize, 0.0)
     .map_err(|err| {
       Error::new(
         Status::GenericFailure,
-        format!("Create image failed {}", err),
+        format!("Create image failed {err}"),
       )
     })?;
   let mut quantization_result = liq
     .quantize(&mut img)
-    .map_err(|err| Error::new(Status::GenericFailure, format!("quantize failed {}", err)))?;
+    .map_err(|err| Error::new(Status::GenericFailure, format!("quantize failed {err}")))?;
   quantization_result
     .set_dithering_level(1.0)
-    .map_err(|err| Error::new(Status::GenericFailure, format!("{}", err)))?;
+    .map_err(|err| Error::new(Status::GenericFailure, format!("{err}")))?;
   let (palette, pixels) = quantization_result
     .remapped(&mut img)
-    .map_err(|err| Error::new(Status::GenericFailure, format!("remap failed {}", err)))?;
+    .map_err(|err| Error::new(Status::GenericFailure, format!("remap failed {err}")))?;
   let mut encoder = lodepng::Encoder::new();
   encoder.set_palette(palette.as_slice()).map_err(|err| {
     Error::new(
       Status::GenericFailure,
-      format!("Set palette on png encoder {}", err),
+      format!("Set palette on png encoder {err}"),
     )
   })?;
   let output = encoder
@@ -302,7 +298,7 @@ fn png_quantize_inner(input: &[u8], options: &PngQuantOptions) -> Result<Vec<u8>
     .map_err(|err| {
       Error::new(
         Status::GenericFailure,
-        format!("Encode quantized png failed {}", err),
+        format!("Encode quantized png failed {err}"),
       )
     })?;
   Ok(output)

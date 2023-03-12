@@ -219,7 +219,7 @@ impl ThreadSafeDynamicImage {
         let image_format = image::guess_format(input_buf).map_err(|err| {
           Error::new(
             Status::InvalidArg,
-            format!("Guess format from input image failed {}", err),
+            format!("Guess format from input image failed {err}"),
           )
         })?;
         if with_exif {
@@ -232,7 +232,7 @@ impl ThreadSafeDynamicImage {
           let avif = libavif::decode_rgb(input_buf).map_err(|err| {
             Error::new(
               Status::InvalidArg,
-              format!("Decode avif image failed {}", err),
+              format!("Decode avif image failed {err}"),
             )
           })?;
           let decoded_rgb = avif.to_vec();
@@ -260,7 +260,7 @@ impl ThreadSafeDynamicImage {
           }
         } else {
           image::load_from_memory_with_format(input_buf, image_format)
-            .map_err(|err| Error::new(Status::InvalidArg, format!("Decode image failed {}", err)))?
+            .map_err(|err| Error::new(Status::InvalidArg, format!("Decode image failed {err}")))?
         };
         let color_type = dynamic_image.color();
         image.replace(ImageMetaData {
@@ -682,7 +682,7 @@ impl Transformer {
       Either::B(b) => usvg::Tree::from_data(b.as_ref(), &options),
     }
     .map_err(|err| Error::from_reason(format!("{err}")))?;
-    tree.convert_text(&*FONT_DB);
+    tree.convert_text(&FONT_DB);
 
     let mut size = tree.size.to_screen_size();
     let min_svg_size = 1000;
