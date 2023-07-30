@@ -9,10 +9,11 @@ use image::{
 use libavif::AvifData;
 use napi::{bindgen_prelude::*, JsBuffer};
 use napi_derive::napi;
-use resvg::usvg::{FitTo, Options, ScreenSize};
-use resvg::usvg_text_layout::fontdb::Database;
-use resvg::usvg_text_layout::TreeTextToPath;
-use resvg::{tiny_skia, usvg};
+use resvg::{
+  tiny_skia,
+  usvg::fontdb::Database,
+  usvg::{self, Options, TreeParsing, TreeTextToPath},
+};
 
 use crate::{
   avif::{encode_avif_inner, AvifConfig},
@@ -683,11 +684,10 @@ impl Transformer {
     }
     .map_err(|err| Error::from_reason(format!("{err}")))?;
     tree.convert_text(&FONT_DB);
-
-    let mut size = tree.size.to_screen_size();
+    let mut size = tree.size.to_int_size();
     let min_svg_size = 1000;
     while size.width() < min_svg_size || size.height() < min_svg_size {
-      size = ScreenSize::new(size.width() * 2, size.height() * 2).unwrap();
+      size = resvg::tiny_skia::IntSize::from_wh(size.width() * 2, size.height() * 2).unwrap();
     }
     let mut pix_map = tiny_skia::Pixmap::new(size.width(), size.height()).unwrap();
 
@@ -700,13 +700,7 @@ impl Transformer {
       let color = tiny_skia::Color::from_rgba8(bg.red, bg.green, bg.blue, bg.alpha);
       pix_map.fill(color);
     }
-
-    resvg::render(
-      &tree,
-      FitTo::Size(size.width(), size.height()),
-      tiny_skia::Transform::identity(),
-      pix_map.as_mut(),
-    );
+    resvg::Tree::from_usvg(&tree).render(tiny_skia::Transform::identity(), &mut pix_map.as_mut());
 
     let width = pix_map.width();
     let height = pix_map.height();

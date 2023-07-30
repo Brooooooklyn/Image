@@ -63,10 +63,7 @@ writeFileSync('output-exif.image.avif', imageOutputAvif)
 
 console.time('sharp resize')
 
-const outputSharp = await sharp(NASA, { sequentialRead: true })
-  .resize(1024)
-  .png()
-  .toBuffer()
+const outputSharp = await sharp(NASA, { sequentialRead: true }).resize(1024).png().toBuffer()
 
 console.timeEnd('sharp resize')
 
@@ -82,10 +79,12 @@ writeFileSync('nasa-small.image.png', outputImage)
 
 console.time('fast resize')
 
-const output = await new Transformer(NASA).fastResize({
-  width: 1024,
-  filter: FastResizeFilter.Lanczos3,
-}).png()
+const output = await new Transformer(NASA)
+  .fastResize({
+    width: 1024,
+    filter: FastResizeFilter.Lanczos3,
+  })
+  .png()
 
 console.timeEnd('fast resize')
 

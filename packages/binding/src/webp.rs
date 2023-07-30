@@ -33,9 +33,7 @@ pub(crate) unsafe fn lossless_encode_webp_inner(
     _ => {
       return Err(Error::new(
         Status::InvalidArg,
-        format!(
-          "Unsupported encoding color type [{color_type:?}] into webp"
-        ),
+        format!("Unsupported encoding color type [{color_type:?}] into webp"),
       ))
     }
   };
@@ -101,9 +99,7 @@ pub(crate) unsafe fn encode_webp_inner(
     _ => {
       return Err(Error::new(
         Status::InvalidArg,
-        format!(
-          "Unsupported encoding color type [{color_type:?}] into webp"
-        ),
+        format!("Unsupported encoding color type [{color_type:?}] into webp"),
       ))
     }
   };

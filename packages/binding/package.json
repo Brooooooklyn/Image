@@ -62,6 +62,6 @@
   },
   "repository": "git@github.com:Brooooooklyn/Image.git",
   "devDependencies": {
-    "@napi-rs/cli": "^2.14.3"
+    "@napi-rs/cli": "^2.16.2"
   }
 }

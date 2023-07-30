@@ -14,8 +14,6 @@ pub enum CompressionType {
   Best,
 }
 
-
-
 impl From<CompressionType> for image::codecs::png::CompressionType {
   fn from(compression_type: CompressionType) -> Self {
     match compression_type {
@@ -45,8 +43,6 @@ pub enum FilterType {
   /// scanline rather than one filter for the entire image
   Adaptive,
 }
-
-
 
 impl From<FilterType> for image::codecs::png::FilterType {
   fn from(filter: FilterType) -> Self {
@@ -271,12 +267,7 @@ fn png_quantize_inner(input: &[u8], options: &PngQuantOptions) -> Result<Vec<u8>
     .map_err(|err| Error::new(Status::GenericFailure, format!("{err}")))?;
   let mut img = liq
     .new_image(decoded_buf.as_rgba(), width as usize, height as usize, 0.0)
-    .map_err(|err| {
-      Error::new(
-        Status::GenericFailure,
-        format!("Create image failed {err}"),
-      )
-    })?;
+    .map_err(|err| Error::new(Status::GenericFailure, format!("Create image failed {err}")))?;
   let mut quantization_result = liq
     .quantize(&mut img)
     .map_err(|err| Error::new(Status::GenericFailure, format!("quantize failed {err}")))?;

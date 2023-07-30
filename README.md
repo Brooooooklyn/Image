@@ -19,7 +19,7 @@ This library support encode/decode these formats:
 | TGA       | ✅                                        | Rgb8, Rgba8, Bgr8, Bgra8, Gray8, GrayA8 |
 | OpenEXR   | Rgb32F, Rgba32F (no dwa compression)      | Rgb32F, Rgba32F (no dwa compression)    |
 | farbfeld  | ✅                                        | ✅                                      |
-| SVG       | ✅                                        |                                       |
+| SVG       | ✅                                        |                                         |
 
 See [index.d.ts](./packages/binding/index.d.ts) for API reference.
 
@@ -169,14 +169,11 @@ writeFileSync(
 
 console.info(chalk.green('Encoding webp from JPEG with EXIF done'))
 
-writeFileSync(
-  'output-overlay-png.png',
-  await new Transformer(PNG).overlay(PNG, 200, 200).png()
-)
+writeFileSync('output-overlay-png.png', await new Transformer(PNG).overlay(PNG, 200, 200).png())
 
 console.info(chalk.green('Overlay an image done'))
 
-writeFileSync("output-debian.jpeg", await Transformer.fromSvg(SVG, 'rgba(238, 235, 230, .9)').jpeg())
+writeFileSync('output-debian.jpeg', await Transformer.fromSvg(SVG, 'rgba(238, 235, 230, .9)').jpeg())
 
 console.info(chalk.green('Encoding jpeg from SVG done'))
 ```
