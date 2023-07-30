@@ -17,7 +17,7 @@ export default {
     const { asPath } = useRouter()
     if (asPath !== '/') {
       return {
-        titleTemplate: '%s – Image'
+        titleTemplate: '%s – Image',
       }
     }
   },
@@ -25,15 +25,11 @@ export default {
     return (
       <>
         <img src="/img/favicon.png" width={32} />
-        <span
-          style={{ width: 170 }}
-          className="nx-mx-2 nx-font-extrabold nx-md:inline nx-select-none"
-        >
+        <span style={{ width: 170 }} className="nx-mx-2 nx-font-extrabold nx-md:inline nx-select-none">
           @napi-rs/image
         </span>
       </>
     )
-
   },
   head: () => {
     const { title, description } = useConfig()
@@ -79,9 +75,9 @@ export default {
         default:
           return 'Edit this page on GitHub →'
       }
-    }
+    },
   },
-  footer:{
+  footer: {
     text: () => {
       return (
         <p>
@@ -99,5 +95,5 @@ export default {
         </p>
       )
     },
-  }
+  },
 }

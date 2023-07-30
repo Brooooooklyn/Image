@@ -33,7 +33,7 @@ This library support encode/decode these formats:
 | TGA       | ✅                                        | Rgb8, Rgba8, Bgr8, Bgra8, Gray8, GrayA8 |
 | OpenEXR   | Rgb32F, Rgba32F (no dwa compression)      | Rgb32F, Rgba32F (no dwa compression)    |
 | farbfeld  | ✅                                        | ✅                                      |
-| SVG       | ✅                                        |                                       |
+| SVG       | ✅                                        |                                         |
 
 See [index.d.ts](https://github.com/Brooooooklyn/Image/blob/main/packages/binding/index.d.ts) for API reference.
 
@@ -66,12 +66,12 @@ import { Transformer } from '@napi-rs/image'
 const SVG = await fs.readFile('input-debian.svg')
 
 writeFileSync(
-  "output-debian.jpeg",
+  'output-debian.jpeg',
   await Transformer.fromSvg(
     SVG,
     /** Support CSS3 color, e.g. rgba(255, 255, 255, .8) */
-    'rgba(238, 235, 230, .9)'
-  ).jpeg()
+    'rgba(238, 235, 230, .9)',
+  ).jpeg(),
 )
 ```
 
@@ -410,8 +410,8 @@ writeFileSync('output-exif.image.webp', imageOutputWebp)
 grayscale(): this
 ```
 
-| Image                     | Output                              |
-| ------------------------- | ----------------------------------- |
+| Image                                      | Output                                                         |
+| ------------------------------------------ | -------------------------------------------------------------- |
 | ![un-optimized.png](/img/un-optimized.png) | ![grayscale.manipulated.webp](/img/grayscale.manipulated.webp) |
 
 #### `invert`
@@ -422,8 +422,8 @@ grayscale(): this
 invert(): this
 ```
 
-| Image                     | Output                           |
-| ------------------------- | -------------------------------- |
+| Image                                      | Output                                                   |
+| ------------------------------------------ | -------------------------------------------------------- |
 | ![un-optimized.png](/img/un-optimized.png) | ![invert.manipulated.webp](/img/invert.manipulated.webp) |
 
 #### `resize`
@@ -491,8 +491,8 @@ blur(sigma: number): this
 
 `blur(10)`
 
-| Image                     | Output                         |
-| ------------------------- | ------------------------------ |
+| Image                                      | Output                                               |
+| ------------------------------------------ | ---------------------------------------------------- |
 | ![un-optimized.png](/img/un-optimized.png) | ![blur.manipulated.webp](/img/blur.manipulated.webp) |
 
 #### `unsharpen`
@@ -506,8 +506,8 @@ unsharpen(sigma: number, threshold: number): this
 
 `unsharpen(10, 10)`
 
-| Image                 | Output                              |
-| --------------------- | ----------------------------------- |
+| Image                              | Output                                                         |
+| ---------------------------------- | -------------------------------------------------------------- |
 | ![taj_orig.jpg](/img/taj_orig.jpg) | ![unsharpen.manipulated.webp](/img/unsharpen.manipulated.webp) |
 
 #### `filter3x3`
@@ -523,8 +523,8 @@ filter3x3(kernel: Array<number>): this
 
 `filter3x3([0, -1, 0, -1, 5, -1, 0, -1, 0])`
 
-| Image                     | Output                              |
-| ------------------------- | ----------------------------------- |
+| Image                                      | Output                                                         |
+| ------------------------------------------ | -------------------------------------------------------------- |
 | ![un-optimized.png](/img/un-optimized.png) | ![filter3x3.manipulated.webp](/img/filter3x3.manipulated.webp) |
 
 #### `adjustContrast`
@@ -538,8 +538,8 @@ adjustContrast(contrast: number): this
 
 `adjustContrast(50)`
 
-| Image                     | Output                             |
-| ------------------------- | ---------------------------------- |
+| Image                                      | Output                                                       |
+| ------------------------------------------ | ------------------------------------------------------------ |
 | ![un-optimized.png](/img/un-optimized.png) | ![contrast.manipulated.webp](/img/contrast.manipulated.webp) |
 
 #### `brighten`
@@ -553,8 +553,8 @@ brighten(brightness: number): this
 
 `brighten(30)`
 
-| Image                     | Output                             |
-| ------------------------- | ---------------------------------- |
+| Image                                      | Output                                                       |
+| ------------------------------------------ | ------------------------------------------------------------ |
 | ![un-optimized.png](/img/un-optimized.png) | ![brighten.manipulated.webp](/img/brighten.manipulated.webp) |
 
 #### `huerotate`
@@ -569,8 +569,8 @@ huerotate(hue: number): this
 
 `huerotate(90)`
 
-| Image                     | Output                              |
-| ------------------------- | ----------------------------------- |
+| Image                                      | Output                                                         |
+| ------------------------------------------ | -------------------------------------------------------------- |
 | ![un-optimized.png](/img/un-optimized.png) | ![huerotate.manipulated.webp](/img/huerotate.manipulated.webp) |
 
 #### `crop`
@@ -579,8 +579,8 @@ huerotate(hue: number): this
 
 `crop(270, 40, 500, 500)`
 
-| Image                     | Output                         |
-| ------------------------- | ------------------------------ |
+| Image                                      | Output                                               |
+| ------------------------------------------ | ---------------------------------------------------- |
 | ![un-optimized.png](/img/un-optimized.png) | ![crop.manipulated.webp](/img/crop.manipulated.webp) |
 
 ## Optimize PNG

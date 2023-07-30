@@ -64,4 +64,3 @@ test('should be able to create transformer from raw rgba pixels', async (t) => {
 test('should be able to create transformer from SVG', async (t) => {
   await t.notThrowsAsync(() => Transformer.fromSvg(SVG).png())
 })
-

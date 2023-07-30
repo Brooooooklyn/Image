@@ -37,8 +37,6 @@ pub enum FastResizeFilter {
   Lanczos3,
 }
 
-
-
 impl From<FastResizeFilter> for FilterType {
   fn from(value: FastResizeFilter) -> Self {
     match value {

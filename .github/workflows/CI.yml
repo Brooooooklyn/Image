@@ -4,6 +4,9 @@ env:
   APP_NAME: image
   MACOSX_DEPLOYMENT_TARGET: '10.13'
   SYSTEM_DEPS_DAV1D_BUILD_INTERNAL: 'always'
+permissions:
+  contents: write
+  id-token: write
 'on':
   push:
     branches:
@@ -33,7 +36,6 @@ jobs:
             build: |
               brew install meson
               yarn workspace @napi-rs/image build --features with_simd
-              strip -x packages/*/*.node
           - host: windows-latest
             build: |
               python -m pip install meson
@@ -45,9 +47,10 @@ jobs:
               sudo apt install meson -y
               cargo install cargo-xwin
             build: |
+              export XWIN_CACHE_DIR="$(pwd)/.xwin"
               export XWIN_ARCH=x86
-              export CFLAGS="-msse4.2"
-              export CXXFLAGS="-msse4.2"
+              export CFLAGS="-mavx2 /FI $(pwd)/.xwin/crt/include/intrin0.h"
+              export CXXFLAGS="-mavx2 /FI $(pwd)/.xwin/crt/include/intrin0.h"
               export CARGO_PROFILE_RELEASE_LTO="false"
               yarn workspace @napi-rs/image build --features with_simd --target i686-pc-windows-msvc
             target: i686-pc-windows-msvc
@@ -63,7 +66,7 @@ jobs:
               export CFLAGS="-fuse-ld=lld -B/usr/aarch64-unknown-linux-gnu/lib/gcc/aarch64-unknown-linux-gnu/4.8.5 --sysroot=/usr/x86_64-unknown-linux-gnu/x86_64-unknown-linux-gnu/sysroot" &&
               export CXXFLAGS="-stdlib=libc++ -fuse-ld=lld -B/usr/aarch64-unknown-linux-gnu/lib/gcc/aarch64-unknown-linux-gnu/4.8.5 --sysroot=/usr/x86_64-unknown-linux-gnu/x86_64-unknown-linux-gnu/sysroot -L/usr/lib/llvm-15/lib" &&
               yarn workspace @napi-rs/image build --features with_simd --target x86_64-unknown-linux-gnu &&
-              llvm-strip packages/*/*.node
+              chmod -R 777 target
           - host: ubuntu-latest
             target: x86_64-unknown-linux-musl
             docker: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-alpine
@@ -77,13 +80,12 @@ jobs:
               export LIB_AOM_INCLUDE_PATH=/usr/include/aom/aom &&
               export LIB_AOM_PKG_CONFIG_PATH=/usr/lib/pkgconfig &&
               yarn workspace @napi-rs/image build --features with_simd &&
-              strip packages/*/*.node
+              chmod -R 777 target
           - host: macos-latest
             target: aarch64-apple-darwin
             build: |
               brew install meson
               yarn workspace @napi-rs/image build --features with_simd
-              strip -x packages/*/*.node
           - host: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             docker: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-debian-aarch64
@@ -93,7 +95,7 @@ jobs:
               export CFLAGS="-fuse-ld=lld -mcrc -B/usr/aarch64-unknown-linux-gnu/lib/gcc/aarch64-unknown-linux-gnu/4.8.5 --sysroot=/usr/aarch64-unknown-linux-gnu/aarch64-unknown-linux-gnu/sysroot" &&
               export CXXFLAGS="-fuse-ld=lld -mcrc -B/usr/aarch64-unknown-linux-gnu/lib/gcc/aarch64-unknown-linux-gnu/4.8.5 --sysroot=/usr/aarch64-unknown-linux-gnu/aarch64-unknown-linux-gnu/sysroot -L/usr/aarch64-unknown-linux-gnu/lib/llvm-15/lib -stdlib=libc++" &&
               yarn workspace @napi-rs/image build --features with_simd --target aarch64-unknown-linux-gnu &&
-              llvm-strip packages/*/*.node
+              chmod -R 777 target
           - host: ubuntu-latest
             target: armv7-unknown-linux-gnueabihf
             setup: |
@@ -101,7 +103,6 @@ jobs:
               sudo apt-get install meson gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf -y
             build: |
               yarn workspace @napi-rs/image build --features oxipng_libdeflater --zig --zig-link-only
-              arm-linux-gnueabihf-strip packages/*/*.node
           - host: ubuntu-latest
             target: aarch64-linux-android
             build: |
@@ -129,7 +130,7 @@ jobs:
               unset CXX &&
               apk add --update --repository http://dl-cdn.alpinelinux.org/alpine/edge/testing --no-cache aom-dev perl meson &&
               yarn workspace @napi-rs/image build --target aarch64-unknown-linux-musl --features with_simd &&
-              /aarch64-linux-musl-cross/bin/aarch64-linux-musl-strip packages/*/*.node
+              chmod -R 777 target
     name: stable - ${{ matrix.settings.target }} - node@18
     runs-on: ${{ matrix.settings.host }}
     env:
@@ -140,7 +141,6 @@ jobs:
         uses: actions/setup-node@v3
         with:
           node-version: 18
-          check-latest: true
           cache: yarn
       - name: Setup nasm
         uses: ilammy/setup-nasm@v1
@@ -168,7 +168,7 @@ jobs:
         uses: KyleMayes/install-llvm-action@v1
         if: ${{ matrix.settings.target == 'i686-pc-windows-msvc' }}
         with:
-          version: '15'
+          version: '16'
       - name: Setup toolchain
         run: ${{ matrix.settings.setup }}
         if: ${{ matrix.settings.setup }}
@@ -211,9 +211,7 @@ jobs:
           usesh: true
           mem: 3000
           prepare: |
-            pkg install -y curl cmake nasm node perl5
-            curl -qL https://www.npmjs.com/install.sh | sh
-            npm install --location=global --ignore-scripts yarn
+            pkg install -y curl cmake nasm node perl5 npm yarn
             curl https://sh.rustup.rs -sSf --output rustup.sh
             sh rustup.sh -y --profile minimal --default-toolchain beta
             export PATH="/usr/local/cargo/bin:$PATH"
@@ -233,7 +231,6 @@ jobs:
             freebsd-version
             yarn install --immutable --mode=skip-build
             yarn workspace @napi-rs/image build --features oxipng_libdeflater
-            strip -x packages/*/*.node
             yarn test
             rm -rf node_modules
             rm -rf target
@@ -255,8 +252,10 @@ jobs:
         settings:
           - host: windows-latest
             target: x86_64-pc-windows-msvc
+          # macOS on GitHub Actions does not support avx2
+          # - host: macos-latest
+          #   target: x86_64-apple-darwin
         node:
-          - '14'
           - '16'
           - '18'
     runs-on: ${{ matrix.settings.host }}
@@ -292,7 +291,6 @@ jobs:
       fail-fast: false
       matrix:
         node:
-          - '14'
           - '16'
           - '18'
     runs-on: ubuntu-latest
@@ -326,7 +324,6 @@ jobs:
       fail-fast: false
       matrix:
         node:
-          - '14'
           - '16'
           - '18'
     runs-on: ubuntu-latest
@@ -360,7 +357,6 @@ jobs:
       fail-fast: false
       matrix:
         node:
-          - '14'
           - '16'
           - '18'
     runs-on: ubuntu-latest
@@ -401,7 +397,6 @@ jobs:
       fail-fast: false
       matrix:
         node:
-          - '14'
           - '16'
           - '18'
     runs-on: ubuntu-latest
@@ -465,6 +460,7 @@ jobs:
       - name: Publish
         if: "startsWith(github.event.head_commit.message, 'chore(release): publish')"
         run: |
+          npm config set provenance true
           echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" >> ~/.npmrc
           npx lerna publish from-package --no-verify-access --yes
         env:

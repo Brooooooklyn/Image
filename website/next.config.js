@@ -6,13 +6,13 @@ const withNextra = nextra({
   staticImage: true,
   latex: true,
   flexsearch: {
-    codeblocks: false
+    codeblocks: false,
   },
-  defaultShowCopyCode: true
+  defaultShowCopyCode: true,
 })
 
 export default withNextra({
   experimental: {
     esmExternals: true,
-  }
+  },
 })

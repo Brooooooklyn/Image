@@ -427,18 +427,15 @@ export const enum ResizeFilterType {
  */
 overlay(onTop: Buffer, x: number, y: number): this
 ```
+
 ```ts
 import { writeFileSync } from 'fs'
 
 import { Transformer } from '@napi-rs/image'
 
-
 const imageOutputPng = await new Transformer(PNG).overlay(PNG, 200, 200).png()
 
-writeFileSync(
-  'output-overlay-png.png',
-  imageOutputPng
-)
+writeFileSync('output-overlay-png.png', imageOutputPng)
 ```
 
 **ResizeFilterType**:
