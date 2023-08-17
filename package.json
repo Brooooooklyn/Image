@@ -70,6 +70,6 @@
       "pre-commit": "lint-staged && cargo fmt --all"
     }
   },
-  "packageManager": "yarn@3.6.1",
+  "packageManager": "yarn@3.6.2",
   "repository": "git@github.com:Brooooooklyn/Image.git"
 }
