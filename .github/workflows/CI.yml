@@ -136,7 +136,7 @@ jobs:
     env:
       RUST_TARGET: ${{ matrix.settings.target }}
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Setup node
         uses: actions/setup-node@v3
         with:
@@ -196,7 +196,7 @@ jobs:
     runs-on: macos-12
     name: Build FreeBSD
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Build
         id: build
         uses: vmactions/freebsd-vm@v0
@@ -260,7 +260,7 @@ jobs:
           - '18'
     runs-on: ${{ matrix.settings.host }}
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Setup node
         uses: actions/setup-node@v3
         with:
@@ -295,7 +295,7 @@ jobs:
           - '18'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Setup node
         uses: actions/setup-node@v3
         with:
@@ -328,7 +328,7 @@ jobs:
           - '18'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Setup node
         uses: actions/setup-node@v3
         with:
@@ -361,7 +361,7 @@ jobs:
           - '18'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Download artifacts
         uses: actions/download-artifact@v3
         with:
@@ -401,7 +401,7 @@ jobs:
           - '18'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Download artifacts
         uses: actions/download-artifact@v3
         with:
@@ -440,7 +440,7 @@ jobs:
       - test-linux-aarch64-gnu-binding
       - test-linux-arm-gnueabihf-binding
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Setup node
         uses: actions/setup-node@v3
         with:
