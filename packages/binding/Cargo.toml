@@ -60,7 +60,7 @@ version = "8"
 
 [dependencies.mozjpeg-sys]
 default-features = false
-version = "1"
+version = "2"
 
 [build-dependencies]
 napi-build = "2"
