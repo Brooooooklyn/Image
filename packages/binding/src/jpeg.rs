@@ -123,7 +123,7 @@ unsafe fn create_error_handler() -> mozjpeg_sys::jpeg_error_mgr {
   err
 }
 
-extern "C" fn unwind_error_exit(cinfo: &mut mozjpeg_sys::jpeg_common_struct) {
+unsafe extern "C-unwind" fn unwind_error_exit(cinfo: &mut mozjpeg_sys::jpeg_common_struct) {
   let message = unsafe {
     let err = cinfo.err.as_ref().unwrap();
     match err.format_message {
@@ -139,7 +139,7 @@ extern "C" fn unwind_error_exit(cinfo: &mut mozjpeg_sys::jpeg_common_struct) {
   std::panic::resume_unwind(Box::new(message))
 }
 
-extern "C" fn silence_message(
+unsafe extern "C-unwind" fn silence_message(
   _cinfo: &mut mozjpeg_sys::jpeg_common_struct,
   _level: std::os::raw::c_int,
 ) {
