@@ -55,7 +55,7 @@ export const enum ChromaSubsampling {
    * What if the chroma subsampling model is 4:0:0?
    * That says to use every pixel of luma data, but that each row has 0 chroma samples applied to it. The resulting image, then, is comprised solely of the luminance data—a greyscale image.
    */
-  Yuv400 = 3,
+  Yuv400 = 3
 }
 export const enum FastResizeFilter {
   /**
@@ -94,7 +94,7 @@ export const enum FastResizeFilter {
    * Lanczos filter (a truncated sinc) on all pixels that may contribute
    * to the output value.
    */
-  Lanczos3 = 5,
+  Lanczos3 = 5
 }
 export const enum ResizeFit {
   /**
@@ -108,7 +108,7 @@ export const enum ResizeFit {
    * Preserving aspect ratio
    * resize the image to be as large as possible while ensuring its dimensions are less than or equal to both those specified.
    */
-  Inside = 2,
+  Inside = 2
 }
 export interface FastResizeOptions {
   width: number
@@ -126,18 +126,14 @@ export interface JpegCompressOptions {
   optimizeScans?: boolean
 }
 export function compressJpegSync(input: Buffer, options?: JpegCompressOptions | undefined | null): Buffer
-export function compressJpeg(
-  input: Buffer,
-  options?: JpegCompressOptions | undefined | null,
-  signal?: AbortSignal | undefined | null,
-): Promise<Buffer>
+export function compressJpeg(input: Buffer, options?: JpegCompressOptions | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>
 export const enum CompressionType {
   /** Default compression level */
   Default = 0,
   /** Fast, minimal compression */
   Fast = 1,
   /** High compression level */
-  Best = 2,
+  Best = 2
 }
 export const enum FilterType {
   /**
@@ -157,7 +153,7 @@ export const enum FilterType {
    * Uses a heuristic to select one of the preceding filters for each
    * scanline rather than one filter for the entire image
    */
-  Adaptive = 5,
+  Adaptive = 5
 }
 export interface PngEncodeOptions {
   /** Default is `CompressionType::Default` */
@@ -175,7 +171,7 @@ export const enum PngRowFilter {
   Entropy = 6,
   Bigrams = 7,
   BigEnt = 8,
-  Brute = 9,
+  Brute = 9
 }
 export interface PNGLosslessOptions {
   /**
@@ -220,11 +216,7 @@ export interface PNGLosslessOptions {
   strip?: boolean
 }
 export function losslessCompressPngSync(input: Buffer, options?: PNGLosslessOptions | undefined | null): Buffer
-export function losslessCompressPng(
-  input: Buffer,
-  options?: PNGLosslessOptions | undefined | null,
-  signal?: AbortSignal | undefined | null,
-): Promise<Buffer>
+export function losslessCompressPng(input: Buffer, options?: PNGLosslessOptions | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>
 export interface PngQuantOptions {
   /** default is 70 */
   minQuality?: number
@@ -243,11 +235,7 @@ export interface PngQuantOptions {
   posterization?: number
 }
 export function pngQuantizeSync(input: Buffer, options?: PngQuantOptions | undefined | null): Buffer
-export function pngQuantize(
-  input: Buffer,
-  options?: PngQuantOptions | undefined | null,
-  signal?: AbortSignal | undefined | null,
-): Promise<Buffer>
+export function pngQuantize(input: Buffer, options?: PngQuantOptions | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>
 export const enum Orientation {
   /** Normal */
   Horizontal = 1,
@@ -257,7 +245,7 @@ export const enum Orientation {
   MirrorHorizontalAndRotate270Cw = 5,
   Rotate90Cw = 6,
   MirrorHorizontalAndRotate90Cw = 7,
-  Rotate270Cw = 8,
+  Rotate270Cw = 8
 }
 /**
  * Available Sampling Filters.
@@ -337,7 +325,7 @@ export const enum ResizeFilterType {
   /** Gaussian Filter */
   Gaussian = 3,
   /** Lanczos with window 3 */
-  Lanczos3 = 4,
+  Lanczos3 = 4
 }
 export const enum JsColorType {
   /** Pixel is 8-bit luminance */
@@ -359,7 +347,7 @@ export const enum JsColorType {
   /** Pixel is 32-bit float RGB */
   Rgb32F = 8,
   /** Pixel is 32-bit float RGBA */
-  Rgba32F = 9,
+  Rgba32F = 9
 }
 export interface Metadata {
   width: number
@@ -400,12 +388,7 @@ export class Transformer {
    * The image is scaled to the maximum possible size that fits
    * within the bounds specified by `width` and `height`.
    */
-  resize(
-    widthOrOptions: number | ResizeOptions,
-    height?: number | undefined | null,
-    filter?: ResizeFilterType | undefined | null,
-    fit?: ResizeFit | undefined | null,
-  ): this
+  resize(widthOrOptions: number | ResizeOptions, height?: number | undefined | null, filter?: ResizeFilterType | undefined | null, fit?: ResizeFit | undefined | null): this
   /**
    * Resize this image using the specified filter algorithm.
    * The image is scaled to the maximum possible size that fits
