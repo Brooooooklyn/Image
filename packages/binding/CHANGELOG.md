@@ -3,6 +3,16 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+# [1.7.0](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.6.1...@napi-rs/image@1.7.0) (2023-09-27)
+
+### Bug Fixes
+
+- mozjpeg compile issue ([12e87c0](https://github.com/Brooooooklyn/Image/commit/12e87c084228f727a507a3168af9fb1d2b9d3c1a))
+
+### Features
+
+- upgrade dependencies ([#50](https://github.com/Brooooooklyn/Image/issues/50)) ([70a168b](https://github.com/Brooooooklyn/Image/commit/70a168b5051f9ba6315009846cc644b1ddfa4a5c))
+
 ## [1.6.1](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.6.0...@napi-rs/image@1.6.1) (2023-03-12)
 
 ### Performance Improvements
