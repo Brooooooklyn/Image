@@ -1,5 +1,7 @@
 [target.i686-pc-windows-msvc]
-rustflags = ["-C", "target-feature=+sse4.2"]
+rustflags = ["-C", "target-feature=+sse4.2", "-C", "target-feature=+crt-static"]
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+sse4.2", "-C", "target-feature=+crt-static"]
 [target.x86_64-unknown-linux-gnu]
 rustflags = ["-C", "target-feature=+sse4.2"]
 [target.x86_64-unknown-linux-musl]
