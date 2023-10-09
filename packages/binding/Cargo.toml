@@ -51,8 +51,8 @@ once_cell = "1"
 png = "0.17"
 rexif = "0.7"
 rgb = "0.8"
-resvg = "0.35"
-svgtypes = "0.11"
+resvg = "0.36"
+svgtypes = "0.12"
 
 [dependencies.oxipng]
 default-features = false
