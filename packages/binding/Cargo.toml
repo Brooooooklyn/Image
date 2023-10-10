@@ -56,7 +56,7 @@ svgtypes = "0.12"
 
 [dependencies.oxipng]
 default-features = false
-version = "8"
+version = "9"
 
 [dependencies.mozjpeg-sys]
 default-features = false
