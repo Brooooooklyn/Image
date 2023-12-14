@@ -187,7 +187,7 @@ jobs:
         if: ${{ !matrix.settings.docker }}
         shell: bash
       - name: Upload artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: bindings-${{ matrix.settings.target }}
           path: packages/*/*.node
@@ -237,7 +237,7 @@ jobs:
             rm -rf .yarn/cache
             rm -f *.core
       - name: Upload artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: bindings-freebsd
           path: packages/*/*.node
