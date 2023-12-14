@@ -269,7 +269,7 @@ jobs:
       - name: Install dependencies
         run: yarn install --immutable
       - name: Download artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: bindings-${{ matrix.settings.target }}
           path: artifacts
@@ -304,7 +304,7 @@ jobs:
       - name: Install dependencies
         run: yarn install --immutable
       - name: Download artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: bindings-x86_64-unknown-linux-gnu
           path: artifacts
@@ -337,7 +337,7 @@ jobs:
       - name: Install dependencies
         run: yarn install --immutable --mode=skip-build
       - name: Download artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: bindings-x86_64-unknown-linux-musl
           path: artifacts
@@ -363,7 +363,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Download artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: bindings-aarch64-unknown-linux-gnu
           path: artifacts
@@ -403,7 +403,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Download artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: bindings-armv7-unknown-linux-gnueabihf
           path: artifacts
@@ -449,7 +449,7 @@ jobs:
       - name: Install dependencies
         run: yarn install --immutable --mode=skip-build
       - name: Download all artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           path: artifacts
       - name: Move artifacts
