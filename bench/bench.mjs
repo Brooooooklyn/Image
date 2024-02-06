@@ -1,6 +1,6 @@
-import { promises as fs } from 'fs'
-import { cpus } from 'os'
-import { hrtime } from 'process'
+import { promises as fs } from 'node:fs'
+import { cpus } from 'node:os'
+import { hrtime } from 'node:process'
 
 import { from, timer, lastValueFrom, Subject } from 'rxjs'
 import { mergeMap, takeUntil } from 'rxjs/operators'

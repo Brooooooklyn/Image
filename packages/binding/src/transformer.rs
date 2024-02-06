@@ -11,8 +11,7 @@ use napi::{bindgen_prelude::*, JsBuffer};
 use napi_derive::napi;
 use resvg::{
   tiny_skia,
-  usvg::fontdb::Database,
-  usvg::{self, Options, TreeParsing, TreeTextToPath},
+  usvg::{self, fontdb::Database, Options},
 };
 
 use crate::{
@@ -646,7 +645,9 @@ impl Task for EncodeTask {
         let len = avif_data.len();
         let data_ptr = avif_data.as_slice().as_ptr();
         unsafe {
-          env.create_buffer_with_borrowed_data(data_ptr, len, avif_data, |data, _env| drop(data))
+          env.create_buffer_with_borrowed_data(data_ptr.cast_mut(), len, avif_data, |data, _env| {
+            drop(data)
+          })
         }
         .map(|b| b.into_raw())
       }
@@ -683,7 +684,7 @@ impl Transformer {
       Either::B(b) => usvg::Tree::from_data(b.as_ref(), &options),
     }
     .map_err(|err| Error::from_reason(format!("{err}")))?;
-    tree.convert_text(&FONT_DB);
+    tree.postprocess(Default::default(), &FONT_DB);
     let mut size = tree.size.to_int_size();
     let min_svg_size = 1000;
     while size.width() < min_svg_size || size.height() < min_svg_size {
@@ -700,7 +701,11 @@ impl Transformer {
       let color = tiny_skia::Color::from_rgba8(bg.red, bg.green, bg.blue, bg.alpha);
       pix_map.fill(color);
     }
-    resvg::Tree::from_usvg(&tree).render(tiny_skia::Transform::identity(), &mut pix_map.as_mut());
+    resvg::render(
+      &tree,
+      tiny_skia::Transform::identity(),
+      &mut pix_map.as_mut(),
+    );
 
     let width = pix_map.width();
     let height = pix_map.height();

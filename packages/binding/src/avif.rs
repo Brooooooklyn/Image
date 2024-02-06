@@ -102,8 +102,8 @@ pub(crate) fn encode_avif_inner(
 ) -> Result<AvifData<'static>> {
   let mut encoder = libavif::Encoder::new();
   let config: Config = config.unwrap_or_default().into();
-  encoder.set_quantizer((63.0 * (1.0 - config.quality as f32 / 100.0)) as u8);
-  encoder.set_quantizer_alpha((63.0 * (1.0 - config.alpha_quality as f32 / 100.0)) as u8);
+  encoder.set_quality((63.0 * (1.0 - config.quality as f32 / 100.0)) as u8);
+  encoder.set_alpha_quality((63.0 * (1.0 - config.alpha_quality as f32 / 100.0)) as u8);
   encoder.set_speed(config.speed);
   encoder.set_max_threads(config.threads);
   let (width, height) = input_image.dimensions();

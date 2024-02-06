@@ -22,3 +22,4 @@ output-exif.*
 !output-exif.image.webp
 nasa-small.*
 output-overlay-png.png
+output-debian.jpeg
