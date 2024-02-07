@@ -16,7 +16,7 @@ oxipng_libdeflater = ["oxipng/zopfli", "oxipng/parallel"]
 with_simd = ["mozjpeg-sys/nasm_simd_parallel_build"]
 
 [dependencies]
-fast_image_resize = "2"
+fast_image_resize = "3"
 imagequant = "4.0.0"
 image = { version = "0.24", default-features = false, features = [
   "jpeg",
@@ -35,11 +35,10 @@ image = { version = "0.24", default-features = false, features = [
   "openexr",
 ] }
 jpeg-decoder = "0.3"
-libavif = { version = "0.11", default-features = false, features = [
+libavif = { version = "0.12", default-features = false, features = [
   "codec-aom",
 ] }
 libc = "0.2"
-libwebp-sys = { version = "0.9", features = ["avx2", "sse41", "neon"] }
 lodepng = "3"
 napi = { version = "2", default-features = false, features = ["napi3"] }
 napi-derive = { version = "2", default-features = false, features = [
@@ -51,16 +50,22 @@ once_cell = "1"
 png = "0.17"
 rexif = "0.7"
 rgb = "0.8"
-resvg = "0.36"
-svgtypes = "0.12"
+resvg = "0.39"
+svgtypes = "0.14"
 
 [dependencies.oxipng]
 default-features = false
-version = "8"
+version = "9"
 
 [dependencies.mozjpeg-sys]
 default-features = false
 version = "2"
+
+[target.'cfg(not(all(target_os = "macos", target_arch = "x86_64")))'.dependencies]
+libwebp-sys = { version = "0.9", default-features = false, features = ["std", "parallel", "avx2", "sse41", "neon"] }
+
+[target.'cfg(all(target_os = "macos", target_arch = "x86_64"))'.dependencies]
+libwebp-sys = { version = "0.9", default-features = false, features = ["std", "parallel"] }
 
 [build-dependencies]
 napi-build = "2"

@@ -37,8 +37,7 @@
         "armv7-unknown-linux-gnueabihf",
         "x86_64-unknown-linux-musl",
         "x86_64-unknown-freebsd",
-        "i686-pc-windows-msvc",
-        "armv7-linux-androideabi"
+        "i686-pc-windows-msvc"
       ]
     }
   },
@@ -62,6 +61,6 @@
   },
   "repository": "git@github.com:Brooooooklyn/Image.git",
   "devDependencies": {
-    "@napi-rs/cli": "^2.16.2"
+    "@napi-rs/cli": "^2.18.0"
   }
 }

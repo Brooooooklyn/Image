@@ -157,12 +157,12 @@ fn to_oxipng_options(opt: &PNGLosslessOptions) -> oxipng::Options {
       .strip
       .map(|s| {
         if s {
-          oxipng::Headers::All
+          oxipng::StripChunks::All
         } else {
-          oxipng::Headers::None
+          oxipng::StripChunks::None
         }
       })
-      .unwrap_or(oxipng::Headers::All),
+      .unwrap_or(oxipng::StripChunks::Safe),
     #[cfg(target_arch = "arm")]
     deflate: oxipng::Deflaters::Libdeflater { compression: 12 },
     ..Default::default()
