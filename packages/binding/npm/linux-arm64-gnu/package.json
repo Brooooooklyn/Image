@@ -1,16 +1,12 @@
 {
   "name": "@napi-rs/image-linux-arm64-gnu",
   "version": "1.7.0",
-  "os": [
-    "linux"
-  ],
   "cpu": [
     "arm64"
   ],
   "main": "image.linux-arm64-gnu.node",
   "files": [
-    "image.linux-arm64-gnu.node",
-    "install.js"
+    "image.linux-arm64-gnu.node"
   ],
   "description": "Image processing library",
   "keywords": [
@@ -19,7 +15,8 @@
     "compression",
     "jpeg",
     "jpg",
-    "png"
+    "png",
+    "svg"
   ],
   "author": {
     "email": "github@lyn.one",
@@ -30,15 +27,15 @@
   "engines": {
     "node": ">= 10"
   },
-  "libc": [
-    "glibc"
-  ],
-  "scripts": {
-    "install": "node install.js"
-  },
   "publishConfig": {
     "registry": "https://registry.npmjs.org/",
     "access": "public"
   },
-  "repository": "git@github.com:Brooooooklyn/Image.git"
+  "repository": "git@github.com:Brooooooklyn/Image.git",
+  "os": [
+    "linux"
+  ],
+  "libc": [
+    "glibc"
+  ]
 }

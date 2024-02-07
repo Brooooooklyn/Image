@@ -76,9 +76,9 @@ unsafe fn moz_jpeg_compress(
     de_c_info.common.err = &mut err_handler;
     mozjpeg_sys::jpeg_create_decompress(&mut de_c_info);
     let input_buf = input;
-    #[cfg(any(target_os = "windows", target_arch = "arm"))]
+    #[cfg(any(target_os = "windows", target_arch = "arm", target_arch = "wasm32"))]
     mozjpeg_sys::jpeg_mem_src(&mut de_c_info, input_buf.as_ptr(), input_buf.len() as u32);
-    #[cfg(not(any(target_os = "windows", target_arch = "arm")))]
+    #[cfg(not(any(target_os = "windows", target_arch = "arm", target_arch = "wasm32")))]
     mozjpeg_sys::jpeg_mem_src(&mut de_c_info, input_buf.as_ptr(), input_buf.len() as u64);
     let mut compress_c_info: mozjpeg_sys::jpeg_compress_struct = std::mem::zeroed();
     compress_c_info.optimize_coding = 1;

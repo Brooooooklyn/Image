@@ -1,6 +1,6 @@
-import { promises as fs } from 'fs'
-import { join } from 'path'
-import { fileURLToPath } from 'url'
+import { promises as fs } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import test from 'ava'
 
