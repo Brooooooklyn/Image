@@ -1,4 +1,4 @@
-use napi::bindgen_prelude::*;
+use napi::{bindgen_prelude::*, JsBuffer, JsBufferValue, Ref};
 use napi_derive::napi;
 use rgb::FromSlice;
 
@@ -183,7 +183,7 @@ pub fn lossless_compress_png_sync(
 }
 
 pub struct LosslessPngTask {
-  input: Buffer,
+  input: Ref<JsBufferValue>,
   options: PNGLosslessOptions,
 }
 
@@ -200,21 +200,26 @@ impl Task for LosslessPngTask {
   fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
     Ok(output.into())
   }
+
+  fn finally(&mut self, env: Env) -> Result<()> {
+    self.input.unref(env)?;
+    Ok(())
+  }
 }
 
 #[napi]
 pub fn lossless_compress_png(
-  input: Buffer,
+  input: JsBuffer,
   options: Option<PNGLosslessOptions>,
   signal: Option<AbortSignal>,
-) -> AsyncTask<LosslessPngTask> {
-  AsyncTask::with_optional_signal(
+) -> Result<AsyncTask<LosslessPngTask>> {
+  Ok(AsyncTask::with_optional_signal(
     LosslessPngTask {
-      input,
+      input: input.into_ref()?,
       options: options.unwrap_or_default(),
     },
     signal,
-  )
+  ))
 }
 
 #[napi(object)]
