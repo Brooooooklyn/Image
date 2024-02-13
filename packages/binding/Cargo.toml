@@ -65,12 +65,12 @@ libwebp-sys = { version = "0.9", default-features = false, features = ["std", "p
 libwebp-sys = { version = "0.9", default-features = false, features = ["std", "parallel"] }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
-libavif = { git="https://github.com/Brooooooklyn/libavif-rs.git", rev = "4e108c4", version = "0.12", default-features = false, features = [
+libavif = { git="https://github.com/njaard/libavif-rs.git", rev = "678bd68", version = "0.12", default-features = false, features = [
   "codec-rav1e",
 ] }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
-libavif = { git="https://github.com/Brooooooklyn/libavif-rs.git", rev = "4e108c4", version = "0.12", default-features = false, features = [
+libavif = { git="https://github.com/njaard/libavif-rs.git", rev = "678bd68", version = "0.12", default-features = false, features = [
   "codec-aom",
 ] }
 

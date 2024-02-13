@@ -64,7 +64,7 @@
   },
   "repository": "git@github.com:Brooooooklyn/Image.git",
   "devDependencies": {
-    "@napi-rs/cli": "^3.0.0-alpha.36",
+    "@napi-rs/cli": "^3.0.0-alpha.38",
     "@napi-rs/wasm-runtime": "^0.1.1"
   }
 }

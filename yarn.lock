@@ -540,7 +540,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@napi-rs/cli@npm:^3.0.0-alpha.36":
+"@napi-rs/cli@npm:^3.0.0-alpha.38":
   version: 3.0.0-alpha.38
   resolution: "@napi-rs/cli@npm:3.0.0-alpha.38"
   dependencies:
@@ -615,7 +615,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@napi-rs/image@workspace:packages/binding"
   dependencies:
-    "@napi-rs/cli": "npm:^3.0.0-alpha.36"
+    "@napi-rs/cli": "npm:^3.0.0-alpha.38"
     "@napi-rs/wasm-runtime": "npm:^0.1.1"
   languageName: unknown
   linkType: soft
@@ -5543,7 +5543,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "image@workspace:."
   dependencies:
-    "@napi-rs/cli": "npm:^3.0.0-alpha.36"
+    "@napi-rs/cli": "npm:^3.0.0-alpha.38"
     "@taplo/cli": "npm:^0.7.0"
     "@types/node": "npm:^20.11.16"
     "@types/sharp": "npm:^0.31.1"
