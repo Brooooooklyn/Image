@@ -137,14 +137,6 @@ jobs:
               tar -xvf wasi-sdk-21.0-macos.tar.gz
             build: |
               export WASI_SDK_PATH="$(pwd)/wasi-sdk-21.0"
-              export CC="${WASI_SDK_PATH}/bin/clang"
-              export CXX="${WASI_SDK_PATH}/bin/clang++"
-              export AR="${WASI_SDK_PATH}/bin/ar"
-              export CFLAGS="--target=wasm32-wasi-threads -pthread --sysroot=${WASI_SDK_PATH}/share/wasi-sysroot"
-              export CXXFLAGS="--target=wasm32-wasi-threads -pthread --sysroot=${WASI_SDK_PATH}/share/wasi-sysroot"
-              export LDFLAGS="-fuse-ld=${WASI_SDK_PATH}/bin/wasm-ld --target=wasm32-wasi-threads"
-              export CARGO_TARGET_WASM32_WASI_PREVIEW1_THREADS_LINKER="${WASI_SDK_PATH}/bin/wasm-ld"
-              export PATH="$WASI_SDK_PATH/bin:$PATH"
               yarn workspace @napi-rs/image build --target wasm32-wasi-preview1-threads
 
     name: stable - ${{ matrix.settings.target }} - node@20
