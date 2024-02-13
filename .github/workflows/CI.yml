@@ -110,7 +110,7 @@ jobs:
             target: armv7-unknown-linux-gnueabihf
             setup: |
               sudo apt-get update
-              sudo apt-get install meson
+              sudo apt-get install meson gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
             build: |
               yarn workspace @napi-rs/image build --target armv7-unknown-linux-gnueabihf --features oxipng_libdeflater --use-napi-cross
           - host: ubuntu-latest
@@ -171,7 +171,7 @@ jobs:
             target/
           key: ${{ matrix.settings.target }}-cargo-cache
       - uses: goto-bus-stop/setup-zig@v2
-        if: ${{ matrix.settings.target == 'armv7-unknown-linux-gnueabihf' }}
+        if: ${{ contains(matrix.settings.target, 'musl') }}
         with:
           version: 0.11.0
       - name: Setup toolchain
