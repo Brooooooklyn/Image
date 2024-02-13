@@ -86,10 +86,10 @@ jobs:
               export LIB_AOM_PKG_CONFIG_PATH=/usr/lib/pkgconfig &&
               yarn workspace @napi-rs/image build --target x86_64-unknown-linux-musl --features with_simd &&
               chmod -R 777 target
-          - host: macos-14
+          - host: macos-latest
             target: aarch64-apple-darwin
             setup: |
-              brew install meson llvm
+              brew install meson
             build: |
               MACOSX_DEPLOYMENT_TARGET=11.0 yarn workspace @napi-rs/image build --target aarch64-apple-darwin --features with_simd
           - host: ubuntu-latest
