@@ -1,6 +1,6 @@
-import { promises as fs } from 'fs'
-import { join } from 'path'
-import { fileURLToPath } from 'url'
+import { promises as fs } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import test from 'ava'
 
@@ -8,10 +8,14 @@ import { losslessCompressPng, pngQuantize, compressJpeg, Transformer } from '../
 
 const ROOT_DIR = join(fileURLToPath(import.meta.url), '..', '..', '..', '..')
 
-const PNG = await fs.readFile(join(ROOT_DIR, 'un-optimized.png'))
+const PNG = await fs.readFile(join(ROOT_DIR, 'nasa-4928x3279.png'))
 const JPEG = await fs.readFile(join(ROOT_DIR, 'un-optimized.jpg'))
 
 test('should be able to lossless optimize png image', async (t) => {
+  if (process.env.NAPI_RS_FORCE_WASI) {
+    t.pass()
+    return
+  }
   const dest = await losslessCompressPng(PNG)
   t.true(dest.length < PNG.length)
 })

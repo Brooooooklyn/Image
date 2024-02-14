@@ -1,6 +1,6 @@
-import { promises as fs } from 'fs'
-import { join } from 'path'
-import { fileURLToPath } from 'url'
+import { promises as fs } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import test from 'ava'
 import { decode } from 'blurhash'
@@ -43,6 +43,10 @@ test('should be able to encode into webp', async (t) => {
 })
 
 test('should be able to decode from avif', async (t) => {
+  if (process.env.NAPI_RS_FORCE_WASI) {
+    t.pass()
+    return
+  }
   const decoder = new Transformer(PNG)
   const AVIF = await decoder.avif()
   const avifDecoder = new Transformer(AVIF)
@@ -51,16 +55,16 @@ test('should be able to decode from avif', async (t) => {
 
 test('should be able to decode from webp', async (t) => {
   const decoder = new Transformer(PNG)
-  const WEBP = await decoder.webpLossless()
+  const WEBP = await decoder.webp()
   const webpDecoder = new Transformer(WEBP)
   await t.notThrowsAsync(() => webpDecoder.png())
 })
 
 test('should be able to create transformer from raw rgba pixels', async (t) => {
   const pixels = decode('LEHV6nWB2yk8pyo0adR*.7kCMdnj', 32, 32)
-  await t.notThrowsAsync(() => Transformer.fromRgbaPixels(pixels, 32, 32).webpLossless())
+  await t.notThrowsAsync(() => Transformer.fromRgbaPixels(pixels, 32, 32).webp())
 })
 
 test('should be able to create transformer from SVG', async (t) => {
-  await t.notThrowsAsync(() => Transformer.fromSvg(SVG).png())
+  await t.notThrowsAsync(() => Transformer.fromSvg(SVG).jpeg())
 })

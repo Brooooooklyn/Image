@@ -1,12 +1,16 @@
 {
-  "name": "@napi-rs/image-android-arm64",
+  "name": "@napi-rs/image-wasm32-wasi",
   "version": "1.7.0",
   "cpu": [
-    "arm64"
+    "wasm32"
   ],
-  "main": "image.android-arm64.node",
+  "main": "image.wasi.cjs",
   "files": [
-    "image.android-arm64.node"
+    "image.wasm32-wasi.wasm",
+    "image.wasi.cjs",
+    "image.wasi-browser.js",
+    "wasi-worker.mjs",
+    "wasi-worker-browser.mjs"
   ],
   "description": "Image processing library",
   "keywords": [
@@ -25,14 +29,15 @@
   },
   "license": "MIT",
   "engines": {
-    "node": ">= 10"
+    "node": ">=14.0.0"
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org/",
     "access": "public"
   },
   "repository": "git@github.com:Brooooooklyn/Image.git",
-  "os": [
-    "android"
-  ]
+  "browser": "image.wasi-browser.js",
+  "dependencies": {
+    "@napi-rs/wasm-runtime": "^0.1.1"
+  }
 }

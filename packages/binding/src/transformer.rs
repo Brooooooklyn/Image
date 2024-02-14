@@ -674,14 +674,14 @@ impl Transformer {
   #[napi]
   /// Support CSS3 color, e.g. rgba(255, 255, 255, .8)
   pub fn from_svg(
-    input: Either<String, Buffer>,
+    input: Either<String, JsBuffer>,
     background: Option<String>,
   ) -> Result<Transformer> {
     let options = Options::default();
 
     let mut tree = match input {
       Either::A(a) => usvg::Tree::from_str(a.as_str(), &options),
-      Either::B(b) => usvg::Tree::from_data(b.as_ref(), &options),
+      Either::B(b) => usvg::Tree::from_data(b.into_value()?.as_ref(), &options),
     }
     .map_err(|err| Error::from_reason(format!("{err}")))?;
     tree.postprocess(Default::default(), &FONT_DB);

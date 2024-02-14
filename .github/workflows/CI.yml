@@ -86,13 +86,11 @@ jobs:
               export LIB_AOM_PKG_CONFIG_PATH=/usr/lib/pkgconfig &&
               yarn workspace @napi-rs/image build --target x86_64-unknown-linux-musl --features with_simd &&
               chmod -R 777 target
-          - host: macos-14
+          - host: macos-latest
             target: aarch64-apple-darwin
             setup: |
-              brew install meson llvm
+              brew install meson
             build: |
-              export cc=clang
-              export cxx=clang++
               MACOSX_DEPLOYMENT_TARGET=11.0 yarn workspace @napi-rs/image build --target aarch64-apple-darwin --features with_simd
           - host: ubuntu-latest
             target: aarch64-unknown-linux-gnu
@@ -110,9 +108,8 @@ jobs:
             target: armv7-unknown-linux-gnueabihf
             setup: |
               sudo apt-get update
-              sudo apt-get install meson gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf -y
-            build: |
-              yarn workspace @napi-rs/image build --target armv7-unknown-linux-gnueabihf --features oxipng_libdeflater --zig --zig-link-only
+              sudo apt-get install meson gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
+            build: CC="arm-linux-gnueabihf-gcc" yarn workspace @napi-rs/image build --target armv7-unknown-linux-gnueabihf --features oxipng_libdeflater --use-napi-cross
           - host: ubuntu-latest
             target: aarch64-linux-android
             build: |
@@ -121,7 +118,6 @@ jobs:
               yarn workspace @napi-rs/image build --target aarch64-linux-android --features with_simd
           - host: ubuntu-latest
             target: aarch64-unknown-linux-musl
-            downloadTarget: aarch64-unknown-linux-musl
             docker: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-alpine
             build: >-
               set -e &&
@@ -131,6 +127,15 @@ jobs:
               apk add --update --repository http://dl-cdn.alpinelinux.org/alpine/edge/testing --no-cache aom-dev perl meson &&
               yarn workspace @napi-rs/image build --target aarch64-unknown-linux-musl --features with_simd &&
               chmod -R 777 target
+          - host: macos-14
+            target: wasm32-wasi-preview1-threads
+            setup: |
+              wget https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-21/wasi-sdk-21.0-macos.tar.gz
+              tar -xvf wasi-sdk-21.0-macos.tar.gz
+            build: |
+              export WASI_SDK_PATH="$(pwd)/wasi-sdk-21.0"
+              yarn workspace @napi-rs/image build --target wasm32-wasi-preview1-threads
+
     name: stable - ${{ matrix.settings.target }} - node@20
     runs-on: ${{ matrix.settings.host }}
     env:
@@ -159,10 +164,11 @@ jobs:
             ~/.cargo/git/db/
             .cargo-cache
             .xwin
+            ~/.napi-rs
             target/
           key: ${{ matrix.settings.target }}-cargo-cache
       - uses: goto-bus-stop/setup-zig@v2
-        if: ${{ matrix.settings.target == 'armv7-unknown-linux-gnueabihf' }}
+        if: ${{ contains(matrix.settings.target, 'musl') }}
         with:
           version: 0.11.0
       - name: Setup toolchain
@@ -186,7 +192,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bindings-${{ matrix.settings.target }}
-          path: packages/*/*.node
+          path: |
+            packages/*/*.node
+            packages/*/*.wasm
           if-no-files-found: error
   build-freebsd:
     runs-on: macos-12
@@ -366,7 +374,6 @@ jobs:
       fail-fast: false
       matrix:
         node:
-          - '18'
           - '20'
     runs-on: ubuntu-latest
     steps:
@@ -394,10 +401,7 @@ jobs:
         with:
           image: node:${{ matrix.node }}-slim
           options: '--platform linux/arm64 -v ${{ github.workspace }}:/build -w /build'
-          run: |
-            set -e
-            yarn test
-            ls -la
+          run: yarn test
   test-linux-arm-gnueabihf-binding:
     name: Test bindings on armv7-unknown-linux-gnueabihf - node@${{ matrix.node }}
     needs:
@@ -434,10 +438,32 @@ jobs:
         with:
           image: node:${{ matrix.node }}-bullseye-slim
           options: '--platform linux/arm/v7 -v ${{ github.workspace }}:/build -w /build'
-          run: |
-            set -e
-            yarn test
-            ls -la
+          run: yarn test
+  test-wasi-on-nodejs:
+    name: Test wasi on Node.js
+    runs-on: macos-14
+    needs:
+      - build
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: bindings-wasm32-wasi-preview1-threads
+          path: artifacts
+      - name: Install dependencies
+        run: yarn install --immutable --mode=skip-build
+      - name: Move artifacts
+        run: yarn artifacts
+        shell: bash
+      - name: List packages
+        run: ls -R packages
+        shell: bash
+      - name: Run tests
+        run: yarn test packages/binding/__test__/transformer.spec.mjs -s
+        env:
+          NAPI_RS_FORCE_WASI: '1'
+
   publish:
     name: Publish
     runs-on: ubuntu-latest
@@ -448,6 +474,7 @@ jobs:
       - test-linux-x64-musl-binding
       - test-linux-aarch64-gnu-binding
       - test-linux-arm-gnueabihf-binding
+      - test-wasi-on-nodejs
     steps:
       - uses: actions/checkout@v4
       - name: Setup node

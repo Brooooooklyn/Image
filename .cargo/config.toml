@@ -9,3 +9,5 @@ rustflags = ["-C", "target-feature=+crc"]
 [target.aarch64-unknown-linux-musl]
 linker = "aarch64-linux-musl-gcc"
 rustflags = ["-C", "target-feature=-crt-static"]
+[target.wasm32-wasi-preview1-threads]
+rustflags = ["-C", "target-feature=+simd128"]

@@ -1,9 +1,6 @@
 {
   "name": "@napi-rs/image-win32-x64-msvc",
   "version": "1.7.0",
-  "os": [
-    "win32"
-  ],
   "cpu": [
     "x64"
   ],
@@ -18,7 +15,8 @@
     "compression",
     "jpeg",
     "jpg",
-    "png"
+    "png",
+    "svg"
   ],
   "author": {
     "email": "github@lyn.one",
@@ -33,5 +31,8 @@
     "registry": "https://registry.npmjs.org/",
     "access": "public"
   },
-  "repository": "git@github.com:Brooooooklyn/Image.git"
+  "repository": "git@github.com:Brooooooklyn/Image.git",
+  "os": [
+    "win32"
+  ]
 }
