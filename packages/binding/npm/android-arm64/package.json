@@ -1,6 +1,6 @@
 {
   "name": "@napi-rs/image-android-arm64",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "cpu": [
     "arm64"
   ],

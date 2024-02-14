@@ -3,6 +3,13 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+# [1.8.0](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.7.0...@napi-rs/image@1.8.0) (2024-02-14)
+
+### Features
+
+- add wasm build ([#81](https://github.com/Brooooooklyn/Image/issues/81)) ([352e7ad](https://github.com/Brooooooklyn/Image/commit/352e7adc5587174bf266b5c5e8d3a96feed0bf0a))
+- upgrade dependencies ([#73](https://github.com/Brooooooklyn/Image/issues/73)) ([eceba75](https://github.com/Brooooooklyn/Image/commit/eceba75142324c30bda235c4f9e8c65df903fb7e))
+
 # [1.7.0](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.6.1...@napi-rs/image@1.7.0) (2023-09-27)
 
 ### Bug Fixes

@@ -1,6 +1,6 @@
 {
   "name": "@napi-rs/image-darwin-x64",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "cpu": [
     "x64"
   ],
