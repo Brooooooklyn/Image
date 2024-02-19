@@ -1,6 +1,6 @@
 {
   "name": "@napi-rs/image-win32-ia32-msvc",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "cpu": [
     "ia32"
   ],

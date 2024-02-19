@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+# [1.9.0](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.8.0...@napi-rs/image@1.9.0) (2024-02-19)
+
+### Features
+
+- upgrade resvg ([#86](https://github.com/Brooooooklyn/Image/issues/86)) ([5c7bb9c](https://github.com/Brooooooklyn/Image/commit/5c7bb9c3ab6b38016fb8567b5ef268e53d2d868f))
+
 # [1.8.0](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.7.0...@napi-rs/image@1.8.0) (2024-02-14)
 
 ### Features
