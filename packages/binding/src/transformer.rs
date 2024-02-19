@@ -688,13 +688,12 @@ impl Transformer {
   ) -> Result<Transformer> {
     let options = Options::default();
 
-    let mut tree = match input {
-      Either::A(a) => usvg::Tree::from_str(a.as_str(), &options),
-      Either::B(b) => usvg::Tree::from_data(b.into_value()?.as_ref(), &options),
+    let tree = match input {
+      Either::A(a) => usvg::Tree::from_str(a.as_str(), &options, &FONT_DB),
+      Either::B(b) => usvg::Tree::from_data(b.into_value()?.as_ref(), &options, &FONT_DB),
     }
     .map_err(|err| Error::from_reason(format!("{err}")))?;
-    tree.postprocess(Default::default(), &FONT_DB);
-    let mut size = tree.size.to_int_size();
+    let mut size = tree.size().to_int_size();
     let min_svg_size = 1000;
     while size.width() < min_svg_size || size.height() < min_svg_size {
       size = resvg::tiny_skia::IntSize::from_wh(size.width() * 2, size.height() * 2).unwrap();
