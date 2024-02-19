@@ -18,8 +18,8 @@ const SVG = await fs.readFile(join(ROOT_DIR, 'input-debian.svg'))
 test('should be able to get metadata from png', async (t) => {
   const decoder = new Transformer(PNG)
   const metadata = await decoder.metadata()
-  t.is(metadata.width, 1052)
-  t.is(metadata.height, 744)
+  t.is(metadata.width, 1024)
+  t.is(metadata.height, 681)
 })
 
 test('should be able to get metadata from jpg', async (t) => {

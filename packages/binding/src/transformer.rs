@@ -565,6 +565,15 @@ impl Task for EncodeTask {
             color_type,
           )
         }?;
+        if output_buf.is_null() {
+          return Err(Error::new(
+            Status::GenericFailure,
+            format!(
+              "Encode lossless webp failed, {}",
+              dynamic_image.as_bytes().len()
+            ),
+          ));
+        }
         return Ok(EncodeOutput::Raw(output_buf, size));
       }
       EncodeOptions::Avif(ref options) => {

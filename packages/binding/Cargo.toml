@@ -35,6 +35,9 @@ image = { version = "0.24", default-features = false, features = [
   "openexr",
 ] }
 jpeg-decoder = "0.3"
+libavif = { version = "0.13", default-features = false, features = [
+  "codec-aom",
+] }
 libc = "0.2"
 lodepng = "3"
 napi = { version = "2", default-features = false, features = ["napi3"] }
@@ -63,16 +66,6 @@ libwebp-sys = { version = "0.9", default-features = false, features = ["std", "p
 
 [target.'cfg(all(target_os = "macos", target_arch = "x86_64"))'.dependencies]
 libwebp-sys = { version = "0.9", default-features = false, features = ["std", "parallel"] }
-
-[target.'cfg(target_family = "wasm")'.dependencies]
-libavif = { git="https://github.com/njaard/libavif-rs.git", rev = "678bd68", version = "0.12", default-features = false, features = [
-  "codec-rav1e",
-] }
-
-[target.'cfg(not(target_family = "wasm"))'.dependencies]
-libavif = { git="https://github.com/njaard/libavif-rs.git", rev = "678bd68", version = "0.12", default-features = false, features = [
-  "codec-aom",
-] }
 
 [build-dependencies]
 napi-build = "2"
