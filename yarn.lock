@@ -2047,12 +2047,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@types/node@npm:^18.11.18":
-  version: 18.19.15
-  resolution: "@types/node@npm:18.19.15"
+"@types/node@npm:^20.9.0":
+  version: 20.11.19
+  resolution: "@types/node@npm:20.11.19"
   dependencies:
     undici-types: "npm:~5.26.4"
-  checksum: 10c0/442e40cbbb75f17c4dbccf0a1a19ffd4b1b6b8cbbcf52ed754c3d3a3992fd1effbe48b9d45b9aae9ac9cebc8717927348b02e009b0a2c0b06b1f813e3b2896e6
+  checksum: 10c0/f451ef0a1d78f29c57bad7b77e49ebec945f2a6d0d7a89851d7e185ee9fe7ad94d651c0dfbcb7858c9fa791310c8b40a881e2260f56bd3c1b7e7ae92723373ae
   languageName: node
   linkType: hard
 
@@ -4135,16 +4135,16 @@ __metadata:
   languageName: node
   linkType: hard
 
-"electron@npm:^28.2.1":
-  version: 28.2.2
-  resolution: "electron@npm:28.2.2"
+"electron@npm:^29.0.0":
+  version: 29.0.0
+  resolution: "electron@npm:29.0.0"
   dependencies:
     "@electron/get": "npm:^2.0.0"
-    "@types/node": "npm:^18.11.18"
+    "@types/node": "npm:^20.9.0"
     extract-zip: "npm:^2.0.1"
   bin:
     electron: cli.js
-  checksum: 10c0/1bdcec2274f719f7a471530b9df8db0f70a73df9a6a64c9f568cd0dad33103e374b2fa135bcd38e7886576be76e9518a2409b5f3ee26709454cd19c0b67b2025
+  checksum: 10c0/0af7ae45225ad117130e43cbd08db3e5f42aed2a74ee329b4a65df63728793d3d7322c2db7eaffbbfa198aa1d092012bd07414fbb305e00bdf3a2762ce7bd043
   languageName: node
   linkType: hard
 
@@ -5550,7 +5550,7 @@ __metadata:
     ava: "npm:^6.1.1"
     blurhash: "npm:^2.0.5"
     chalk: "npm:^5.3.0"
-    electron: "npm:^28.2.1"
+    electron: "npm:^29.0.0"
     lerna: "npm:^8.1.2"
     npm-run-all2: "npm:^6.0.0"
     prettier: "npm:^3.2.5"
