@@ -540,9 +540,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@napi-rs/cli@npm:^3.0.0-alpha.40":
-  version: 3.0.0-alpha.40
-  resolution: "@napi-rs/cli@npm:3.0.0-alpha.40"
+"@napi-rs/cli@npm:^3.0.0-alpha.41":
+  version: 3.0.0-alpha.41
+  resolution: "@napi-rs/cli@npm:3.0.0-alpha.41"
   dependencies:
     "@napi-rs/cross-toolchain": "npm:^0.0.14"
     "@octokit/rest": "npm:^20.0.2"
@@ -570,7 +570,7 @@ __metadata:
   bin:
     napi: dist/cli.js
     napi-raw: cli.mjs
-  checksum: 10c0/0eaa113258b7429794253c7f27866944018dfe05abc85681f6db969101b75acb583189ce4523d0e1863e735648af317a646c3f3914895a0ae951879de135e135
+  checksum: 10c0/49e0b1536944e272252f05dcb2fcc85c8e25daa2883d7515ce622474787de2c71252fb8465bf24eb19c1cb4bde9c366b49ebb5a0309fcf1f416946cb1c1a0979
   languageName: node
   linkType: hard
 
@@ -615,7 +615,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@napi-rs/image@workspace:packages/binding"
   dependencies:
-    "@napi-rs/cli": "npm:^3.0.0-alpha.40"
+    "@napi-rs/cli": "npm:^3.0.0-alpha.41"
     "@napi-rs/wasm-runtime": "npm:^0.1.1"
   languageName: unknown
   linkType: soft
@@ -5543,7 +5543,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "image@workspace:."
   dependencies:
-    "@napi-rs/cli": "npm:^3.0.0-alpha.40"
+    "@napi-rs/cli": "npm:^3.0.0-alpha.41"
     "@taplo/cli": "npm:^0.7.0"
     "@types/node": "npm:^20.11.16"
     "@types/sharp": "npm:^0.31.1"
