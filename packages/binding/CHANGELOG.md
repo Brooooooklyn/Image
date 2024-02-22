@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [1.9.1](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.9.0...@napi-rs/image@1.9.1) (2024-02-22)
+
+### Bug Fixes
+
+- **image:** wasm fallback logic in js-binding file ([#88](https://github.com/Brooooooklyn/Image/issues/88)) ([304227a](https://github.com/Brooooooklyn/Image/commit/304227ac2b717132722f442c83ed8be6c8c122c4))
+
 # [1.9.0](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.8.0...@napi-rs/image@1.9.0) (2024-02-19)
 
 ### Features
