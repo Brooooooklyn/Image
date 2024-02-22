@@ -36,8 +36,9 @@ jobs:
               brew install meson llvm
             build: |
               export PATH="/opt/homebrew/opt/llvm/bin:$PATH"
-              export cc=clang
-              export cxx=clang++
+              export CC=clang
+              export CXX=clang++
+              export CMAKE_BUILD_PARALLEL_LEVEL=2
               clang --version
               yarn workspace @napi-rs/image build --target x86_64-apple-darwin --features with_simd
           - host: windows-latest
@@ -89,9 +90,16 @@ jobs:
           - host: macos-latest
             target: aarch64-apple-darwin
             setup: |
-              brew install meson
+              brew install meson llvm
             build: |
-              MACOSX_DEPLOYMENT_TARGET=11.0 yarn workspace @napi-rs/image build --target aarch64-apple-darwin --features with_simd
+              export PATH="/usr/local/opt/llvm/bin:$PATH"
+              export MACOSX_DEPLOYMENT_TARGET='11.0'
+              export CMAKE_BUILD_PARALLEL_LEVEL=2
+              export CC=clang
+              export CXX=clang++
+              export CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER="clang"
+              clang --version
+              yarn workspace @napi-rs/image build --target aarch64-apple-darwin --features with_simd -- -vvv
           - host: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             docker: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-debian-aarch64
@@ -115,6 +123,7 @@ jobs:
             build: |
               sudo apt update
               sudo apt install meson -y
+              export LDFLAGS="--target=aarch64-linux-android24"
               yarn workspace @napi-rs/image build --target aarch64-linux-android --features with_simd
           - host: ubuntu-latest
             target: aarch64-unknown-linux-musl
@@ -134,6 +143,7 @@ jobs:
               tar -xvf wasi-sdk-21.0-macos.tar.gz
             build: |
               export WASI_SDK_PATH="$(pwd)/wasi-sdk-21.0"
+              export CMAKE_BUILD_PARALLEL_LEVEL=2
               yarn workspace @napi-rs/image build --target wasm32-wasi-preview1-threads
 
     name: stable - ${{ matrix.settings.target }} - node@20
