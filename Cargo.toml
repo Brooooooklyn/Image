@@ -2,10 +2,6 @@
 members = ["./packages/binding"]
 resolver = "2"
 
-[patch.crates-io]
-libdeflater = { git = "https://github.com/adamkewley/libdeflater", tag = "1.19.0" }
-libdeflate-sys = { git = "https://github.com/adamkewley/libdeflater", tag = "1.19.0" }
-
 [profile.release]
 lto = 'fat'
 codegen-units = 1
