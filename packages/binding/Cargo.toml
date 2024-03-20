@@ -18,7 +18,7 @@ with_simd = ["mozjpeg-sys/nasm_simd_parallel_build"]
 [dependencies]
 fast_image_resize = "3"
 imagequant = "4.0.0"
-image = { version = "0.24", default-features = false, features = [
+image = { version = "0.25", default-features = false, features = [
   "jpeg",
   "ico",
   "png",
