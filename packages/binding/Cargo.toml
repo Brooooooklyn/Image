@@ -28,11 +28,7 @@ image = { version = "0.25", default-features = false, features = [
   "bmp",
   "webp",
   "hdr",
-  "dxt",
-  "dds",
-  "farbfeld",
-  "jpeg_rayon",
-  "openexr",
+  "dds"
 ] }
 jpeg-decoder = "0.3"
 libavif = { version = "0.13", default-features = false, features = [

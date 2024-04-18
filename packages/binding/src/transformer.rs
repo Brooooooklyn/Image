@@ -594,7 +594,7 @@ impl Task for EncodeTask {
             dynamic_image.as_bytes(),
             dynamic_image.width(),
             dynamic_image.height(),
-            dynamic_image.color(),
+            dynamic_image.color().into(),
           )
           .map_err(|err| {
             Error::new(
