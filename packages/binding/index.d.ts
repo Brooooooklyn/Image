@@ -131,7 +131,7 @@ export interface AvifConfig {
  * https://en.wikipedia.org/wiki/Chroma_subsampling#Types_of_sampling_and_subsampling
  * https://developer.mozilla.org/en-US/docs/Web/Media/Formats/Video_concepts
  */
-export const enum ChromaSubsampling {
+export enum ChromaSubsampling {
   /**
    * Each of the three Y'CbCr components has the same sample rate, thus there is no chroma subsampling. This scheme is sometimes used in high-end film scanners and cinematic post-production.
    * Note that "4:4:4" may instead be wrongly referring to R'G'B' color space, which implicitly also does not have any chroma subsampling (except in JPEG R'G'B' can be subsampled).
@@ -170,7 +170,7 @@ export const enum ChromaSubsampling {
   Yuv400 = 3
 }
 
-export const enum CompressionType {
+export enum CompressionType {
   /** Default compression level */
   Default = 0,
   /** Fast, minimal compression */
@@ -183,7 +183,7 @@ export function compressJpeg(input: Buffer, options?: JpegCompressOptions | unde
 
 export function compressJpegSync(input: Buffer, options?: JpegCompressOptions | undefined | null): Buffer
 
-export const enum FastResizeFilter {
+export enum FastResizeFilter {
   /**
    * Each pixel of source image contributes to one pixel of the
    * destination image with identical weights. For upscaling is equivalent
@@ -230,7 +230,7 @@ export interface FastResizeOptions {
   fit?: ResizeFit
 }
 
-export const enum FilterType {
+export enum FilterType {
   /**
    * No processing done, best used for low bit depth greyscale or data with a
    * low color count
@@ -261,7 +261,7 @@ export interface JpegCompressOptions {
   optimizeScans?: boolean
 }
 
-export const enum JsColorType {
+export enum JsColorType {
   /** Pixel is 8-bit luminance */
   L8 = 0,
   /** Pixel is 8-bit luminance with an alpha channel */
@@ -297,7 +297,7 @@ export interface Metadata {
   colorType: JsColorType
 }
 
-export const enum Orientation {
+export enum Orientation {
   /** Normal */
   Horizontal = 1,
   MirrorHorizontal = 2,
@@ -381,7 +381,7 @@ export interface PngQuantOptions {
   posterization?: number
 }
 
-export const enum PngRowFilter {
+export enum PngRowFilter {
   None = 0,
   Sub = 1,
   Up = 2,
@@ -462,7 +462,7 @@ export const enum PngRowFilter {
  *   </tr>
  * </table>
  */
-export const enum ResizeFilterType {
+export enum ResizeFilterType {
   /** Nearest Neighbor */
   Nearest = 0,
   /** Linear Filter */
@@ -475,7 +475,7 @@ export const enum ResizeFilterType {
   Lanczos3 = 4
 }
 
-export const enum ResizeFit {
+export enum ResizeFit {
   /**
    * (default) Preserving aspect ratio
    * ensure the image covers both provided dimensions by cropping/clipping to fit.

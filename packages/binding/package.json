@@ -54,8 +54,8 @@
   },
   "scripts": {
     "artifacts": "napi artifacts -d ../../artifacts",
-    "build": "napi build --platform --release",
-    "build:debug": "napi build --platform",
+    "build": "napi build --platform --no-const-enum --release",
+    "build:debug": "napi build --platform --no-const-enum",
     "format": "run-p format:prettier format:rs",
     "format:prettier": "prettier --config ./package.json -w .",
     "format:rs": "cargo fmt --all",

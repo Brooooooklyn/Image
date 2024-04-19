@@ -62,7 +62,7 @@ export interface Metadata {
   colorType: JsColorType
 }
 
-export const enum JsColorType {
+export enum JsColorType {
   /** Pixel is 8-bit luminance */
   L8 = 0,
   /** Pixel is 8-bit luminance with an alpha channel */
@@ -172,7 +172,7 @@ export interface AvifConfig {
  * https://en.wikipedia.org/wiki/Chroma_subsampling#Types_of_sampling_and_subsampling
  * https://developer.mozilla.org/en-US/docs/Web/Media/Formats/Video_concepts
  */
-export const enum ChromaSubsampling {
+export enum ChromaSubsampling {
   /**
    * Each of the three Y'CbCr components has the same sample rate, thus there is no chroma subsampling. This scheme is sometimes used in high-end film scanners and cinematic post-production.
    * Note that "4:4:4" may instead be wrongly referring to R'G'B' color space, which implicitly also does not have any chroma subsampling (except in JPEG R'G'B' can be subsampled).
@@ -228,7 +228,7 @@ export interface PngEncodeOptions {
   /** Default is `FilterType::NoFilter` */
   filterType?: FilterType | undefined | null
 }
-export const enum CompressionType {
+export enum CompressionType {
   /** Default compression level */
   Default = 0,
   /** Fast, minimal compression */
@@ -240,7 +240,7 @@ export const enum CompressionType {
   /** Run-length encoding compression */
   Rle = 4,
 }
-export const enum FilterType {
+export enum FilterType {
   /**
    * No processing done, best used for low bit depth greyscale or data with a
    * low color count
@@ -405,7 +405,7 @@ invert(): this
  */
 resize(width: number, height?: number | undefined | null, filterType?: ResizeFilterType | undefined | null): this
 
-export const enum ResizeFilterType {
+export enum ResizeFilterType {
   /** Nearest Neighbor */
   Nearest = 0,
   /** Linear Filter */
