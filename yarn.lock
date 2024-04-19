@@ -68,12 +68,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@emnapi/core@npm:^0.45.0":
-  version: 0.45.0
-  resolution: "@emnapi/core@npm:0.45.0"
+"@emnapi/core@npm:^1.1.0":
+  version: 1.1.1
+  resolution: "@emnapi/core@npm:1.1.1"
   dependencies:
     tslib: "npm:^2.4.0"
-  checksum: 10c0/26071cfe32a5a15068483ed36a152c03add319166c30e6cb81f0d6eb2614e69f836daa2d69af5af2e00fc2b8335f172e5ce2ee91f1819b3e689c908a7883433f
+  checksum: 10c0/2efa2ea46d76a0b4983efd29fff489e779f0720a9225eea644f0d1be569f6321755a33fd6ff6c763d018db75ca6230af339c9a2c6c25f55a46701da9879a30a9
   languageName: node
   linkType: hard
 
@@ -800,7 +800,7 @@ __metadata:
   resolution: "@napi-rs/image@workspace:packages/binding"
   dependencies:
     "@napi-rs/cli": "npm:^3.0.0-alpha.41"
-    "@napi-rs/wasm-runtime": "npm:^0.1.1"
+    "@napi-rs/wasm-runtime": "npm:^0.2.0"
   languageName: unknown
   linkType: soft
 
@@ -1201,14 +1201,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@napi-rs/wasm-runtime@npm:^0.1.1":
-  version: 0.1.1
-  resolution: "@napi-rs/wasm-runtime@npm:0.1.1"
+"@napi-rs/wasm-runtime@npm:^0.2.0":
+  version: 0.2.0
+  resolution: "@napi-rs/wasm-runtime@npm:0.2.0"
   dependencies:
-    "@emnapi/core": "npm:^0.45.0"
-    "@emnapi/runtime": "npm:^0.45.0"
-    "@tybys/wasm-util": "npm:^0.8.1"
-  checksum: 10c0/e9718b1ec7d6754f04bcd4df05993347360d17889a357be1d6d1b6f26fc52f70a2b73149c2bcf6bd204c5e3abd8656e086feeb5a04a9a3114bc90e8b3a72ff74
+    "@emnapi/core": "npm:^1.1.0"
+    "@emnapi/runtime": "npm:^1.1.0"
+    "@tybys/wasm-util": "npm:^0.8.2"
+  checksum: 10c0/8e3cd64def117eccb938439d1d6c4ad50491ef43f362e5cc92c8386fbb2d19a30a57a5bed3027bb721d594523c4d5ff5f0fe5ca74ff0bf05168a51d189e987a1
   languageName: node
   linkType: hard
 
@@ -2050,12 +2050,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@tybys/wasm-util@npm:^0.8.1":
-  version: 0.8.1
-  resolution: "@tybys/wasm-util@npm:0.8.1"
+"@tybys/wasm-util@npm:^0.8.2":
+  version: 0.8.2
+  resolution: "@tybys/wasm-util@npm:0.8.2"
   dependencies:
     tslib: "npm:^2.4.0"
-  checksum: 10c0/4e0975ee0ed8202e4af0be45a379ac11fa98e8c17cb5a038bc1d29f6e1bd37eb84be991d725d214d0f257d4aaccd67e5ac6e68c3c81cdd3c7f3f678d05d52cb7
+  checksum: 10c0/3d2c1afa8623625311655b19c28ba6efa30070b86c9e7ad7d7e68295b2bc855f34a383ef39e4be3ee159db70ce28d28343df7885072e831416f16962229ce758
   languageName: node
   linkType: hard
 
