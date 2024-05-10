@@ -43,12 +43,11 @@ test('should be able to encode into webp', async (t) => {
 })
 
 test('should be able to decode from avif', async (t) => {
-  if (process.env.NAPI_RS_FORCE_WASI) {
-    t.pass()
-    return
-  }
   const decoder = new Transformer(PNG)
-  const AVIF = await decoder.avif()
+  const AVIF = await decoder.avif({
+    speed: 10,
+    threads: 1,
+  })
   const avifDecoder = new Transformer(AVIF)
   await t.notThrowsAsync(() => avifDecoder.png())
 })
@@ -65,6 +64,6 @@ test('should be able to create transformer from raw rgba pixels', async (t) => {
   await t.notThrowsAsync(() => Transformer.fromRgbaPixels(pixels, 32, 32).webp())
 })
 
-test('should be able to create transformer from SVG', async (t) => {
-  await t.notThrowsAsync(() => Transformer.fromSvg(SVG).jpeg())
+test('should be able to create transformer from SVG', (t) => {
+  t.notThrows(() => Transformer.fromSvg(SVG).jpegSync())
 })
