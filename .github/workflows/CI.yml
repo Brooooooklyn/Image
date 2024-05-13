@@ -30,12 +30,12 @@ jobs:
       fail-fast: false
       matrix:
         settings:
-          - host: macos-14
+          - host: macos-latest
             target: x86_64-apple-darwin
             setup: |
               brew install meson llvm
             build: |
-              export PATH="/opt/homebrew/opt/llvm/bin:$PATH"
+              export PATH="$(brew --prefix llvm)/bin:$PATH"
               export CC=clang
               export CXX=clang++
               export CMAKE_BUILD_PARALLEL_LEVEL=2
@@ -46,8 +46,9 @@ jobs:
               python -m pip install meson
               yarn workspace @napi-rs/image build --target x86_64-pc-windows-msvc --features with_simd
             target: x86_64-pc-windows-msvc
-          - host: macos-14
+          - host: macos-latest
             setup: |
+              brew update
               brew install meson llvm
               cargo install cargo-xwin
             build: |
@@ -56,7 +57,7 @@ jobs:
               export CFLAGS="-mavx2 -mpclmul"
               export CXXFLAGS="-mavx2 -mpclmul"
               export CARGO_PROFILE_RELEASE_LTO="false"
-              export PATH="/opt/homebrew/opt/llvm/bin:$PATH"
+              export PATH="$(brew --prefix llvm)/bin:$PATH"
               clang --version
               CARGO="cargo-xwin" yarn workspace @napi-rs/image build --features with_simd --target i686-pc-windows-msvc
             target: i686-pc-windows-msvc
@@ -90,16 +91,19 @@ jobs:
           - host: macos-latest
             target: aarch64-apple-darwin
             setup: |
+              brew update
               brew install meson llvm
             build: |
-              export PATH="/usr/local/opt/llvm/bin:$PATH"
+              export PATH="$(brew --prefix llvm)/bin:$PATH"
               export MACOSX_DEPLOYMENT_TARGET='11.0'
               export CMAKE_BUILD_PARALLEL_LEVEL=2
               export CC=clang
               export CXX=clang++
+              export CARGO_PROFILE_RELEASE_CODEGEN_UNITS="16"
+              export CARGO_PROFILE_RELEASE_LTO="thin"
               export CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER="clang"
               clang --version
-              yarn workspace @napi-rs/image build --target aarch64-apple-darwin --features with_simd -- -vvv
+              yarn workspace @napi-rs/image build --target aarch64-apple-darwin --features with_simd
           - host: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             docker: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-debian-aarch64
@@ -136,15 +140,15 @@ jobs:
               apk add --update --repository http://dl-cdn.alpinelinux.org/alpine/edge/testing --no-cache aom-dev perl meson &&
               yarn workspace @napi-rs/image build --target aarch64-unknown-linux-musl --features with_simd &&
               chmod -R 777 target
-          - host: macos-14
-            target: wasm32-wasi-preview1-threads
+          - host: macos-latest
+            target: wasm32-wasip1-threads
             setup: |
-              wget https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-21/wasi-sdk-21.0-macos.tar.gz
-              tar -xvf wasi-sdk-21.0-macos.tar.gz
+              wget https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-22/wasi-sdk-22.0-macos.tar.gz
+              tar -xvf wasi-sdk-22.0-macos.tar.gz
             build: |
-              export WASI_SDK_PATH="$(pwd)/wasi-sdk-21.0"
+              export WASI_SDK_PATH="$(pwd)/wasi-sdk-22.0"
               export CMAKE_BUILD_PARALLEL_LEVEL=2
-              yarn workspace @napi-rs/image build --target wasm32-wasi-preview1-threads
+              yarn workspace @napi-rs/image build --target wasm32-wasip1-threads
 
     name: stable - ${{ matrix.settings.target }} - node@20
     runs-on: ${{ matrix.settings.host }}
@@ -180,7 +184,7 @@ jobs:
       - uses: goto-bus-stop/setup-zig@v2
         if: ${{ contains(matrix.settings.target, 'musl') }}
         with:
-          version: 0.11.0
+          version: 0.12.0
       - name: Setup toolchain
         run: ${{ matrix.settings.setup }}
         if: ${{ matrix.settings.setup }}
@@ -265,9 +269,9 @@ jobs:
         settings:
           - host: windows-latest
             target: x86_64-pc-windows-msvc
-          - host: macos-14
+          - host: macos-latest
             target: x86_64-apple-darwin
-          - host: macos-14
+          - host: macos-latest
             target: aarch64-apple-darwin
         node:
           - '18'
@@ -451,7 +455,7 @@ jobs:
           run: yarn test
   test-wasi-on-nodejs:
     name: Test wasi on Node.js
-    runs-on: macos-14
+    runs-on: macos-latest
     needs:
       - build
     steps:
@@ -459,7 +463,7 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          name: bindings-wasm32-wasi-preview1-threads
+          name: bindings-wasm32-wasip1-threads
           path: artifacts
       - name: Install dependencies
         run: yarn install --immutable --mode=skip-build
