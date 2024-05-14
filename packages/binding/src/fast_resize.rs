@@ -1,7 +1,5 @@
-use std::num::NonZeroU32;
-
 use fast_image_resize as fr;
-use fr::FilterType;
+use fr::{images::Image, FilterType};
 use image::DynamicImage;
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
@@ -77,81 +75,56 @@ pub struct FastResizeOptions {
   pub fit: Option<ResizeFit>,
 }
 
-pub fn fast_resize(img: &DynamicImage, options: FastResizeOptions) -> Result<fr::Image> {
-  let width = NonZeroU32::new(img.width())
-    .ok_or_else(|| Error::new(Status::InvalidArg, "Image width should not be 0".to_owned()))?;
-  let height = NonZeroU32::new(img.height()).ok_or_else(|| {
-    Error::new(
-      Status::InvalidArg,
-      "Image height should not be 0".to_owned(),
-    )
-  })?;
+pub fn fast_resize(img: &DynamicImage, options: FastResizeOptions) -> Result<Image> {
+  let width = img.width();
+  let height = img.height();
   let mut rgba8 = img.to_rgba8();
-  let mut src_image = fr::Image::from_slice_u8(width, height, rgba8.as_mut(), fr::PixelType::U8x4)
+  let mut src_image = Image::from_slice_u8(width, height, rgba8.as_mut(), fr::PixelType::U8x4)
     .map_err(|err| Error::new(Status::GenericFailure, format!("{err}")))?;
 
   // Multiple RGB channels of source image by alpha channel
   // (not required for the Nearest algorithm)
   let alpha_mul_div = fr::MulDiv::default();
   alpha_mul_div
-    .multiply_alpha_inplace(&mut src_image.view_mut())
+    .multiply_alpha_inplace(&mut src_image)
     .map_err(|err| Error::new(Status::GenericFailure, format!("{err}")))?;
 
   // Create container for data of destination image
-  let mut dst_width = NonZeroU32::new(options.width).ok_or_else(|| {
-    Error::new(
-      Status::InvalidArg,
-      "Resized width should not be 0".to_owned(),
-    )
-  })?;
-  let mut dst_height = NonZeroU32::new(
-    options
-      .height
-      .unwrap_or_else(|| (options.width as f32 / img.width() as f32 * img.height() as f32) as u32),
-  )
-  .ok_or_else(|| {
-    Error::new(
-      Status::InvalidArg,
-      "Resized height should not be 0".to_owned(),
-    )
-  })?;
+  let mut dst_width = options.width;
+  let mut dst_height = options
+    .height
+    .unwrap_or_else(|| (options.width as f32 / img.width() as f32 * img.height() as f32) as u32);
+
+  let mut resize_options = fr::ResizeOptions {
+    algorithm: fr::ResizeAlg::Convolution(options.filter.unwrap_or_default().into()),
+    ..Default::default()
+  };
 
   match options.fit.unwrap_or_default() {
     ResizeFit::Cover => {
-      src_image
-        .view()
-        .set_crop_box_to_fit_dst_size(dst_width, dst_height, None);
+      resize_options = resize_options
+        .fit_into_destination(Some(((dst_width as f64) / 2.0, (dst_height as f64) / 2.0)));
     }
     ResizeFit::Fill => {}
     ResizeFit::Inside => {
-      let (width, height) = crate::utils::resize_dimensions(
-        width.get(),
-        height.get(),
-        dst_width.get(),
-        dst_height.get(),
-        false,
-      );
-      dst_width = NonZeroU32::new(width).unwrap();
-      dst_height = NonZeroU32::new(height).unwrap();
+      let (width, height) =
+        crate::utils::resize_dimensions(width, height, dst_width, dst_height, false);
+      dst_width = width;
+      dst_height = height;
     }
   }
-  let mut dst_image = fr::Image::new(dst_width, dst_height, src_image.pixel_type());
-
-  // Get mutable view of destination image data
-  let mut dst_view = dst_image.view_mut();
+  let mut dst_image = Image::new(dst_width, dst_height, src_image.pixel_type());
 
   // Create Resizer instance and resize source image
   // into buffer of destination image
-  let mut resizer = fr::Resizer::new(fr::ResizeAlg::Convolution(
-    options.filter.unwrap_or_default().into(),
-  ));
+  let mut resizer = fr::Resizer::new();
   resizer
-    .resize(&src_image.view(), &mut dst_view)
+    .resize(&src_image, &mut dst_image, Some(&resize_options))
     .map_err(|err| Error::new(Status::GenericFailure, format!("{err}")))?;
 
   // Divide RGB channels of destination image by alpha
   alpha_mul_div
-    .divide_alpha_inplace(&mut dst_view)
+    .divide_alpha_inplace(&mut dst_image)
     .map_err(|err| Error::new(Status::GenericFailure, format!("{err}")))?;
   Ok(dst_image)
 }
