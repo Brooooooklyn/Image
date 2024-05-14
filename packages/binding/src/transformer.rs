@@ -495,8 +495,8 @@ impl Task for EncodeTask {
       let resized_image = fast_resize(&meta.image, options)?;
       meta.image = DynamicImage::ImageRgba8(
         RgbaImage::from_raw(
-          resized_image.width().get(),
-          resized_image.height().get(),
+          resized_image.width(),
+          resized_image.height(),
           resized_image.into_vec(),
         )
         .ok_or_else(|| {
