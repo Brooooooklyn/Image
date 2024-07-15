@@ -20,7 +20,7 @@ use crate::{
   png::PngEncodeOptions,
 };
 
-static FONT_DB: once_cell::sync::OnceCell<Database> = once_cell::sync::OnceCell::new();
+static FONT_DB: once_cell::sync::OnceCell<Arc<Database>> = once_cell::sync::OnceCell::new();
 
 pub enum EncodeOptions {
   Png(PngEncodeOptions),
@@ -679,15 +679,18 @@ impl Transformer {
   #[napi]
   /// Support CSS3 color, e.g. rgba(255, 255, 255, .8)
   pub fn from_svg(input: Either<String, &[u8]>, background: Option<String>) -> Result<Transformer> {
-    let options = Options::default();
-    let font_db = FONT_DB.get_or_init(|| {
-      let mut fontdb = Database::new();
-      fontdb.load_system_fonts();
-      fontdb
-    });
+    let font_db = FONT_DB
+      .get_or_init(|| {
+        let mut fontdb = Database::new();
+        fontdb.load_system_fonts();
+        Arc::new(fontdb)
+      })
+      .clone();
+    let mut options = Options::default();
+    options.fontdb = font_db;
     let tree = match input {
-      Either::A(a) => usvg::Tree::from_str(a.as_str(), &options, &font_db),
-      Either::B(b) => usvg::Tree::from_data(b, &options, &font_db),
+      Either::A(a) => usvg::Tree::from_str(a.as_str(), &options),
+      Either::B(b) => usvg::Tree::from_data(b, &options),
     }
     .map_err(|err| Error::from_reason(format!("{err}")))?;
     let mut size = tree.size().to_int_size();
