@@ -15,4 +15,7 @@ export default withNextra({
   experimental: {
     esmExternals: true,
   },
+  images: {
+    unoptimized: true,
+  },
 })
