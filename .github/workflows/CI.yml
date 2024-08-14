@@ -126,7 +126,10 @@ jobs:
             build: |
               sudo apt update
               sudo apt install meson -y
-              export LDFLAGS="--target=aarch64-linux-android24"
+              export LDFLAGS="-fuse-ld=lld"
+              export CC=aarch64-linux-android24-clang
+              export CXX=aarch64-linux-android24-clang++
+              export CMAKE_TOOLCHAIN_FILE_aarch64_linux_android="$(pwd)/packages/binding/android-determine.cmake"
               yarn workspace @napi-rs/image build --target aarch64-linux-android --features with_simd
           - host: ubuntu-latest
             target: aarch64-unknown-linux-musl
