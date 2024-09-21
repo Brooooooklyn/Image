@@ -120,7 +120,10 @@ jobs:
             setup: |
               sudo apt-get update
               sudo apt-get install meson gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
-            build: CC="arm-linux-gnueabihf-gcc" yarn workspace @napi-rs/image build --target armv7-unknown-linux-gnueabihf --features oxipng_libdeflater --use-napi-cross
+            build: |
+              export CC="arm-linux-gnueabihf-gcc"
+              export CARGO_CFG_TARGET_FEATURE="neon"
+              yarn workspace @napi-rs/image build --target armv7-unknown-linux-gnueabihf --features oxipng_libdeflater --use-napi-cross
           - host: ubuntu-latest
             target: aarch64-linux-android
             build: |
