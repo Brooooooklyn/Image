@@ -19,6 +19,7 @@ pub struct AvifConfig {
 }
 
 #[napi]
+#[derive(Clone, Copy)]
 /// https://en.wikipedia.org/wiki/Chroma_subsampling#Types_of_sampling_and_subsampling
 /// https://developer.mozilla.org/en-US/docs/Web/Media/Formats/Video_concepts
 pub enum ChromaSubsampling {

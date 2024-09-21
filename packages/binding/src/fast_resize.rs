@@ -5,11 +5,11 @@ use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
 #[napi]
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub enum FastResizeFilter {
   /// Each pixel of source image contributes to one pixel of the
   /// destination image with identical weights. For upscaling is equivalent
-  /// of `Nearest` resize algorithm.    
+  /// of `Nearest` resize algorithm.
   Box,
   /// Bilinear filter calculate the output pixel value using linear
   /// interpolation on all pixels that may contribute to the output value.
@@ -49,6 +49,7 @@ impl From<FastResizeFilter> for FilterType {
 }
 
 #[napi]
+#[derive(Clone, Copy)]
 pub enum ResizeFit {
   /// (default) Preserving aspect ratio
   /// ensure the image covers both provided dimensions by cropping/clipping to fit.
