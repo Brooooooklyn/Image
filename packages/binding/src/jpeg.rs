@@ -1,6 +1,6 @@
 use std::io::Cursor;
 
-use napi::{bindgen_prelude::*, JsBuffer};
+use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
 #[napi(object)]
@@ -16,14 +16,14 @@ pub struct JpegCompressOptions {
 #[napi]
 pub fn compress_jpeg_sync(
   env: Env,
-  input: Buffer,
+  input: &[u8],
   options: Option<JpegCompressOptions>,
-) -> Result<JsBuffer> {
+) -> Result<BufferSlice> {
   let options = options.unwrap_or_default();
   let quality = options.quality.unwrap_or(100);
   if quality != 100 {
-    let img = image::load_from_memory_with_format(input.as_ref(), image::ImageFormat::Jpeg)
-      .map_err(|err| {
+    let img =
+      image::load_from_memory_with_format(input, image::ImageFormat::Jpeg).map_err(|err| {
         Error::new(
           Status::InvalidArg,
           format!("Load input jpeg image failed {err}"),
@@ -37,14 +37,13 @@ pub fn compress_jpeg_sync(
         format!("Encode image from input jpeg failed {err}"),
       )
     })?;
-    return env
-      .create_buffer_with_data(dest.into_inner())
-      .map(|b| b.into_raw());
+    return BufferSlice::from_data(&env, dest.into_inner());
   }
   let (buf, outsize, de_c_info, compress_c_info) =
-    unsafe { moz_jpeg_compress(input.as_ref(), &options) }?;
+    unsafe { moz_jpeg_compress(input, &options) }?;
   unsafe {
-    env.create_buffer_with_borrowed_data(
+    BufferSlice::from_external(
+      &env,
       buf,
       outsize,
       (de_c_info, compress_c_info, buf),
@@ -55,7 +54,6 @@ pub fn compress_jpeg_sync(
       },
     )
   }
-  .map(|v| v.into_raw())
 }
 
 /// # Safety
@@ -156,7 +154,7 @@ unsafe impl Send for ThreadsafeMozjpegCompressOutput {}
 
 pub struct CompressJpegTask {
   options: JpegCompressOptions,
-  input: Buffer,
+  input: Uint8Array,
 }
 
 pub enum JpegOptimizeOutput {
@@ -167,7 +165,7 @@ pub enum JpegOptimizeOutput {
 #[napi]
 impl Task for CompressJpegTask {
   type Output = JpegOptimizeOutput;
-  type JsValue = JsBuffer;
+  type JsValue = Buffer;
 
   fn compute(&mut self) -> Result<Self::Output> {
     let quality = self.options.quality.unwrap_or(100);
@@ -212,7 +210,8 @@ impl Task for CompressJpegTask {
           compress_c_info,
         } = *moz_jpeg_output;
         unsafe {
-          env.create_buffer_with_borrowed_data(
+          BufferSlice::from_external(
+            &env,
             buf,
             len,
             (de_c_info, compress_c_info, buf),
@@ -224,15 +223,15 @@ impl Task for CompressJpegTask {
           )
         }
       }
-      JpegOptimizeOutput::Lossy(buf) => env.create_buffer_with_data(buf),
+      JpegOptimizeOutput::Lossy(buf) => BufferSlice::from_data(&env, buf),
     }
-    .map(|v| v.into_raw())
+    .and_then(|slice| slice.into_buffer(&env))
   }
 }
 
 #[napi]
 pub fn compress_jpeg(
-  input: Buffer,
+  input: Uint8Array,
   options: Option<JpegCompressOptions>,
   signal: Option<AbortSignal>,
 ) -> AsyncTask<CompressJpegTask> {

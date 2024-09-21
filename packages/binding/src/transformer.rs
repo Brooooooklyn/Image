@@ -7,7 +7,7 @@ use image::{
   imageops::FilterType, ColorType, DynamicImage, ImageBuffer, ImageEncoder, ImageFormat, RgbaImage,
 };
 use libavif::AvifData;
-use napi::{bindgen_prelude::*, JsBuffer};
+use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use resvg::{
   tiny_skia,
@@ -39,7 +39,7 @@ pub enum EncodeOptions {
 
 #[napi]
 #[repr(u16)]
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub enum Orientation {
   #[default]
   /// Normal
@@ -81,7 +81,7 @@ impl TryFrom<u16> for Orientation {
 }
 
 #[napi]
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 /// Available Sampling Filters.
 ///
 /// ## Examples
@@ -185,7 +185,7 @@ pub(crate) struct ImageMetaData {
 
 /// `env` from `Node.js` can ensure the thread safe.
 pub(crate) struct ThreadSafeDynamicImage {
-  raw: Buffer,
+  raw: Uint8Array,
   image: *mut Option<ImageMetaData>,
 }
 
@@ -198,7 +198,7 @@ impl Drop for ThreadSafeDynamicImage {
 }
 
 impl ThreadSafeDynamicImage {
-  fn new(input: Buffer) -> Self {
+  fn new(input: Uint8Array) -> Self {
     ThreadSafeDynamicImage {
       image: Box::into_raw(Box::new(None)),
       raw: input,
@@ -412,7 +412,7 @@ struct ImageTransformArgs {
   huerotate: Option<i32>,
   orientation: Option<Orientation>,
   crop: Option<(u32, u32, u32, u32)>,
-  overlay: Vec<(Buffer, i64, i64)>,
+  overlay: Vec<(Uint8Array, i64, i64)>,
 }
 
 pub struct EncodeTask {
@@ -427,12 +427,34 @@ pub enum EncodeOutput {
   Avif(AvifData<'static>),
 }
 
+impl EncodeOutput {
+  pub(crate) fn into_buffer_slice(self, env: &Env) -> Result<BufferSlice> {
+    match self {
+      EncodeOutput::Raw(ptr, len) => unsafe {
+        BufferSlice::from_external(env, ptr, len, ptr, |pointer, _| {
+          Vec::from_raw_parts(pointer, len, len);
+        })
+      },
+      EncodeOutput::Buffer(buf) => Ok(BufferSlice::from_data(env, buf)?),
+      EncodeOutput::Avif(avif_data) => {
+        let len = avif_data.len();
+        let data_ptr = avif_data.as_slice().as_ptr();
+        unsafe {
+          BufferSlice::from_external(env, data_ptr.cast_mut(), len, avif_data, |data, _| {
+            drop(data);
+          })
+        }
+      }
+    }
+  }
+}
+
 unsafe impl Send for EncodeOutput {}
 
 #[napi]
 impl Task for EncodeTask {
   type Output = EncodeOutput;
-  type JsValue = JsBuffer;
+  type JsValue = Buffer;
 
   fn compute(&mut self) -> Result<Self::Output> {
     let meta = self.image.get(self.image_transform_args.rotate)?;
@@ -637,26 +659,9 @@ impl Task for EncodeTask {
   }
 
   fn resolve(&mut self, env: Env, output: Self::Output) -> Result<Self::JsValue> {
-    match output {
-      EncodeOutput::Raw(buf, size) => unsafe {
-        env
-          .create_buffer_with_borrowed_data(buf, size, buf, move |buf_ptr, _env| {
-            Vec::from_raw_parts(buf_ptr, size, size);
-          })
-          .map(|v| v.into_raw())
-      },
-      EncodeOutput::Buffer(buf) => env.create_buffer_with_data(buf).map(|b| b.into_raw()),
-      EncodeOutput::Avif(avif_data) => {
-        let len = avif_data.len();
-        let data_ptr = avif_data.as_slice().as_ptr();
-        unsafe {
-          env.create_buffer_with_borrowed_data(data_ptr.cast_mut(), len, avif_data, |data, _env| {
-            drop(data)
-          })
-        }
-        .map(|b| b.into_raw())
-      }
-    }
+    output
+      .into_buffer_slice(&env)
+      .and_then(|slice| slice.into_buffer(&env))
   }
 }
 
@@ -669,7 +674,7 @@ pub struct Transformer {
 #[napi]
 impl Transformer {
   #[napi(constructor)]
-  pub fn new(input: Buffer) -> Transformer {
+  pub fn new(input: Uint8Array) -> Transformer {
     Self {
       dynamic_image: Arc::new(ThreadSafeDynamicImage::new(input)),
       image_transform_args: ImageTransformArgs::default(),
@@ -686,8 +691,10 @@ impl Transformer {
         Arc::new(fontdb)
       })
       .clone();
-    let mut options = Options::default();
-    options.fontdb = font_db;
+    let options = Options::<'_> {
+      fontdb: font_db,
+      ..Default::default()
+    };
     let tree = match input {
       Either::A(a) => usvg::Tree::from_str(a.as_str(), &options),
       Either::B(b) => usvg::Tree::from_data(b, &options),
@@ -916,7 +923,7 @@ impl Transformer {
 
   #[napi]
   /// Overlay an image at a given coordinate (x, y)
-  pub fn overlay(&mut self, on_top: Buffer, x: i64, y: i64) -> Result<&Self> {
+  pub fn overlay(&mut self, on_top: Uint8Array, x: i64, y: i64) -> Result<&Self> {
     self.image_transform_args.overlay.push((on_top, x, y));
     Ok(self)
   }
@@ -964,7 +971,7 @@ impl Transformer {
   /// The quality factor `quality_factor` ranges from 0 to 100 and controls the loss and quality during compression.
   /// The value 0 corresponds to low quality and small output sizes, whereas 100 is the highest quality and largest output size.
   /// https://developers.google.com/speed/webp/docs/api#simple_encoding_api
-  pub fn webp_sync(&mut self, env: Env, quality_factor: Option<u32>) -> Result<JsBuffer> {
+  pub fn webp_sync(&mut self, env: Env, quality_factor: Option<u32>) -> Result<Buffer> {
     let mut encoder = EncodeTask {
       image: self.dynamic_image.clone(),
       options: EncodeOptions::Webp(quality_factor.unwrap_or(90)),
@@ -987,7 +994,7 @@ impl Transformer {
   }
 
   #[napi]
-  pub fn webp_lossless_sync(&mut self, env: Env) -> Result<JsBuffer> {
+  pub fn webp_lossless_sync(&mut self, env: Env) -> Result<Buffer> {
     let mut encoder = EncodeTask {
       image: self.dynamic_image.clone(),
       options: EncodeOptions::WebpLossless,
@@ -1014,7 +1021,7 @@ impl Transformer {
   }
 
   #[napi]
-  pub fn avif_sync(&mut self, env: Env, options: Option<AvifConfig>) -> Result<JsBuffer> {
+  pub fn avif_sync(&mut self, env: Env, options: Option<AvifConfig>) -> Result<Buffer> {
     let mut encoder = EncodeTask {
       image: self.dynamic_image.clone(),
       options: EncodeOptions::Avif(options),
@@ -1041,7 +1048,7 @@ impl Transformer {
   }
 
   #[napi]
-  pub fn png_sync(&mut self, env: Env, options: Option<PngEncodeOptions>) -> Result<JsBuffer> {
+  pub fn png_sync(&mut self, env: Env, options: Option<PngEncodeOptions>) -> Result<Buffer> {
     let mut encoder = EncodeTask {
       image: self.dynamic_image.clone(),
       options: EncodeOptions::Png(options.unwrap_or_default()),
@@ -1070,7 +1077,7 @@ impl Transformer {
 
   #[napi]
   /// default `quality` is 90
-  pub fn jpeg_sync(&mut self, env: Env, quality: Option<u32>) -> Result<JsBuffer> {
+  pub fn jpeg_sync(&mut self, env: Env, quality: Option<u32>) -> Result<Buffer> {
     let mut encoder = EncodeTask {
       image: self.dynamic_image.clone(),
       options: EncodeOptions::Jpeg(quality.unwrap_or(90)),
@@ -1093,7 +1100,7 @@ impl Transformer {
   }
 
   #[napi]
-  pub fn bmp_sync(&mut self, env: Env) -> Result<JsBuffer> {
+  pub fn bmp_sync(&mut self, env: Env) -> Result<Buffer> {
     let mut encoder = EncodeTask {
       image: self.dynamic_image.clone(),
       options: EncodeOptions::Bmp,
@@ -1116,7 +1123,7 @@ impl Transformer {
   }
 
   #[napi]
-  pub fn ico_sync(&mut self, env: Env) -> Result<JsBuffer> {
+  pub fn ico_sync(&mut self, env: Env) -> Result<Buffer> {
     let mut encoder = EncodeTask {
       image: self.dynamic_image.clone(),
       options: EncodeOptions::Ico,
@@ -1139,14 +1146,14 @@ impl Transformer {
   }
 
   #[napi]
-  pub fn tiff_sync(&mut self, env: Env) -> Result<JsBuffer> {
+  pub fn tiff_sync<'scope>(&'scope mut self, env: &'scope Env) -> Result<BufferSlice> {
     let mut encoder = EncodeTask {
       image: self.dynamic_image.clone(),
       options: EncodeOptions::Tiff,
       image_transform_args: self.image_transform_args.clone(),
     };
     let output = encoder.compute()?;
-    encoder.resolve(env, output)
+    output.into_buffer_slice(env)
   }
 
   #[napi]
@@ -1162,14 +1169,14 @@ impl Transformer {
   }
 
   #[napi]
-  pub fn pnm_sync(&mut self, env: Env) -> Result<JsBuffer> {
+  pub fn pnm_sync<'scope>(&'scope mut self, env: &'scope Env) -> Result<BufferSlice> {
     let mut encoder = EncodeTask {
       image: self.dynamic_image.clone(),
       options: EncodeOptions::Pnm,
       image_transform_args: self.image_transform_args.clone(),
     };
     let output = encoder.compute()?;
-    encoder.resolve(env, output)
+    output.into_buffer_slice(env)
   }
 
   #[napi]
@@ -1185,14 +1192,14 @@ impl Transformer {
   }
 
   #[napi]
-  pub fn tga_sync(&mut self, env: Env) -> Result<JsBuffer> {
+  pub fn tga_sync<'scope>(&'scope mut self, env: &'scope Env) -> Result<BufferSlice> {
     let mut encoder = EncodeTask {
       image: self.dynamic_image.clone(),
       options: EncodeOptions::Tga,
       image_transform_args: self.image_transform_args.clone(),
     };
     let output = encoder.compute()?;
-    encoder.resolve(env, output)
+    output.into_buffer_slice(env)
   }
 
   #[napi]
@@ -1208,14 +1215,14 @@ impl Transformer {
   }
 
   #[napi]
-  pub fn farbfeld_sync(&mut self, env: Env) -> Result<JsBuffer> {
+  pub fn farbfeld_sync<'scope>(&'scope mut self, env: &'scope Env) -> Result<BufferSlice> {
     let mut encoder = EncodeTask {
       image: self.dynamic_image.clone(),
       options: EncodeOptions::Farbfeld,
       image_transform_args: self.image_transform_args.clone(),
     };
     let output = encoder.compute()?;
-    encoder.resolve(env, output)
+    output.into_buffer_slice(env)
   }
 }
 #[inline]

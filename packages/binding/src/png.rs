@@ -1,9 +1,9 @@
-use napi::{bindgen_prelude::*, JsBuffer, JsBufferValue, Ref};
+use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use rgb::FromSlice;
 
 #[napi]
-#[derive(Default)]
+#[derive(Default, Copy, Clone)]
 pub enum CompressionType {
   /// Default compression level
   #[default]
@@ -25,7 +25,7 @@ impl From<CompressionType> for image::codecs::png::CompressionType {
 }
 
 #[napi]
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub enum FilterType {
   /// No processing done, best used for low bit depth greyscale or data with a
   /// low color count
@@ -183,7 +183,7 @@ pub fn lossless_compress_png_sync(
 }
 
 pub struct LosslessPngTask {
-  input: Ref<JsBufferValue>,
+  input: Uint8Array,
   options: PNGLosslessOptions,
 }
 
@@ -200,22 +200,17 @@ impl Task for LosslessPngTask {
   fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
     Ok(output.into())
   }
-
-  fn finally(&mut self, env: Env) -> Result<()> {
-    self.input.unref(env)?;
-    Ok(())
-  }
 }
 
 #[napi]
 pub fn lossless_compress_png(
-  input: JsBuffer,
+  input: Uint8Array,
   options: Option<PNGLosslessOptions>,
   signal: Option<AbortSignal>,
 ) -> Result<AsyncTask<LosslessPngTask>> {
   Ok(AsyncTask::with_optional_signal(
     LosslessPngTask {
-      input: input.into_ref()?,
+      input,
       options: options.unwrap_or_default(),
     },
     signal,
@@ -239,8 +234,8 @@ pub struct PngQuantOptions {
 }
 
 #[napi]
-pub fn png_quantize_sync(input: Buffer, options: Option<PngQuantOptions>) -> Result<Buffer> {
-  let output = png_quantize_inner(input.as_ref(), &options.unwrap_or_default())?;
+pub fn png_quantize_sync(input: &[u8], options: Option<PngQuantOptions>) -> Result<Buffer> {
+  let output = png_quantize_inner(input, &options.unwrap_or_default())?;
   Ok(output.into())
 }
 
@@ -301,7 +296,7 @@ fn png_quantize_inner(input: &[u8], options: &PngQuantOptions) -> Result<Vec<u8>
 }
 
 pub struct PngQuantTask {
-  input: Buffer,
+  input: Uint8Array,
   options: PngQuantOptions,
 }
 
@@ -321,7 +316,7 @@ impl Task for PngQuantTask {
 
 #[napi]
 pub fn png_quantize(
-  input: Buffer,
+  input: Uint8Array,
   options: Option<PngQuantOptions>,
   signal: Option<AbortSignal>,
 ) -> AsyncTask<PngQuantTask> {
