@@ -16,7 +16,7 @@ oxipng_libdeflater = ["oxipng/zopfli", "oxipng/parallel"]
 with_simd          = ["mozjpeg-sys/nasm_simd_parallel_build"]
 
 [dependencies]
-fast_image_resize = "4"
+fast_image_resize = "5"
 image             = { version = "0.25", default-features = false, features = ["jpeg", "ico", "png", "pnm", "tga", "tiff", "bmp", "webp", "hdr", "dds"] }
 imagequant        = "4.0.0"
 jpeg-decoder      = "0.3"
