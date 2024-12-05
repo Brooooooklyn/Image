@@ -1146,7 +1146,7 @@ impl Transformer {
   }
 
   #[napi]
-  pub fn tiff_sync<'scope>(&'scope mut self, env: &'scope Env) -> Result<BufferSlice> {
+  pub fn tiff_sync<'scope>(&'scope mut self, env: &'scope Env) -> Result<BufferSlice<'scope>> {
     let mut encoder = EncodeTask {
       image: self.dynamic_image.clone(),
       options: EncodeOptions::Tiff,
@@ -1169,7 +1169,7 @@ impl Transformer {
   }
 
   #[napi]
-  pub fn pnm_sync<'scope>(&'scope mut self, env: &'scope Env) -> Result<BufferSlice> {
+  pub fn pnm_sync<'scope>(&'scope mut self, env: &'scope Env) -> Result<BufferSlice<'scope>> {
     let mut encoder = EncodeTask {
       image: self.dynamic_image.clone(),
       options: EncodeOptions::Pnm,
@@ -1192,7 +1192,7 @@ impl Transformer {
   }
 
   #[napi]
-  pub fn tga_sync<'scope>(&'scope mut self, env: &'scope Env) -> Result<BufferSlice> {
+  pub fn tga_sync<'scope>(&'scope mut self, env: &'scope Env) -> Result<BufferSlice<'scope>> {
     let mut encoder = EncodeTask {
       image: self.dynamic_image.clone(),
       options: EncodeOptions::Tga,
@@ -1215,7 +1215,7 @@ impl Transformer {
   }
 
   #[napi]
-  pub fn farbfeld_sync<'scope>(&'scope mut self, env: &'scope Env) -> Result<BufferSlice> {
+  pub fn farbfeld_sync<'scope>(&'scope mut self, env: &'scope Env) -> Result<BufferSlice<'scope>> {
     let mut encoder = EncodeTask {
       image: self.dynamic_image.clone(),
       options: EncodeOptions::Farbfeld,
