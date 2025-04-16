@@ -431,7 +431,7 @@ impl EncodeOutput {
   pub(crate) fn into_buffer_slice(self, env: &Env) -> Result<BufferSlice> {
     match self {
       EncodeOutput::Raw(ptr, len) => unsafe {
-        BufferSlice::from_external(env, ptr, len, ptr, |pointer, _| {
+        BufferSlice::from_external(env, ptr, len, ptr, move |_, pointer| {
           Vec::from_raw_parts(pointer, len, len);
         })
       },
@@ -440,7 +440,7 @@ impl EncodeOutput {
         let len = avif_data.len();
         let data_ptr = avif_data.as_slice().as_ptr();
         unsafe {
-          BufferSlice::from_external(env, data_ptr.cast_mut(), len, avif_data, |data, _| {
+          BufferSlice::from_external(env, data_ptr.cast_mut(), len, avif_data, |_, data| {
             drop(data);
           })
         }

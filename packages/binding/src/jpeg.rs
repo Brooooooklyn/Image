@@ -47,7 +47,7 @@ pub fn compress_jpeg_sync(
       buf,
       outsize,
       (de_c_info, compress_c_info, buf),
-      |(mut input, mut output, buf), _| {
+      move |_, (mut input, mut output, buf)| {
         mozjpeg_sys::jpeg_destroy_decompress(&mut input);
         mozjpeg_sys::jpeg_destroy_compress(&mut output);
         libc::free(buf as *mut std::ffi::c_void);
@@ -215,7 +215,7 @@ impl Task for CompressJpegTask {
             buf,
             len,
             (de_c_info, compress_c_info, buf),
-            |(mut input, mut output, buf), _| {
+            move |_, (mut input, mut output, buf)| {
               mozjpeg_sys::jpeg_destroy_decompress(&mut input);
               mozjpeg_sys::jpeg_destroy_compress(&mut output);
               libc::free(buf as *mut std::ffi::c_void);
