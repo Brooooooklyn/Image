@@ -4009,6 +4009,17 @@ __metadata:
   languageName: node
   linkType: hard
 
+"cross-spawn@npm:^7.0.6":
+  version: 7.0.6
+  resolution: "cross-spawn@npm:7.0.6"
+  dependencies:
+    path-key: "npm:^3.1.0"
+    shebang-command: "npm:^2.0.0"
+    which: "npm:^2.0.1"
+  checksum: 10c0/053ea8b2135caff68a9e81470e845613e374e7309a47731e81639de3eaeb90c3d01af0e0b44d2ab9d50b43467223b88567dfeb3262db942dc063b9976718ffc1
+  languageName: node
+  linkType: hard
+
 "cssesc@npm:^3.0.0":
   version: 3.0.0
   resolution: "cssesc@npm:3.0.0"
@@ -6160,7 +6171,7 @@ __metadata:
     chalk: "npm:^5.3.0"
     electron: "npm:^33.0.0"
     lerna: "npm:^8.1.6"
-    npm-run-all2: "npm:^7.0.0"
+    npm-run-all2: "npm:^8.0.0"
     prettier: "npm:^3.3.3"
     rxjs: "npm:^7.8.1"
     sharp: "npm:^0.33.4"
@@ -8608,6 +8619,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"minimatch@npm:^10.0.1":
+  version: 10.0.1
+  resolution: "minimatch@npm:10.0.1"
+  dependencies:
+    brace-expansion: "npm:^2.0.1"
+  checksum: 10c0/e6c29a81fe83e1877ad51348306be2e8aeca18c88fdee7a99df44322314279e15799e41d7cb274e4e8bb0b451a3bc622d6182e157dfa1717d6cda75e9cd8cd5d
+  languageName: node
+  linkType: hard
+
 "minimatch@npm:^3.0.4, minimatch@npm:^3.1.1, minimatch@npm:^3.1.2":
   version: 3.1.2
   resolution: "minimatch@npm:3.1.2"
@@ -9261,14 +9281,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"npm-run-all2@npm:^7.0.0":
-  version: 7.0.1
-  resolution: "npm-run-all2@npm:7.0.1"
+"npm-run-all2@npm:^8.0.0":
+  version: 8.0.1
+  resolution: "npm-run-all2@npm:8.0.1"
   dependencies:
     ansi-styles: "npm:^6.2.1"
-    cross-spawn: "npm:^7.0.3"
+    cross-spawn: "npm:^7.0.6"
     memorystream: "npm:^0.3.1"
-    minimatch: "npm:^9.0.0"
+    minimatch: "npm:^10.0.1"
     pidtree: "npm:^0.6.0"
     read-package-json-fast: "npm:^4.0.0"
     shell-quote: "npm:^1.7.3"
@@ -9278,7 +9298,7 @@ __metadata:
     npm-run-all2: bin/npm-run-all/index.js
     run-p: bin/run-p/index.js
     run-s: bin/run-s/index.js
-  checksum: 10c0/1f2438341473280f7f55015f04a9c5bbbb3226e8235ef50811f50f98514f10ff2ac1640da592e0d5a2e6c7b95060e1bb1c7a86b5177fa746151912ac99a8f3b7
+  checksum: 10c0/e97980a66b64e51f57f57804a8d93e4fb0845867db7a558db224c480a987c9b1e9a0d148d01cad351d4f53077c7f93f56bba5625938d213ebb3f652c1d615d86
   languageName: node
   linkType: hard
 
