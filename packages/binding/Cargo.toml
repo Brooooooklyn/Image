@@ -29,7 +29,7 @@ num-complex       = "0.4"
 num_cpus          = "1"
 once_cell         = "1"
 png               = "0.17"
-resvg             = "0.44"
+resvg             = "0.45"
 rexif             = "0.7"
 rgb               = "0.8"
 svgtypes          = "0.15"
@@ -43,10 +43,10 @@ svgtypes          = "0.15"
   version          = "2"
 
 [target.'cfg(not(all(target_os = "macos", target_arch = "x86_64")))'.dependencies]
-libwebp-sys = { version = "0.11", default-features = false, features = ["std", "parallel", "avx2", "sse41", "neon"] }
+libwebp-sys = { version = "0.12", default-features = false, features = ["std", "parallel", "avx2", "sse41", "neon"] }
 
 [target.'cfg(all(target_os = "macos", target_arch = "x86_64"))'.dependencies]
-libwebp-sys = { version = "0.11", default-features = false, features = ["std", "parallel"] }
+libwebp-sys = { version = "0.12", default-features = false, features = ["std", "parallel"] }
 
 [build-dependencies]
 napi-build = "2"
