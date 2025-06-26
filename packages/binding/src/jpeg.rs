@@ -39,15 +39,14 @@ pub fn compress_jpeg_sync(
     })?;
     return BufferSlice::from_data(&env, dest.into_inner());
   }
-  let (buf, outsize, de_c_info, compress_c_info) =
-    unsafe { moz_jpeg_compress(input, &options) }?;
+  let (buf, outsize, de_c_info, compress_c_info) = unsafe { moz_jpeg_compress(input, &options) }?;
   unsafe {
     BufferSlice::from_external(
       &env,
       buf,
       outsize,
       (de_c_info, compress_c_info, buf),
-      |(mut input, mut output, buf), _| {
+      |_, (mut input, mut output, buf)| {
         mozjpeg_sys::jpeg_destroy_decompress(&mut input);
         mozjpeg_sys::jpeg_destroy_compress(&mut output);
         libc::free(buf as *mut std::ffi::c_void);
@@ -215,7 +214,7 @@ impl Task for CompressJpegTask {
             buf,
             len,
             (de_c_info, compress_c_info, buf),
-            |(mut input, mut output, buf), _| {
+            |_, (mut input, mut output, buf)| {
               mozjpeg_sys::jpeg_destroy_decompress(&mut input);
               mozjpeg_sys::jpeg_destroy_compress(&mut output);
               libc::free(buf as *mut std::ffi::c_void);

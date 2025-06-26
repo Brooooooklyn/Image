@@ -495,4 +495,3 @@ export interface ResizeOptions {
   filter?: ResizeFilterType
   fit?: ResizeFit
 }
-

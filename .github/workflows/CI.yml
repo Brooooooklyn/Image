@@ -46,18 +46,29 @@ jobs:
               yarn workspace @napi-rs/image build --target x86_64-pc-windows-msvc --features with_simd
             target: x86_64-pc-windows-msvc
           - host: macos-latest
+            target: aarch64-pc-windows-msvc
+            setup: |
+              brew update
+              brew install meson llvm
+            build: |
+              export XWIN_CACHE_DIR="$(pwd)/.xwin"
+              export XWIN_ARCH=aarch64
+              export PATH="$(brew --prefix llvm)/bin:$PATH"
+              clang --version
+              CFLAGS="-mneon /FIintrin.h" yarn workspace @napi-rs/image build -x --features with_simd --target aarch64-pc-windows-msvc
+          - host: macos-latest
             setup: |
               brew update
               brew install meson llvm
             build: |
               export XWIN_CACHE_DIR="$(pwd)/.xwin"
               export XWIN_ARCH=x86
-              export CFLAGS="-mavx2 -mpclmul"
+              export CFLAGS="-mavx2 -mpclmul /FIintrin.h"
               export CXXFLAGS="-mavx2 -mpclmul"
               export CARGO_PROFILE_RELEASE_LTO="false"
               export PATH="$(brew --prefix llvm)/bin:$PATH"
               clang --version
-              CARGO="cargo-xwin" yarn workspace @napi-rs/image build --features with_simd --target i686-pc-windows-msvc
+              yarn workspace @napi-rs/image build -x --features with_simd --target i686-pc-windows-msvc
             target: i686-pc-windows-msvc
           - host: ubuntu-latest
             target: x86_64-unknown-linux-gnu
@@ -74,17 +85,16 @@ jobs:
               chmod -R 777 target
           - host: ubuntu-latest
             target: x86_64-unknown-linux-musl
-            docker: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-alpine
+            docker: ghcr.io/brooooooklyn/canvas/musl-builder:lts
             build: >-
               set -e &&
-              unset RUSTFLAGS &&
-              unset CC &&
-              unset CXX &&
-              apk add --update --repository http://dl-cdn.alpinelinux.org/alpine/edge/testing --no-cache perl nasm aom-dev meson &&
-              export LIB_AOM_STATIC_LIB_PATH=/usr/lib &&
-              export LIB_AOM_INCLUDE_PATH=/usr/include/aom/aom &&
-              export LIB_AOM_PKG_CONFIG_PATH=/usr/lib/pkgconfig &&
-              yarn workspace @napi-rs/image build --target x86_64-unknown-linux-musl --features with_simd &&
+              apk add libc++-dev libc++-static &&
+              cp /usr/lib/gcc/x86_64-alpine-linux-musl/14.2.0/*.o /usr/lib/ &&
+              cp /usr/lib/gcc/x86_64-alpine-linux-musl/14.2.0/libgcc.a /usr/lib/ &&
+              cp /usr/lib/gcc/x86_64-alpine-linux-musl/14.2.0/libgcc_eh.a /usr/lib/ &&
+              wget "https://github.com/Brooooooklyn/canvas/releases/download/libcxxabi-$(cat llvm-version)/libc++abi-x86_64.a" &&
+              mv libc++abi-x86_64.a /usr/lib/libc++abi.a &&
+              CXXFLAGS="-std=c++20 -stdlib=libc++ -static -fPIC -fno-cxx-exceptions -fno-exceptions -I/usr/include/c++/v1" CC=clang CXX=clang++ yarn workspace @napi-rs/image build --target x86_64-unknown-linux-musl --features with_simd &&
               chmod -R 777 target
           - host: macos-latest
             target: aarch64-apple-darwin
@@ -113,15 +123,6 @@ jobs:
               export CXXFLAGS="-fuse-ld=lld -mcrc -B/usr/aarch64-unknown-linux-gnu/lib/gcc/aarch64-unknown-linux-gnu/4.8.5 --sysroot=/usr/aarch64-unknown-linux-gnu/aarch64-unknown-linux-gnu/sysroot -L/usr/aarch64-unknown-linux-gnu/lib/llvm-18/lib -stdlib=libc++" &&
               yarn workspace @napi-rs/image build --features with_simd --target aarch64-unknown-linux-gnu &&
               chmod -R 777 target
-          - host: ubuntu-latest
-            target: armv7-unknown-linux-gnueabihf
-            setup: |
-              sudo apt-get update
-              sudo apt-get install meson gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
-            build: |
-              export CC="arm-linux-gnueabihf-gcc"
-              export CARGO_CFG_TARGET_FEATURE="neon"
-              yarn workspace @napi-rs/image build --target armv7-unknown-linux-gnueabihf --features oxipng_libdeflater --use-napi-cross
           - host: ubuntu-latest
             target: aarch64-linux-android
             build: |
@@ -153,7 +154,7 @@ jobs:
               export CMAKE_BUILD_PARALLEL_LEVEL=2
               yarn workspace @napi-rs/image build --target wasm32-wasip1-threads
 
-    name: stable - ${{ matrix.settings.target }} - node@20
+    name: stable - ${{ matrix.settings.target }} - node@22
     runs-on: ${{ matrix.settings.host }}
     env:
       RUST_TARGET: ${{ matrix.settings.target }}
@@ -162,14 +163,14 @@ jobs:
       - name: Setup node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: yarn
       - name: Setup nasm
         uses: ilammy/setup-nasm@v1
         if: matrix.settings.target == 'x86_64-pc-windows-msvc' || matrix.settings.target == 'x86_64-apple-darwin' || matrix.settings.target == 'i686-pc-windows-msvc'
       - name: Install cargo-xwin
         uses: taiki-e/install-action@v2
-        if: matrix.settings.target == 'i686-pc-windows-msvc'
+        if: matrix.settings.target == 'i686-pc-windows-msvc' || matrix.settings.target == 'aarch64-pc-windows-msvc'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         with:
@@ -194,11 +195,16 @@ jobs:
       - uses: goto-bus-stop/setup-zig@v2
         if: ${{ contains(matrix.settings.target, 'musl') }}
         with:
-          version: 0.13.0
+          version: 0.14.1
       - name: Setup toolchain
         run: ${{ matrix.settings.setup }}
         if: ${{ matrix.settings.setup }}
         shell: bash
+      - name: Install LLVM and Clang
+        uses: KyleMayes/install-llvm-action@v2
+        if: ${{ matrix.settings.target == 'armv7-unknown-linux-gnueabihf' }}
+        with:
+          version: '20'
       - name: Install dependencies
         run: yarn install --immutable --mode=skip-build
       - name: Build in docker
@@ -220,6 +226,59 @@ jobs:
             packages/*/*.node
             packages/*/*.wasm
           if-no-files-found: error
+  
+  
+  build-armv7-linux-gnueabihf:
+    name: Build armv7-unknown-linux-gnueabihf
+    runs-on: ubuntu-latest
+    container:
+      image: debian:buster
+    steps:
+      - name: Setup tools
+        run: |
+          apt-get update
+          apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libatomic1-armhf-cross git build-essential cmake ninja-build wget curl gnupg
+          echo "deb http://apt.llvm.org/buster/ llvm-toolchain-buster-18 main" >> /etc/apt/sources.list
+          echo "deb-src http://apt.llvm.org/buster/ llvm-toolchain-buster-18 main" >> /etc/apt/sources.list
+          wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | apt-key add -
+          apt-get update
+          apt-get install -y clang-18
+          ln -s /usr/bin/clang-18 /usr/bin/clang
+          ln -s /usr/bin/clang++-18 /usr/bin/clang++
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Setup cmake
+        uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: '3.x'
+      - name: Setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: 'armv7-unknown-linux-gnueabihf'
+      - name: Install dependencies
+        run: |
+          corepack enable
+          yarn install --immutable --mode=skip-build
+      - name: Config git
+        run: git config --global --add safe.directory "$(pwd)"
+      - name: Build
+        run: |
+          export CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc
+          yarn workspace @napi-rs/image build --target armv7-unknown-linux-gnueabihf --features oxipng_libdeflater
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bindings-armv7-unknown-linux-gnueabihf
+          path: |
+            packages/*/*.node
+          if-no-files-found: error
+
   build-freebsd:
     runs-on: ubuntu-latest
     name: Build FreeBSD
@@ -227,7 +286,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build
         id: build
-        uses: cross-platform-actions/action@v0.26.0
+        uses: cross-platform-actions/action@v0.28.0
         env:
           DEBUG: 'napi:*'
           RUSTUP_HOME: /home/runner/rustup
@@ -235,7 +294,7 @@ jobs:
           RUSTUP_IO_THREADS: 1
         with:
           operating_system: freebsd
-          version: '14.0'
+          version: '14.2'
           memory: 8G
           cpu_count: 3
           environment_variables: 'DEBUG RUSTUP_IO_THREADS'
@@ -284,8 +343,8 @@ jobs:
           - host: macos-latest
             target: aarch64-apple-darwin
         node:
-          - '18'
           - '20'
+          - '22'
     runs-on: ${{ matrix.settings.host }}
     steps:
       - uses: actions/checkout@v4
@@ -310,6 +369,8 @@ jobs:
         with:
           name: bindings-${{ matrix.settings.target }}
           path: artifacts
+      - name: Create npm dirs
+        run: yarn workspace @napi-rs/image napi create-npm-dirs
       - name: Move artifacts
         run: yarn artifacts
         shell: bash
@@ -332,8 +393,8 @@ jobs:
       fail-fast: false
       matrix:
         node:
-          - '18'
           - '20'
+          - '22'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -349,6 +410,8 @@ jobs:
         with:
           name: bindings-x86_64-unknown-linux-gnu
           path: artifacts
+      - name: Create npm dirs
+        run: yarn workspace @napi-rs/image napi create-npm-dirs
       - name: Move artifacts
         run: yarn artifacts
         shell: bash
@@ -365,8 +428,8 @@ jobs:
       fail-fast: false
       matrix:
         node:
-          - '18'
           - '20'
+          - '22'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -382,6 +445,8 @@ jobs:
         with:
           name: bindings-x86_64-unknown-linux-musl
           path: artifacts
+      - name: Create npm dirs
+        run: yarn workspace @napi-rs/image napi create-npm-dirs
       - name: Move artifacts
         run: yarn artifacts
         shell: bash
@@ -409,6 +474,8 @@ jobs:
           path: artifacts
       - name: Install dependencies
         run: yarn install --immutable --mode=skip-build
+      - name: Create npm dirs
+        run: yarn workspace @napi-rs/image napi create-npm-dirs
       - name: Move artifacts
         run: yarn artifacts
         shell: bash
@@ -429,13 +496,13 @@ jobs:
   test-linux-arm-gnueabihf-binding:
     name: Test bindings on armv7-unknown-linux-gnueabihf - node@${{ matrix.node }}
     needs:
-      - build
+      - build-armv7-linux-gnueabihf
     strategy:
       fail-fast: false
       matrix:
         node:
-          - '18'
           - '20'
+          - '22'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -446,6 +513,8 @@ jobs:
           path: artifacts
       - name: Install dependencies
         run: yarn install --immutable --mode=skip-build
+      - name: Create npm dirs
+        run: yarn workspace @napi-rs/image napi create-npm-dirs
       - name: Move artifacts
         run: yarn artifacts
         shell: bash
@@ -477,6 +546,8 @@ jobs:
           path: artifacts
       - name: Install dependencies
         run: yarn install --immutable --mode=skip-build
+      - name: Create npm dirs
+        run: yarn workspace @napi-rs/image napi create-npm-dirs
       - name: Move artifacts
         run: yarn artifacts
         shell: bash
@@ -504,10 +575,12 @@ jobs:
       - name: Setup node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: yarn
       - name: Install dependencies
         run: yarn install --immutable --mode=skip-build
+      - name: Create npm dirs
+        run: yarn workspace @napi-rs/image napi create-npm-dirs
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:

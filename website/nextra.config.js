@@ -1,25 +1,14 @@
-import { useRouter } from 'next/router'
 import Script from 'next/script'
 import { useConfig } from 'nextra-theme-docs'
 
-/**
- * @type {import('nextra-theme-docs').DocsThemeConfig}
- */
+/** @type {import('nextra-theme-docs').DocsThemeConfig} */
 export default {
-  docsRepositoryBase: 'https://github.com/Brooooooklyn/Image/blob/main/website/',
+  docsRepositoryBase: 'https://github.com/Brooooooklyn/Image/blob/main/website',
   project: {
     link: 'https://github.com/Brooooooklyn/Image',
   },
   chat: {
     link: 'https://discord.gg/w8DAD7auZc',
-  },
-  useNextSeoProps() {
-    const { asPath } = useRouter()
-    if (asPath !== '/') {
-      return {
-        titleTemplate: '%s – Image',
-      }
-    }
   },
   logo: () => {
     return (
@@ -68,13 +57,8 @@ export default {
     )
   },
   editLink: {
-    text: ({ locale }) => {
-      switch (locale) {
-        case 'cn':
-          return '在 GitHub 上编辑本页 →'
-        default:
-          return 'Edit this page on GitHub →'
-      }
+    text: () => {
+      return 'Edit this page on GitHub →'
     },
   },
   footer: {
