@@ -336,6 +336,8 @@ jobs:
       fail-fast: false
       matrix:
         settings:
+          - host: windows-11-arm
+            target: aarch64-pc-windows-msvc
           - host: windows-latest
             target: x86_64-pc-windows-msvc
           - host: macos-latest
