@@ -184,12 +184,12 @@ pub(crate) struct ImageMetaData {
 }
 
 /// `env` from `Node.js` can ensure the thread safe.
-pub(crate) struct ThreadSafeDynamicImage {
+pub(crate) struct ThreadsafeDynamicImage {
   raw: Arc<Uint8Array>,
   image: *mut Option<ImageMetaData>,
 }
 
-impl Drop for ThreadSafeDynamicImage {
+impl Drop for ThreadsafeDynamicImage {
   fn drop(&mut self) {
     unsafe {
       drop(Box::from_raw(self.image));
@@ -197,9 +197,9 @@ impl Drop for ThreadSafeDynamicImage {
   }
 }
 
-impl ThreadSafeDynamicImage {
+impl ThreadsafeDynamicImage {
   fn new(input: Arc<Uint8Array>) -> Self {
-    ThreadSafeDynamicImage {
+    ThreadsafeDynamicImage {
       image: Box::into_raw(Box::new(None)),
       raw: input,
     }
@@ -283,8 +283,8 @@ impl ThreadSafeDynamicImage {
   }
 }
 
-unsafe impl Send for ThreadSafeDynamicImage {}
-unsafe impl Sync for ThreadSafeDynamicImage {}
+unsafe impl Send for ThreadsafeDynamicImage {}
+unsafe impl Sync for ThreadsafeDynamicImage {}
 
 #[napi]
 pub enum JsColorType {
@@ -341,7 +341,7 @@ pub struct Metadata {
 }
 
 pub struct MetadataTask {
-  dynamic_image: Arc<ThreadSafeDynamicImage>,
+  dynamic_image: Arc<ThreadsafeDynamicImage>,
   with_exif: bool,
 }
 
@@ -416,7 +416,7 @@ struct ImageTransformArgs {
 }
 
 pub struct EncodeTask {
-  image: Arc<ThreadSafeDynamicImage>,
+  image: Arc<ThreadsafeDynamicImage>,
   options: EncodeOptions,
   image_transform_args: ImageTransformArgs,
 }
@@ -558,7 +558,7 @@ impl Task for EncodeTask {
       meta.image = meta.image.crop_imm(x, y, width, height);
     }
     for (buffer, x, y) in std::mem::take(&mut self.image_transform_args.overlay).into_iter() {
-      let top = ThreadSafeDynamicImage::new(buffer.clone());
+      let top = ThreadsafeDynamicImage::new(buffer.clone());
       let top_image_meta = top.get(true)?;
       overlay(&mut meta.image, &top_image_meta.image, x, y);
     }
@@ -667,7 +667,7 @@ impl Task for EncodeTask {
 
 #[napi]
 pub struct Transformer {
-  pub(crate) dynamic_image: Arc<ThreadSafeDynamicImage>,
+  pub(crate) dynamic_image: Arc<ThreadsafeDynamicImage>,
   image_transform_args: ImageTransformArgs,
 }
 
@@ -676,7 +676,7 @@ impl Transformer {
   #[napi(constructor)]
   pub fn new(input: Uint8Array) -> Transformer {
     Self {
-      dynamic_image: Arc::new(ThreadSafeDynamicImage::new(Arc::new(input))),
+      dynamic_image: Arc::new(ThreadsafeDynamicImage::new(Arc::new(input))),
       image_transform_args: ImageTransformArgs::default(),
     }
   }
@@ -726,12 +726,12 @@ impl Transformer {
     let height = pix_map.height();
     let data = pix_map.take();
 
-    Transformer::from_rgba_pixels(Either::A(data.into()), width, height)
+    Transformer::from_rgba_pixels(Either::A(data.as_slice()), width, height)
   }
 
   #[napi]
   pub fn from_rgba_pixels(
-    input: Either<Uint8Array, Uint8ClampedArray>,
+    input: Either<&[u8], Uint8ClampedSlice>,
     width: u32,
     height: u32,
   ) -> Result<Transformer> {
@@ -752,7 +752,7 @@ impl Transformer {
         has_parsed_exif: true,
       }));
       Ok(Self {
-        dynamic_image: Arc::new(ThreadSafeDynamicImage {
+        dynamic_image: Arc::new(ThreadsafeDynamicImage {
           raw: Arc::new(vec![0].into()),
           image: Box::into_raw(image_meta),
         }),
