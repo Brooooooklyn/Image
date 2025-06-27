@@ -8,8 +8,8 @@
     "@napi-rs/image": "^1.9.2",
     "chalk": "^5.4.1",
     "next": "^15.3.4",
-    "nextra": "^3",
-    "nextra-theme-docs": "^3",
+    "nextra": "^4.0.0",
+    "nextra-theme-docs": "^4.0.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "sharp": "^0.34.2"
