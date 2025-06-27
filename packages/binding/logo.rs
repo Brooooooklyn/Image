@@ -1,4 +1,4 @@
-/// https://github.com/image-rs/image#generating-fractals
+//! https://github.com/image-rs/image#generating-fractals
 
 fn main() {
   let imgx = 800;

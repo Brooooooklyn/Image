@@ -3,9 +3,9 @@ import nextra from 'nextra'
 const withNextra = nextra({
   theme: 'nextra-theme-docs',
   themeConfig: './nextra.config.js',
-  staticImage: true,
+  staticImage: false,
   latex: true,
-  flexsearch: {
+  search: {
     codeblocks: false,
   },
   defaultShowCopyCode: true,

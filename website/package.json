@@ -4,20 +4,18 @@
   "version": "0.0.0",
   "type": "module",
   "dependencies": {
-    "@napi-rs/canvas": "^0.1.53",
+    "@napi-rs/canvas": "^0.1.72",
     "@napi-rs/image": "^1.9.2",
-    "chalk": "^5.3.0",
-    "next": "^15.0.0",
-    "next-mdx-remote": "^5.0.0",
-    "nextra": "^2.13.4",
-    "nextra-theme-docs": "^2.13.4",
-    "node-fetch": "^3.3.2",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "sharp": "^0.33.4"
+    "chalk": "^5.4.1",
+    "next": "^15.3.4",
+    "nextra": "^3",
+    "nextra-theme-docs": "^3",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "sharp": "^0.34.2"
   },
   "scripts": {
-    "build": "node generate-img.js && next build",
+    "build": "node generate-img.js && node changelog.js && next build",
     "dev": "next dev",
     "start": "next start"
   }

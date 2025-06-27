@@ -9,9 +9,9 @@ const { WASI: __nodeWASI } = require('node:wasi')
 const { Worker } = require('node:worker_threads')
 
 const {
-  instantiateNapiModuleSync: __emnapiInstantiateNapiModuleSync,
-  getDefaultContext: __emnapiGetDefaultContext,
   createOnMessage: __wasmCreateOnMessageForFsProxy,
+  getDefaultContext: __emnapiGetDefaultContext,
+  instantiateNapiModuleSync: __emnapiInstantiateNapiModuleSync,
 } = require('@napi-rs/wasm-runtime')
 
 const __rootDir = __nodePath.parse(process.cwd()).root
@@ -56,11 +56,11 @@ const { instance: __napiInstance, module: __wasiModule, napiModule: __napiModule
       return 4
     }
   })(),
+  reuseWorker: true,
   wasi: __wasi,
   onCreateWorker() {
     const worker = new Worker(__nodePath.join(__dirname, 'wasi-worker.mjs'), {
       env: process.env,
-      execArgv: ['--experimental-wasi-unstable-preview1'],
     })
     worker.onmessage = ({ data }) => {
       __wasmCreateOnMessageForFsProxy(__nodeFs)(data)
@@ -77,42 +77,14 @@ const { instance: __napiInstance, module: __wasiModule, napiModule: __napiModule
     return importObject
   },
   beforeInit({ instance }) {
-    __napi_rs_initialize_modules(instance)
-  }
+    for (const name of Object.keys(instance.exports)) {
+      if (name.startsWith('__napi_register__')) {
+        instance.exports[name]()
+      }
+    }
+  },
 })
-
-function __napi_rs_initialize_modules(__napiInstance) {
-  __napiInstance.exports['__napi_register__AvifConfig_struct_0']?.()
-  __napiInstance.exports['__napi_register__ChromaSubsampling_1']?.()
-  __napiInstance.exports['__napi_register__FastResizeFilter_2']?.()
-  __napiInstance.exports['__napi_register__ResizeFit_3']?.()
-  __napiInstance.exports['__napi_register__FastResizeOptions_struct_4']?.()
-  __napiInstance.exports['__napi_register__JpegCompressOptions_struct_5']?.()
-  __napiInstance.exports['__napi_register__compress_jpeg_sync_6']?.()
-  __napiInstance.exports['__napi_register__CompressJpegTask_impl_7']?.()
-  __napiInstance.exports['__napi_register__compress_jpeg_8']?.()
-  __napiInstance.exports['__napi_register__CompressionType_9']?.()
-  __napiInstance.exports['__napi_register__FilterType_10']?.()
-  __napiInstance.exports['__napi_register__PngEncodeOptions_struct_11']?.()
-  __napiInstance.exports['__napi_register__PngRowFilter_12']?.()
-  __napiInstance.exports['__napi_register__PNGLosslessOptions_struct_13']?.()
-  __napiInstance.exports['__napi_register__lossless_compress_png_sync_14']?.()
-  __napiInstance.exports['__napi_register__LosslessPngTask_impl_15']?.()
-  __napiInstance.exports['__napi_register__lossless_compress_png_16']?.()
-  __napiInstance.exports['__napi_register__PngQuantOptions_struct_17']?.()
-  __napiInstance.exports['__napi_register__png_quantize_sync_18']?.()
-  __napiInstance.exports['__napi_register__PngQuantTask_impl_19']?.()
-  __napiInstance.exports['__napi_register__png_quantize_20']?.()
-  __napiInstance.exports['__napi_register__Orientation_21']?.()
-  __napiInstance.exports['__napi_register__ResizeFilterType_22']?.()
-  __napiInstance.exports['__napi_register__JsColorType_23']?.()
-  __napiInstance.exports['__napi_register__Metadata_struct_24']?.()
-  __napiInstance.exports['__napi_register__MetadataTask_impl_25']?.()
-  __napiInstance.exports['__napi_register__ResizeOptions_struct_26']?.()
-  __napiInstance.exports['__napi_register__EncodeTask_impl_27']?.()
-  __napiInstance.exports['__napi_register__Transformer_struct_28']?.()
-  __napiInstance.exports['__napi_register__Transformer_impl_70']?.()
-}
+module.exports = __napiModule.exports
 module.exports.Transformer = __napiModule.exports.Transformer
 module.exports.ChromaSubsampling = __napiModule.exports.ChromaSubsampling
 module.exports.CompressionType = __napiModule.exports.CompressionType

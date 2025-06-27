@@ -185,7 +185,7 @@ pub(crate) struct ImageMetaData {
 
 /// `env` from `Node.js` can ensure the thread safe.
 pub(crate) struct ThreadSafeDynamicImage {
-  raw: Uint8Array,
+  raw: Arc<Uint8Array>,
   image: *mut Option<ImageMetaData>,
 }
 
@@ -198,7 +198,7 @@ impl Drop for ThreadSafeDynamicImage {
 }
 
 impl ThreadSafeDynamicImage {
-  fn new(input: Uint8Array) -> Self {
+  fn new(input: Arc<Uint8Array>) -> Self {
     ThreadSafeDynamicImage {
       image: Box::into_raw(Box::new(None)),
       raw: input,
@@ -412,7 +412,7 @@ struct ImageTransformArgs {
   huerotate: Option<i32>,
   orientation: Option<Orientation>,
   crop: Option<(u32, u32, u32, u32)>,
-  overlay: Vec<(Uint8Array, i64, i64)>,
+  overlay: Vec<(Arc<Uint8Array>, i64, i64)>,
 }
 
 pub struct EncodeTask {
@@ -431,7 +431,7 @@ impl EncodeOutput {
   pub(crate) fn into_buffer_slice(self, env: &Env) -> Result<BufferSlice> {
     match self {
       EncodeOutput::Raw(ptr, len) => unsafe {
-        BufferSlice::from_external(env, ptr, len, ptr, |pointer, _| {
+        BufferSlice::from_external(env, ptr, len, ptr, |_, pointer| {
           Vec::from_raw_parts(pointer, len, len);
         })
       },
@@ -440,7 +440,7 @@ impl EncodeOutput {
         let len = avif_data.len();
         let data_ptr = avif_data.as_slice().as_ptr();
         unsafe {
-          BufferSlice::from_external(env, data_ptr.cast_mut(), len, avif_data, |data, _| {
+          BufferSlice::from_external(env, data_ptr.cast_mut(), len, avif_data, |_, data| {
             drop(data);
           })
         }
@@ -558,7 +558,7 @@ impl Task for EncodeTask {
       meta.image = meta.image.crop_imm(x, y, width, height);
     }
     for (buffer, x, y) in std::mem::take(&mut self.image_transform_args.overlay).into_iter() {
-      let top = ThreadSafeDynamicImage::new(buffer);
+      let top = ThreadSafeDynamicImage::new(buffer.clone());
       let top_image_meta = top.get(true)?;
       overlay(&mut meta.image, &top_image_meta.image, x, y);
     }
@@ -676,7 +676,7 @@ impl Transformer {
   #[napi(constructor)]
   pub fn new(input: Uint8Array) -> Transformer {
     Self {
-      dynamic_image: Arc::new(ThreadSafeDynamicImage::new(input)),
+      dynamic_image: Arc::new(ThreadSafeDynamicImage::new(Arc::new(input))),
       image_transform_args: ImageTransformArgs::default(),
     }
   }
@@ -753,7 +753,7 @@ impl Transformer {
       }));
       Ok(Self {
         dynamic_image: Arc::new(ThreadSafeDynamicImage {
-          raw: vec![0].into(),
+          raw: Arc::new(vec![0].into()),
           image: Box::into_raw(image_meta),
         }),
         image_transform_args: Default::default(),
@@ -924,7 +924,10 @@ impl Transformer {
   #[napi]
   /// Overlay an image at a given coordinate (x, y)
   pub fn overlay(&mut self, on_top: Uint8Array, x: i64, y: i64) -> Result<&Self> {
-    self.image_transform_args.overlay.push((on_top, x, y));
+    self
+      .image_transform_args
+      .overlay
+      .push((Arc::new(on_top), x, y));
     Ok(self)
   }
 
