@@ -48,5 +48,14 @@ libwebp-sys = { version = "0.12", default-features = false, features = ["std", "
 [target.'cfg(all(target_os = "macos", target_arch = "x86_64"))'.dependencies]
 libwebp-sys = { version = "0.12", default-features = false, features = ["std", "parallel"] }
 
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+mimalloc-safe = { version = "0.1", features = ["skip_collect_on_exit"] }
+
+[target.'cfg(all(target_os = "linux", not(any(target_arch = "aarch64", target_arch = "arm"))))'.dependencies]
+mimalloc-safe = { version = "0.1", features = ["local_dynamic_tls", "skip_collect_on_exit"] }
+
+[target.'cfg(all(target_os = "linux", target_arch = "aarch64"))'.dependencies]
+mimalloc-safe = { version = "0.1", features = ["local_dynamic_tls", "no_opt_arch", "skip_collect_on_exit"] }
+
 [build-dependencies]
 napi-build = "2"
