@@ -79,6 +79,7 @@ writeFileSync(
 
 ```ts
 metadata(withExif?: boolean | undefined | null, signal?: AbortSignal | undefined | null): Promise<Metadata>
+metadataSync(withExif?: boolean | undefined | null): Metadata
 
 export interface Metadata {
   width: number

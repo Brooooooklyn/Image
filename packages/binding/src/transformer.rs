@@ -782,6 +782,16 @@ impl Transformer {
   }
 
   #[napi]
+  pub fn metadata_sync(&mut self, env: Env, with_exif: Option<bool>) -> Result<Metadata> {
+    let mut task = MetadataTask {
+        dynamic_image: self.dynamic_image.clone(),
+        with_exif: with_exif.unwrap_or(false),
+    };
+    let output = task.compute()?;
+    task.resolve(env, output)
+  }
+
+  #[napi]
   /// Rotate with exif orientation
   /// If the orientation param is not null,
   /// the new orientation value will override the exif orientation value
