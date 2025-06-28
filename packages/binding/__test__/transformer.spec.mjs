@@ -37,6 +37,13 @@ test('should be able to get exif from jpg', async (t) => {
   t.is(metadata.format, 'jpeg')
 })
 
+test('should be able to get metadata from jpg - sync', (t) => {
+  const decoder = new Transformer(JPEG)
+  const metadata = decoder.metadataSync()
+  t.is(metadata.width, 1024)
+  t.is(metadata.height, 678)
+})
+
 test('should be able to encode into webp', async (t) => {
   const decoder = new Transformer(PNG)
   await t.notThrowsAsync(() => decoder.webp(75))
