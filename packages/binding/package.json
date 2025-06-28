@@ -1,0 +1,72 @@
+{
+  "name": "@napi-rs/image",
+  "version": "1.10.0",
+  "main": "index.js",
+  "browser": "browser.js",
+  "types": "index.d.ts",
+  "description": "Image processing library",
+  "author": {
+    "email": "github@lyn.one",
+    "name": "LongYinan",
+    "url": "https://lyn.one"
+  },
+  "keywords": [
+    "image",
+    "lossless",
+    "compression",
+    "jpeg",
+    "jpg",
+    "png",
+    "svg"
+  ],
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "browser.js"
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
+  "napi": {
+    "binaryName": "image",
+    "targets": [
+      "x86_64-apple-darwin",
+      "x86_64-pc-windows-msvc",
+      "aarch64-pc-windows-msvc",
+      "x86_64-unknown-linux-gnu",
+      "aarch64-apple-darwin",
+      "aarch64-linux-android",
+      "aarch64-unknown-linux-gnu",
+      "aarch64-unknown-linux-musl",
+      "armv7-unknown-linux-gnueabihf",
+      "x86_64-unknown-linux-musl",
+      "x86_64-unknown-freebsd",
+      "i686-pc-windows-msvc",
+      "wasm32-wasi-preview1-threads"
+    ]
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">= 10"
+  },
+  "funding": {
+    "type": "github",
+    "url": "https://github.com/sponsors/Brooooooklyn"
+  },
+  "scripts": {
+    "artifacts": "napi artifacts -d ../../artifacts",
+    "build": "napi build --platform --no-const-enum --release",
+    "build:debug": "napi build --platform --no-const-enum",
+    "format": "run-p format:prettier format:rs",
+    "format:prettier": "prettier --config ./package.json -w .",
+    "format:rs": "cargo fmt --all",
+    "prepublishOnly": "napi prepublish",
+    "version": "napi version"
+  },
+  "repository": "git@github.com:Brooooooklyn/Image.git",
+  "devDependencies": {
+    "@napi-rs/cli": "^3.0.0-alpha.91",
+    "@napi-rs/wasm-runtime": "^0.2.11"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "website",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "dependencies": {
+    "@napi-rs/canvas": "^0.1.72",
+    "@napi-rs/image": "^1.9.2",
+    "chalk": "^5.4.1",
+    "next": "^15.3.4",
+    "nextra": "^3",
+    "nextra-theme-docs": "^3",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "sharp": "^0.34.2"
+  },
+  "scripts": {
+    "build": "node generate-img.js && node changelog.js && next build",
+    "dev": "next dev",
+    "start": "next start"
+  }
+}

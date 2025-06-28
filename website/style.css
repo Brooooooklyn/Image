@@ -1,0 +1,15 @@
+img {
+  display: initial !important;
+}
+
+article pre code .line.highlighted::before {
+  background-color: rgb(107 114 128 / 0.3);
+}
+
+:root {
+  --nextra-primary-hue: 300deg;
+}
+
+.dark {
+  --nextra-primary-hue: 300deg;
+}

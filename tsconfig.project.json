@@ -1,0 +1,7 @@
+{
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": [],
+  "references": [{ "path": "./packages/rollup-plugin/tsconfig.json" }]
+}

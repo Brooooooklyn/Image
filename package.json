@@ -1,0 +1,75 @@
+{
+  "name": "image",
+  "private": true,
+  "license": "MIT",
+  "author": {
+    "name": "LongYinan",
+    "email": "github@lyn.one",
+    "url": "https://lyn.one"
+  },
+  "workspaces": [
+    "packages/*",
+    "website"
+  ],
+  "devDependencies": {
+    "@napi-rs/cli": "^3.0.0-alpha.91",
+    "@taplo/cli": "^0.7.0",
+    "@types/node": "^24.0.4",
+    "@types/sharp": "^0.32.0",
+    "ava": "^6.4.0",
+    "blurhash": "^2.0.5",
+    "chalk": "^5.4.1",
+    "electron": "^37.0.0",
+    "lerna": "^8.2.2",
+    "npm-run-all2": "^8.0.4",
+    "prettier": "^3.6.1",
+    "rxjs": "^7.8.2",
+    "sharp": "^0.34.2",
+    "typescript": "^5.8.3"
+  },
+  "scripts": {
+    "artifacts": "lerna run artifacts",
+    "build:ts": "tsc -b tsconfig.project.json",
+    "format": "run-p format:prettier format:rs format:toml",
+    "format:prettier": "prettier . -w",
+    "format:rs": "cargo fmt",
+    "format:toml": "taplo format",
+    "test": "ava",
+    "test:electron": "yarn electron electron.js"
+  },
+  "prettier": {
+    "printWidth": 120,
+    "semi": false,
+    "trailingComma": "all",
+    "singleQuote": true,
+    "arrowParens": "always"
+  },
+  "ava": {
+    "extensions": [
+      "mjs"
+    ],
+    "timeout": "10m",
+    "workerThreads": false,
+    "environmentVariables": {
+      "NODE_ENV": "ava"
+    }
+  },
+  "lint-staged": {
+    "*.@(js|ts|json|md|yml|yaml)": [
+      "prettier --write"
+    ],
+    "*.toml": [
+      "taplo format"
+    ],
+    "*.rs": [
+      "cargo fmt --"
+    ]
+  },
+  "husky": {
+    "hooks": {
+      "pre-commit": "lint-staged && cargo fmt --all"
+    }
+  },
+  "packageManager": "yarn@4.9.2",
+  "repository": "git@github.com:Brooooooklyn/Image.git"
+}

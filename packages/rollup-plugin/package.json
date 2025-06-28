@@ -1,0 +1,33 @@
+{
+  "name": "@napi-rs/image-rollup",
+  "version": "1.0.0",
+  "description": "@napi-rs/image Rollup plugin",
+  "keywords": [
+    "rollup",
+    "image",
+    "png",
+    "jpeg",
+    "lossless",
+    "avif",
+    "webp",
+    "resize"
+  ],
+  "author": "LongYinan <github@lyn.one>",
+  "homepage": "https://github.com/Brooooooklyn/Image",
+  "license": "MIT",
+  "main": "index.js",
+  "files": [
+    "lib"
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Brooooooklyn/Image.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Brooooooklyn/Image/issues"
+  }
+}

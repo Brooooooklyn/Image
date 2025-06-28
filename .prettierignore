@@ -1,0 +1,7 @@
+target
+node_modules
+lib
+.yarn
+index.js
+index.d.js
+.next
