@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+# [1.10.0](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.9.2...@napi-rs/image@1.10.0) (2025-06-28)
+
+### Features
+
+- upgrade all deps ([#132](https://github.com/Brooooooklyn/Image/issues/132)) ([89631c3](https://github.com/Brooooooklyn/Image/commit/89631c32fc6226344d7e87bee0d969d9d67730c5))
+
 ## [1.9.2](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.9.1...@napi-rs/image@1.9.2) (2024-04-20)
 
 **Note:** Version bump only for package @napi-rs/image
