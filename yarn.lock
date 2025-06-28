@@ -953,7 +953,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@napi-rs/cli@npm:^3.0.0-alpha.55, @napi-rs/cli@npm:^3.0.0-alpha.91":
+"@napi-rs/cli@npm:^3.0.0-alpha.91":
   version: 3.0.0-alpha.91
   resolution: "@napi-rs/cli@npm:3.0.0-alpha.91"
   dependencies:
@@ -1027,7 +1027,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@napi-rs/image@workspace:packages/binding"
   dependencies:
-    "@napi-rs/cli": "npm:^3.0.0-alpha.55"
+    "@napi-rs/cli": "npm:^3.0.0-alpha.91"
     "@napi-rs/wasm-runtime": "npm:^0.2.11"
   languageName: unknown
   linkType: soft

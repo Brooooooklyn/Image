@@ -62,11 +62,11 @@
     "format:prettier": "prettier --config ./package.json -w .",
     "format:rs": "cargo fmt --all",
     "prepublishOnly": "napi prepublish",
-    "version": "napi version && git add npm"
+    "version": "napi version"
   },
   "repository": "git@github.com:Brooooooklyn/Image.git",
   "devDependencies": {
-    "@napi-rs/cli": "^3.0.0-alpha.55",
+    "@napi-rs/cli": "^3.0.0-alpha.91",
     "@napi-rs/wasm-runtime": "^0.2.11"
   }
 }
