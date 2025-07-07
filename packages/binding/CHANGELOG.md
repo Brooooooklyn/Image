@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+# [1.11.0](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.10.0...@napi-rs/image@1.11.0) (2025-07-07)
+
+### Features
+
+- metadataSync ([#137](https://github.com/Brooooooklyn/Image/issues/137)) ([829ec1a](https://github.com/Brooooooklyn/Image/commit/829ec1ad17440b2cdba1c26b620cf7e41b7d366f))
+
 # [1.10.0](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.9.2...@napi-rs/image@1.10.0) (2025-06-28)
 
 ### Features
