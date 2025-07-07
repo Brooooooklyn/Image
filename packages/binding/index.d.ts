@@ -6,6 +6,7 @@ export declare class Transformer {
   static fromSvg(input: string | Uint8Array, background?: string | undefined | null): Transformer
   static fromRgbaPixels(input: Uint8Array | Uint8ClampedArray, width: number, height: number): Transformer
   metadata(withExif?: boolean | undefined | null, signal?: AbortSignal | undefined | null): Promise<Metadata>
+  metadataSync(withExif?: boolean | undefined | null): Metadata
   /**
    * Rotate with exif orientation
    * If the orientation param is not null,
