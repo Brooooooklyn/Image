@@ -136,6 +136,8 @@ jobs:
               unset RUSTFLAGS &&
               unset CC &&
               unset CXX &&
+              rustup target add aarch64-unknown-linux-musl &&
+              rustup update &&
               apk add --update --repository http://dl-cdn.alpinelinux.org/alpine/edge/testing --no-cache aom-dev perl meson &&
               yarn workspace @napi-rs/image build --target aarch64-unknown-linux-musl --features with_simd &&
               chmod -R 777 target
@@ -162,7 +164,6 @@ jobs:
           cache: yarn
       - name: Setup nasm
         uses: ilammy/setup-nasm@v1
-        if: matrix.settings.target == 'x86_64-pc-windows-msvc' || matrix.settings.target == 'x86_64-apple-darwin' || matrix.settings.target == 'i686-pc-windows-msvc'
       - name: Install cargo-xwin
         uses: taiki-e/install-action@v2
         if: matrix.settings.target == 'i686-pc-windows-msvc' || matrix.settings.target == 'aarch64-pc-windows-msvc'
