@@ -1035,7 +1035,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@napi-rs/image@workspace:*, @napi-rs/image@workspace:packages/binding":
+"@napi-rs/image@npm:^1.11.0, @napi-rs/image@workspace:packages/binding":
   version: 0.0.0-use.local
   resolution: "@napi-rs/image@workspace:packages/binding"
   dependencies:
@@ -12243,7 +12243,7 @@ __metadata:
   resolution: "website@workspace:website"
   dependencies:
     "@napi-rs/canvas": "npm:^0.1.74"
-    "@napi-rs/image": "workspace:*"
+    "@napi-rs/image": "npm:^1.11.0"
     chalk: "npm:^5.4.1"
     next: "npm:^15.4.3"
     nextra: "npm:^3"
