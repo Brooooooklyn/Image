@@ -73,6 +73,8 @@ jobs:
           - host: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             build: |
+              CC=clang
+              CXX=clang++
               TARGET_CC=clang
               TARGET_CXX=clang++
               yarn workspace @napi-rs/image build --features with_simd --target x86_64-unknown-linux-gnu --use-napi-cross
