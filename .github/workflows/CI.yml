@@ -72,17 +72,10 @@ jobs:
             target: i686-pc-windows-msvc
           - host: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            docker: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-debian
-            build: >-
-              set -e &&
-              apt-get update &&
-              apt-get install meson -y &&
-              rm /usr/lib/llvm-18/lib/libc++.so &&
-              export LDFLAGS="-L/usr/lib/llvm-18/lib -L/usr/x86_64-unknown-linux-gnu/lib/gcc/x86_64-unknown-linux-gnu/4.8.5" &&
-              export CFLAGS="-fuse-ld=lld -B/usr/aarch64-unknown-linux-gnu/lib/gcc/aarch64-unknown-linux-gnu/4.8.5 --sysroot=/usr/x86_64-unknown-linux-gnu/x86_64-unknown-linux-gnu/sysroot" &&
-              export CXXFLAGS="-stdlib=libc++ -fuse-ld=lld -B/usr/aarch64-unknown-linux-gnu/lib/gcc/aarch64-unknown-linux-gnu/4.8.5 --sysroot=/usr/x86_64-unknown-linux-gnu/x86_64-unknown-linux-gnu/sysroot -L/usr/lib/llvm-15/lib" &&
-              yarn workspace @napi-rs/image build --features with_simd --target x86_64-unknown-linux-gnu &&
-              chmod -R 777 target
+            build: |
+              TARGET_CC=clang
+              TARGET_CXX=clang++
+              yarn workspace @napi-rs/image build --features with_simd --target x86_64-unknown-linux-gnu --use-napi-cross
           - host: ubuntu-latest
             target: x86_64-unknown-linux-musl
             docker: ghcr.io/brooooooklyn/canvas/musl-builder:lts
