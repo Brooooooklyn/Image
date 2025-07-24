@@ -213,8 +213,8 @@ jobs:
         with:
           name: bindings-${{ matrix.settings.target }}
           path: |
-            packages/*/*.node
-            packages/*/*.wasm
+            packages/binding/*.node
+            packages/binding/image.wasm32-wasi.wasm
           if-no-files-found: error
   
   
