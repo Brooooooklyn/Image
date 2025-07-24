@@ -1,5 +1,5 @@
 [package]
-edition = "2021"
+edition = "2024"
 name    = "napi_rs_image"
 version = "0.0.0"
 
@@ -16,7 +16,7 @@ oxipng_libdeflater = ["oxipng/zopfli", "oxipng/parallel"]
 with_simd          = ["mozjpeg-sys/nasm_simd_parallel_build"]
 
 [dependencies]
-fast_image_resize = "5"
+fast_image_resize = { version = "5", features = ["image"] }
 image             = { version = "0.25", default-features = false, features = ["jpeg", "ico", "png", "pnm", "tga", "tiff", "bmp", "webp", "hdr", "dds"] }
 imagequant        = "4.0.0"
 jpeg-decoder      = "0.3"
