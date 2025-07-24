@@ -527,6 +527,10 @@ jobs:
       - build
     steps:
       - uses: actions/checkout@v4
+      - name: Setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
