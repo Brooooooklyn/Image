@@ -66,7 +66,7 @@ unsafe fn moz_jpeg_compress(
   usize,
   mozjpeg_sys::jpeg_decompress_struct,
   mozjpeg_sys::jpeg_compress_struct,
-)> {
+)> { unsafe {
   std::panic::catch_unwind(|| {
     let mut de_c_info: mozjpeg_sys::jpeg_decompress_struct = std::mem::zeroed();
     let mut err_handler = create_error_handler();
@@ -110,15 +110,15 @@ unsafe fn moz_jpeg_compress(
       format!("Compress JPEG failed {err:?}"),
     )
   })
-}
+}}
 
-unsafe fn create_error_handler() -> mozjpeg_sys::jpeg_error_mgr {
+unsafe fn create_error_handler() -> mozjpeg_sys::jpeg_error_mgr { unsafe {
   let mut err: mozjpeg_sys::jpeg_error_mgr = std::mem::zeroed();
   mozjpeg_sys::jpeg_std_error(&mut err);
   err.error_exit = Some(unwind_error_exit);
   err.emit_message = Some(silence_message);
   err
-}
+}}
 
 unsafe extern "C-unwind" fn unwind_error_exit(cinfo: &mut mozjpeg_sys::jpeg_common_struct) {
   let message = unsafe {
