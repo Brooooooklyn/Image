@@ -522,7 +522,7 @@ jobs:
           run: yarn test
   test-wasi-on-nodejs:
     name: Test wasi on Node.js
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
     needs:
       - build
     steps:
