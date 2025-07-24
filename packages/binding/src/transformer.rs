@@ -4,19 +4,19 @@ use std::sync::Arc;
 
 use image::imageops::overlay;
 use image::{
-  imageops::FilterType, ColorType, DynamicImage, ImageBuffer, ImageEncoder, ImageFormat, RgbaImage,
+  ColorType, DynamicImage, ImageBuffer, ImageEncoder, ImageFormat, RgbaImage, imageops::FilterType,
 };
 use libavif::AvifData;
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use resvg::{
   tiny_skia,
-  usvg::{self, fontdb::Database, Options},
+  usvg::{self, Options, fontdb::Database},
 };
 
 use crate::{
-  avif::{encode_avif_inner, AvifConfig},
-  fast_resize::{fast_resize, FastResizeOptions, ResizeFit},
+  avif::{AvifConfig, encode_avif_inner},
+  fast_resize::{FastResizeOptions, ResizeFit, fast_resize},
   png::PngEncodeOptions,
 };
 
@@ -205,6 +205,7 @@ impl ThreadsafeDynamicImage {
     }
   }
 
+  #[allow(clippy::mut_from_ref)]
   pub(crate) fn get(&self, with_exif: bool) -> Result<&mut ImageMetaData> {
     let image = Box::leak(unsafe { Box::from_raw(self.image) });
     let mut exif = HashMap::new();
@@ -784,8 +785,8 @@ impl Transformer {
   #[napi]
   pub fn metadata_sync(&mut self, env: Env, with_exif: Option<bool>) -> Result<Metadata> {
     let mut task = MetadataTask {
-        dynamic_image: self.dynamic_image.clone(),
-        with_exif: with_exif.unwrap_or(false),
+      dynamic_image: self.dynamic_image.clone(),
+      with_exif: with_exif.unwrap_or(false),
     };
     let output = task.compute()?;
     task.resolve(env, output)

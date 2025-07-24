@@ -7,7 +7,7 @@ pub(crate) unsafe fn lossless_encode_webp_inner(
   width: u32,
   height: u32,
   color_type: &image::ColorType,
-) -> Result<(*mut u8, usize)> {
+) -> Result<(*mut u8, usize)> { unsafe {
   let mut out_buf = std::ptr::null_mut();
   let len = match color_type {
     ColorType::Rgb8 => {
@@ -38,7 +38,7 @@ pub(crate) unsafe fn lossless_encode_webp_inner(
     }
   };
   Ok((out_buf, len))
-}
+}}
 
 #[inline]
 pub(crate) unsafe fn encode_webp_inner(
@@ -47,7 +47,7 @@ pub(crate) unsafe fn encode_webp_inner(
   width: u32,
   height: u32,
   color_type: &image::ColorType,
-) -> Result<(*mut u8, usize)> {
+) -> Result<(*mut u8, usize)> { unsafe {
   let mut out_buf = std::ptr::null_mut();
   let len = match input {
     DynamicImage::ImageRgb8(input) => {
@@ -104,4 +104,4 @@ pub(crate) unsafe fn encode_webp_inner(
     }
   };
   Ok((out_buf, len))
-}
+}}

@@ -12,19 +12,19 @@
     "website"
   ],
   "devDependencies": {
-    "@napi-rs/cli": "^3.0.0-alpha.92",
+    "@napi-rs/cli": "^3.0.4",
     "@taplo/cli": "^0.7.0",
-    "@types/node": "^24.0.4",
+    "@types/node": "^24.1.0",
     "@types/sharp": "^0.32.0",
-    "ava": "^6.4.0",
+    "ava": "^6.4.1",
     "blurhash": "^2.0.5",
     "chalk": "^5.4.1",
-    "electron": "^37.0.0",
-    "lerna": "^8.2.2",
+    "electron": "^37.2.4",
+    "lerna": "^8.2.3",
     "npm-run-all2": "^8.0.4",
-    "prettier": "^3.6.1",
+    "prettier": "^3.6.2",
     "rxjs": "^7.8.2",
-    "sharp": "^0.34.2",
+    "sharp": "^0.34.3",
     "typescript": "^5.8.3"
   },
   "scripts": {
