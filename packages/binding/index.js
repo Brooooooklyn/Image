@@ -365,7 +365,6 @@ if (!nativeBinding || process.env.NAPI_RS_FORCE_WASI) {
   try {
     nativeBinding = require('./image.wasi.cjs')
   } catch (err) {
-    console.error(err)
     if (process.env.NAPI_RS_FORCE_WASI) {
       loadErrors.push(err)
     }
