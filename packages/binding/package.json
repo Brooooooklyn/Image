@@ -1,6 +1,6 @@
 {
   "name": "@napi-rs/image",
-  "version": "1.11.0",
+  "version": "1.11.1",
   "main": "index.js",
   "browser": "browser.js",
   "types": "index.d.ts",
