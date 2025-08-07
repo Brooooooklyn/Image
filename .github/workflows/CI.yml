@@ -359,7 +359,7 @@ jobs:
       - name: Install dependencies
         run: yarn install --immutable
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: bindings-${{ matrix.settings.target }}
           path: artifacts
@@ -400,7 +400,7 @@ jobs:
       - name: Install dependencies
         run: yarn install --immutable
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: bindings-x86_64-unknown-linux-gnu
           path: artifacts
@@ -435,7 +435,7 @@ jobs:
       - name: Install dependencies
         run: yarn install --immutable --mode=skip-build
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: bindings-x86_64-unknown-linux-musl
           path: artifacts
@@ -463,7 +463,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: bindings-aarch64-unknown-linux-gnu
           path: artifacts
@@ -497,7 +497,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: bindings-armv7-unknown-linux-gnueabihf
           path: artifacts
@@ -534,7 +534,7 @@ jobs:
         with:
           node-version: 22
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: bindings-wasm32-wasip1-threads
           path: packages/binding
@@ -571,7 +571,7 @@ jobs:
       - name: Create npm dirs
         run: yarn workspace @napi-rs/image napi create-npm-dirs
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: artifacts
       - name: Move artifacts
