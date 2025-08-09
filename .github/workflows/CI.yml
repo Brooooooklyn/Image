@@ -3,9 +3,6 @@ env:
   DEBUG: napi:*
   APP_NAME: image
   SYSTEM_DEPS_DAV1D_BUILD_INTERNAL: 'always'
-permissions:
-  contents: write
-  id-token: write
 'on':
   push:
     branches:
@@ -555,6 +552,9 @@ jobs:
   publish:
     name: Publish
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
     needs:
       - build-freebsd
       - test-macOS-windows-binding
@@ -586,9 +586,7 @@ jobs:
       - name: Publish
         if: "startsWith(github.event.head_commit.message, 'chore(release): publish')"
         run: |
-          npm config set provenance true
-          echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" >> ~/.npmrc
+          npm install -g npm
           npx lerna publish from-package --no-verify-access --yes
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
