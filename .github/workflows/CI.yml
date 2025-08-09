@@ -80,17 +80,11 @@ jobs:
               yarn workspace @napi-rs/image build --features with_simd --target x86_64-unknown-linux-gnu --use-napi-cross
           - host: ubuntu-latest
             target: x86_64-unknown-linux-musl
-            docker: ghcr.io/brooooooklyn/canvas/musl-builder:lts
-            build: >-
-              set -e &&
-              apk add clang20-libclang libc++-dev libc++-static &&
-              cp /usr/lib/gcc/x86_64-alpine-linux-musl/14.2.0/*.o /usr/lib/ &&
-              cp /usr/lib/gcc/x86_64-alpine-linux-musl/14.2.0/libgcc.a /usr/lib/ &&
-              cp /usr/lib/gcc/x86_64-alpine-linux-musl/14.2.0/libgcc_eh.a /usr/lib/ &&
-              wget "https://github.com/Brooooooklyn/canvas/releases/download/libcxxabi-$(cat llvm-version)/libc++abi-x86_64.a" &&
-              mv libc++abi-x86_64.a /usr/lib/libc++abi.a &&
-              CXXFLAGS="-std=c++20 -stdlib=libc++ -static -fPIC -fno-cxx-exceptions -fno-exceptions -I/usr/include/c++/v1" CC=clang CXX=clang++ yarn workspace @napi-rs/image build --target x86_64-unknown-linux-musl --features with_simd &&
-              chmod -R 777 target
+            build: |
+              sudo apt-get update
+              sudo apt-get install -y musl-dev
+              export BINDGEN_EXTRA_CLANG_ARGS="-I/usr/include/x86_64-linux-musl"
+              yarn workspace @napi-rs/image build -x --target x86_64-unknown-linux-musl --features with_simd
           - host: macos-latest
             target: aarch64-apple-darwin
             setup: |
@@ -190,10 +184,6 @@ jobs:
             ~/.napi-rs
             target/
           key: ${{ matrix.settings.target }}-cargo-cache
-      - uses: goto-bus-stop/setup-zig@v2
-        if: ${{ contains(matrix.settings.target, 'musl') }}
-        with:
-          version: 0.14.1
       - name: Setup toolchain
         run: ${{ matrix.settings.setup }}
         if: ${{ matrix.settings.setup }}
