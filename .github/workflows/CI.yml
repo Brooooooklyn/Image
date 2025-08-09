@@ -83,7 +83,7 @@ jobs:
             docker: ghcr.io/brooooooklyn/canvas/musl-builder:lts
             build: >-
               set -e &&
-              apk add libc++-dev libc++-static &&
+              apk add clang20-libclang libc++-dev libc++-static &&
               cp /usr/lib/gcc/x86_64-alpine-linux-musl/14.2.0/*.o /usr/lib/ &&
               cp /usr/lib/gcc/x86_64-alpine-linux-musl/14.2.0/libgcc.a /usr/lib/ &&
               cp /usr/lib/gcc/x86_64-alpine-linux-musl/14.2.0/libgcc_eh.a /usr/lib/ &&
@@ -122,28 +122,23 @@ jobs:
               export CXX=aarch64-linux-android24-clang++
               export CMAKE_TOOLCHAIN_FILE_aarch64_linux_android="$(pwd)/packages/binding/android-determine.cmake"
               yarn workspace @napi-rs/image build --target aarch64-linux-android --features with_simd
-          - host: ubuntu-latest
+          - host: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
-            docker: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-alpine
-            build: >-
-              set -e &&
-              unset RUSTFLAGS &&
-              unset CC &&
-              unset CXX &&
-              rustup target add aarch64-unknown-linux-musl &&
-              rustup update &&
-              apk add --update --repository http://dl-cdn.alpinelinux.org/alpine/edge/testing --no-cache aom-dev perl meson &&
-              yarn workspace @napi-rs/image build --target aarch64-unknown-linux-musl --features with_simd &&
-              chmod -R 777 target
+            build: |
+              sudo apt-get update
+              sudo apt-get install -y musl-dev
+              export BINDGEN_EXTRA_CLANG_ARGS="-I/usr/include/aarch64-linux-musl"
+              yarn workspace @napi-rs/image build -x --target aarch64-unknown-linux-musl --features with_simd
           - host: ubuntu-latest
             target: wasm32-wasip1-threads
             setup: |
-              wget https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-25/wasi-sdk-25.0-x86_64-linux.tar.gz
-              tar -xvf wasi-sdk-25.0-x86_64-linux.tar.gz
+              wget https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-27/wasi-sdk-27.0-x86_64-linux.tar.gz
+              tar -xvf wasi-sdk-27.0-x86_64-linux.tar.gz
             build: |
-              export WASI_SDK_PATH="$(pwd)/wasi-sdk-25.0-x86_64-linux"
+              export WASI_SDK_PATH="$(pwd)/wasi-sdk-27.0-x86_64-linux"
+              export BINDGEN_EXTRA_CLANG_ARGS="--sysroot=$WASI_SDK_PATH/share/wasi-sysroot"
               export CMAKE_BUILD_PARALLEL_LEVEL=2
-              export TARGET_CXXFLAGS="--target=wasm32-wasi-threads --sysroot=$(pwd)/wasi-sdk-25.0-x86_64-linux/share/wasi-sysroot -pthread -mllvm -wasm-enable-sjlj -lsetjmp"
+              export TARGET_CXXFLAGS="--target=wasm32-wasi-threads --sysroot=$(pwd)/wasi-sdk-27.0-x86_64-linux/share/wasi-sysroot -pthread -mllvm -wasm-enable-sjlj -lsetjmp"
               export TARGET_CFLAGS="$TARGET_CXXFLAGS"
               yarn workspace @napi-rs/image build --target wasm32-wasip1-threads
 
@@ -167,6 +162,17 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         with:
           tool: cargo-xwin
+      - uses: mlugg/setup-zig@v2
+        if: ${{ contains(matrix.settings.target, 'musl') }}
+        with:
+          version: 0.14.1
+      - name: Install cargo-zigbuild
+        uses: taiki-e/install-action@v2
+        if: ${{ contains(matrix.settings.target, 'musl') }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          tool: cargo-zigbuild
       - name: Install
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -293,7 +299,7 @@ jobs:
           shell: bash
           run: |
             env | sort
-            sudo pkg install -y -f curl node libnghttp2 npm cmake nasm perl5
+            sudo pkg install -y -f curl node libnghttp2 npm cmake nasm perl5 llvm19
             sudo npm install -g yarn --ignore-scripts
             curl https://sh.rustup.rs -sSf --output rustup.sh
             sh rustup.sh -y --default-toolchain stable

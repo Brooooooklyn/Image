@@ -1,5 +1,5 @@
 use fast_image_resize as fr;
-use fr::{images::Image, FilterType};
+use fr::{FilterType, images::Image};
 use image::DynamicImage;
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
@@ -76,7 +76,10 @@ pub struct FastResizeOptions {
   pub fit: Option<ResizeFit>,
 }
 
-pub fn fast_resize(img: &DynamicImage, options: FastResizeOptions) -> Result<Image> {
+pub fn fast_resize<'env>(
+  img: &'env DynamicImage,
+  options: FastResizeOptions,
+) -> Result<Image<'env>> {
   let width = img.width();
   let height = img.height();
   let mut rgba8 = img.to_rgba8();

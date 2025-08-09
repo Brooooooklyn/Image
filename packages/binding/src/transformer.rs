@@ -429,7 +429,7 @@ pub enum EncodeOutput {
 }
 
 impl EncodeOutput {
-  pub(crate) fn into_buffer_slice(self, env: &Env) -> Result<BufferSlice> {
+  pub(crate) fn into_buffer_slice<'env>(self, env: &'env Env) -> Result<BufferSlice<'env>> {
     match self {
       EncodeOutput::Raw(ptr, len) => unsafe {
         BufferSlice::from_external(env, ptr, len, ptr, |_, pointer| {
