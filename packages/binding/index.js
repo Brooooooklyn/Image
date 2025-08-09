@@ -78,7 +78,12 @@ function requireNative() {
         loadErrors.push(e)
       }
       try {
-        return require('@napi-rs/image-android-arm64')
+        const binding = require('@napi-rs/image-android-arm64')
+        const bindingPackageVersion = require('@napi-rs/image-android-arm64/package.json').version
+        if (bindingPackageVersion !== '1.11.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+          throw new Error(`Native binding package version mismatch, expected 1.11.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+        }
+        return binding
       } catch (e) {
         loadErrors.push(e)
       }
@@ -89,7 +94,12 @@ function requireNative() {
         loadErrors.push(e)
       }
       try {
-        return require('@napi-rs/image-android-arm-eabi')
+        const binding = require('@napi-rs/image-android-arm-eabi')
+        const bindingPackageVersion = require('@napi-rs/image-android-arm-eabi/package.json').version
+        if (bindingPackageVersion !== '1.11.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+          throw new Error(`Native binding package version mismatch, expected 1.11.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+        }
+        return binding
       } catch (e) {
         loadErrors.push(e)
       }
@@ -104,7 +114,12 @@ function requireNative() {
         loadErrors.push(e)
       }
       try {
-        return require('@napi-rs/image-win32-x64-msvc')
+        const binding = require('@napi-rs/image-win32-x64-msvc')
+        const bindingPackageVersion = require('@napi-rs/image-win32-x64-msvc/package.json').version
+        if (bindingPackageVersion !== '1.11.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+          throw new Error(`Native binding package version mismatch, expected 1.11.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+        }
+        return binding
       } catch (e) {
         loadErrors.push(e)
       }
@@ -115,7 +130,12 @@ function requireNative() {
         loadErrors.push(e)
       }
       try {
-        return require('@napi-rs/image-win32-ia32-msvc')
+        const binding = require('@napi-rs/image-win32-ia32-msvc')
+        const bindingPackageVersion = require('@napi-rs/image-win32-ia32-msvc/package.json').version
+        if (bindingPackageVersion !== '1.11.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+          throw new Error(`Native binding package version mismatch, expected 1.11.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+        }
+        return binding
       } catch (e) {
         loadErrors.push(e)
       }
@@ -126,7 +146,12 @@ function requireNative() {
         loadErrors.push(e)
       }
       try {
-        return require('@napi-rs/image-win32-arm64-msvc')
+        const binding = require('@napi-rs/image-win32-arm64-msvc')
+        const bindingPackageVersion = require('@napi-rs/image-win32-arm64-msvc/package.json').version
+        if (bindingPackageVersion !== '1.11.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+          throw new Error(`Native binding package version mismatch, expected 1.11.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+        }
+        return binding
       } catch (e) {
         loadErrors.push(e)
       }
@@ -140,7 +165,12 @@ function requireNative() {
       loadErrors.push(e)
     }
     try {
-      return require('@napi-rs/image-darwin-universal')
+      const binding = require('@napi-rs/image-darwin-universal')
+      const bindingPackageVersion = require('@napi-rs/image-darwin-universal/package.json').version
+      if (bindingPackageVersion !== '1.11.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+        throw new Error(`Native binding package version mismatch, expected 1.11.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+      }
+      return binding
     } catch (e) {
       loadErrors.push(e)
     }
@@ -151,7 +181,12 @@ function requireNative() {
         loadErrors.push(e)
       }
       try {
-        return require('@napi-rs/image-darwin-x64')
+        const binding = require('@napi-rs/image-darwin-x64')
+        const bindingPackageVersion = require('@napi-rs/image-darwin-x64/package.json').version
+        if (bindingPackageVersion !== '1.11.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+          throw new Error(`Native binding package version mismatch, expected 1.11.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+        }
+        return binding
       } catch (e) {
         loadErrors.push(e)
       }
@@ -162,7 +197,12 @@ function requireNative() {
         loadErrors.push(e)
       }
       try {
-        return require('@napi-rs/image-darwin-arm64')
+        const binding = require('@napi-rs/image-darwin-arm64')
+        const bindingPackageVersion = require('@napi-rs/image-darwin-arm64/package.json').version
+        if (bindingPackageVersion !== '1.11.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+          throw new Error(`Native binding package version mismatch, expected 1.11.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+        }
+        return binding
       } catch (e) {
         loadErrors.push(e)
       }
@@ -177,7 +217,12 @@ function requireNative() {
         loadErrors.push(e)
       }
       try {
-        return require('@napi-rs/image-freebsd-x64')
+        const binding = require('@napi-rs/image-freebsd-x64')
+        const bindingPackageVersion = require('@napi-rs/image-freebsd-x64/package.json').version
+        if (bindingPackageVersion !== '1.11.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+          throw new Error(`Native binding package version mismatch, expected 1.11.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+        }
+        return binding
       } catch (e) {
         loadErrors.push(e)
       }
@@ -188,7 +233,12 @@ function requireNative() {
         loadErrors.push(e)
       }
       try {
-        return require('@napi-rs/image-freebsd-arm64')
+        const binding = require('@napi-rs/image-freebsd-arm64')
+        const bindingPackageVersion = require('@napi-rs/image-freebsd-arm64/package.json').version
+        if (bindingPackageVersion !== '1.11.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+          throw new Error(`Native binding package version mismatch, expected 1.11.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+        }
+        return binding
       } catch (e) {
         loadErrors.push(e)
       }
@@ -204,7 +254,12 @@ function requireNative() {
           loadErrors.push(e)
         }
         try {
-          return require('@napi-rs/image-linux-x64-musl')
+          const binding = require('@napi-rs/image-linux-x64-musl')
+          const bindingPackageVersion = require('@napi-rs/image-linux-x64-musl/package.json').version
+          if (bindingPackageVersion !== '1.11.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+            throw new Error(`Native binding package version mismatch, expected 1.11.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+          }
+          return binding
         } catch (e) {
           loadErrors.push(e)
         }
@@ -215,7 +270,12 @@ function requireNative() {
           loadErrors.push(e)
         }
         try {
-          return require('@napi-rs/image-linux-x64-gnu')
+          const binding = require('@napi-rs/image-linux-x64-gnu')
+          const bindingPackageVersion = require('@napi-rs/image-linux-x64-gnu/package.json').version
+          if (bindingPackageVersion !== '1.11.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+            throw new Error(`Native binding package version mismatch, expected 1.11.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+          }
+          return binding
         } catch (e) {
           loadErrors.push(e)
         }
@@ -228,7 +288,12 @@ function requireNative() {
           loadErrors.push(e)
         }
         try {
-          return require('@napi-rs/image-linux-arm64-musl')
+          const binding = require('@napi-rs/image-linux-arm64-musl')
+          const bindingPackageVersion = require('@napi-rs/image-linux-arm64-musl/package.json').version
+          if (bindingPackageVersion !== '1.11.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+            throw new Error(`Native binding package version mismatch, expected 1.11.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+          }
+          return binding
         } catch (e) {
           loadErrors.push(e)
         }
@@ -239,7 +304,12 @@ function requireNative() {
           loadErrors.push(e)
         }
         try {
-          return require('@napi-rs/image-linux-arm64-gnu')
+          const binding = require('@napi-rs/image-linux-arm64-gnu')
+          const bindingPackageVersion = require('@napi-rs/image-linux-arm64-gnu/package.json').version
+          if (bindingPackageVersion !== '1.11.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+            throw new Error(`Native binding package version mismatch, expected 1.11.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+          }
+          return binding
         } catch (e) {
           loadErrors.push(e)
         }
@@ -252,7 +322,12 @@ function requireNative() {
           loadErrors.push(e)
         }
         try {
-          return require('@napi-rs/image-linux-arm-musleabihf')
+          const binding = require('@napi-rs/image-linux-arm-musleabihf')
+          const bindingPackageVersion = require('@napi-rs/image-linux-arm-musleabihf/package.json').version
+          if (bindingPackageVersion !== '1.11.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+            throw new Error(`Native binding package version mismatch, expected 1.11.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+          }
+          return binding
         } catch (e) {
           loadErrors.push(e)
         }
@@ -263,7 +338,12 @@ function requireNative() {
           loadErrors.push(e)
         }
         try {
-          return require('@napi-rs/image-linux-arm-gnueabihf')
+          const binding = require('@napi-rs/image-linux-arm-gnueabihf')
+          const bindingPackageVersion = require('@napi-rs/image-linux-arm-gnueabihf/package.json').version
+          if (bindingPackageVersion !== '1.11.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+            throw new Error(`Native binding package version mismatch, expected 1.11.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+          }
+          return binding
         } catch (e) {
           loadErrors.push(e)
         }
@@ -276,7 +356,12 @@ function requireNative() {
           loadErrors.push(e)
         }
         try {
-          return require('@napi-rs/image-linux-riscv64-musl')
+          const binding = require('@napi-rs/image-linux-riscv64-musl')
+          const bindingPackageVersion = require('@napi-rs/image-linux-riscv64-musl/package.json').version
+          if (bindingPackageVersion !== '1.11.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+            throw new Error(`Native binding package version mismatch, expected 1.11.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+          }
+          return binding
         } catch (e) {
           loadErrors.push(e)
         }
@@ -287,7 +372,12 @@ function requireNative() {
           loadErrors.push(e)
         }
         try {
-          return require('@napi-rs/image-linux-riscv64-gnu')
+          const binding = require('@napi-rs/image-linux-riscv64-gnu')
+          const bindingPackageVersion = require('@napi-rs/image-linux-riscv64-gnu/package.json').version
+          if (bindingPackageVersion !== '1.11.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+            throw new Error(`Native binding package version mismatch, expected 1.11.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+          }
+          return binding
         } catch (e) {
           loadErrors.push(e)
         }
@@ -299,7 +389,12 @@ function requireNative() {
         loadErrors.push(e)
       }
       try {
-        return require('@napi-rs/image-linux-ppc64-gnu')
+        const binding = require('@napi-rs/image-linux-ppc64-gnu')
+        const bindingPackageVersion = require('@napi-rs/image-linux-ppc64-gnu/package.json').version
+        if (bindingPackageVersion !== '1.11.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+          throw new Error(`Native binding package version mismatch, expected 1.11.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+        }
+        return binding
       } catch (e) {
         loadErrors.push(e)
       }
@@ -310,7 +405,12 @@ function requireNative() {
         loadErrors.push(e)
       }
       try {
-        return require('@napi-rs/image-linux-s390x-gnu')
+        const binding = require('@napi-rs/image-linux-s390x-gnu')
+        const bindingPackageVersion = require('@napi-rs/image-linux-s390x-gnu/package.json').version
+        if (bindingPackageVersion !== '1.11.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+          throw new Error(`Native binding package version mismatch, expected 1.11.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+        }
+        return binding
       } catch (e) {
         loadErrors.push(e)
       }
@@ -320,34 +420,49 @@ function requireNative() {
   } else if (process.platform === 'openharmony') {
     if (process.arch === 'arm64') {
       try {
-        return require('./image.linux-arm64-ohos.node')
+        return require('./image.openharmony-arm64.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        return require('@napi-rs/image-linux-arm64-ohos')
+        const binding = require('@napi-rs/image-openharmony-arm64')
+        const bindingPackageVersion = require('@napi-rs/image-openharmony-arm64/package.json').version
+        if (bindingPackageVersion !== '1.11.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+          throw new Error(`Native binding package version mismatch, expected 1.11.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+        }
+        return binding
       } catch (e) {
         loadErrors.push(e)
       }
     } else if (process.arch === 'x64') {
       try {
-        return require('./image.linux-x64-ohos.node')
+        return require('./image.openharmony-x64.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        return require('@napi-rs/image-linux-x64-ohos')
+        const binding = require('@napi-rs/image-openharmony-x64')
+        const bindingPackageVersion = require('@napi-rs/image-openharmony-x64/package.json').version
+        if (bindingPackageVersion !== '1.11.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+          throw new Error(`Native binding package version mismatch, expected 1.11.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+        }
+        return binding
       } catch (e) {
         loadErrors.push(e)
       }
     } else if (process.arch === 'arm') {
       try {
-        return require('./image.linux-arm-ohos.node')
+        return require('./image.openharmony-arm.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        return require('@napi-rs/image-linux-arm-ohos')
+        const binding = require('@napi-rs/image-openharmony-arm')
+        const bindingPackageVersion = require('@napi-rs/image-openharmony-arm/package.json').version
+        if (bindingPackageVersion !== '1.11.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+          throw new Error(`Native binding package version mismatch, expected 1.11.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+        }
+        return binding
       } catch (e) {
         loadErrors.push(e)
       }

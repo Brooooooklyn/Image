@@ -14,11 +14,11 @@ pub struct JpegCompressOptions {
 }
 
 #[napi]
-pub fn compress_jpeg_sync(
+pub fn compress_jpeg_sync<'env>(
   env: Env,
-  input: &[u8],
+  input: &'env [u8],
   options: Option<JpegCompressOptions>,
-) -> Result<BufferSlice> {
+) -> Result<BufferSlice<'env>> {
   let options = options.unwrap_or_default();
   let quality = options.quality.unwrap_or(100);
   if quality != 100 {
@@ -66,59 +66,63 @@ unsafe fn moz_jpeg_compress(
   usize,
   mozjpeg_sys::jpeg_decompress_struct,
   mozjpeg_sys::jpeg_compress_struct,
-)> { unsafe {
-  std::panic::catch_unwind(|| {
-    let mut de_c_info: mozjpeg_sys::jpeg_decompress_struct = std::mem::zeroed();
-    let mut err_handler = create_error_handler();
-    de_c_info.common.err = &mut err_handler;
-    mozjpeg_sys::jpeg_create_decompress(&mut de_c_info);
-    let input_buf = input;
-    #[cfg(any(target_os = "windows", target_arch = "arm", target_arch = "wasm32"))]
-    mozjpeg_sys::jpeg_mem_src(&mut de_c_info, input_buf.as_ptr(), input_buf.len() as u32);
-    #[cfg(not(any(target_os = "windows", target_arch = "arm", target_arch = "wasm32")))]
-    mozjpeg_sys::jpeg_mem_src(&mut de_c_info, input_buf.as_ptr(), input_buf.len() as u64);
-    let mut compress_c_info: mozjpeg_sys::jpeg_compress_struct = std::mem::zeroed();
-    compress_c_info.optimize_coding = 1;
-    compress_c_info.common.err = &mut err_handler;
-    mozjpeg_sys::jpeg_create_compress(&mut compress_c_info);
-    mozjpeg_sys::jpeg_read_header(&mut de_c_info, 1);
-    let src_coef_arrays = mozjpeg_sys::jpeg_read_coefficients(&mut de_c_info);
-    mozjpeg_sys::jpeg_copy_critical_parameters(&de_c_info, &mut compress_c_info);
-    if opts.optimize_scans.unwrap_or(true) {
-      mozjpeg_sys::jpeg_c_set_bool_param(
+)> {
+  unsafe {
+    std::panic::catch_unwind(|| {
+      let mut de_c_info: mozjpeg_sys::jpeg_decompress_struct = std::mem::zeroed();
+      let mut err_handler = create_error_handler();
+      de_c_info.common.err = &mut err_handler;
+      mozjpeg_sys::jpeg_create_decompress(&mut de_c_info);
+      let input_buf = input;
+      #[cfg(any(target_os = "windows", target_arch = "arm", target_arch = "wasm32"))]
+      mozjpeg_sys::jpeg_mem_src(&mut de_c_info, input_buf.as_ptr(), input_buf.len() as u32);
+      #[cfg(not(any(target_os = "windows", target_arch = "arm", target_arch = "wasm32")))]
+      mozjpeg_sys::jpeg_mem_src(&mut de_c_info, input_buf.as_ptr(), input_buf.len() as u64);
+      let mut compress_c_info: mozjpeg_sys::jpeg_compress_struct = std::mem::zeroed();
+      compress_c_info.optimize_coding = 1;
+      compress_c_info.common.err = &mut err_handler;
+      mozjpeg_sys::jpeg_create_compress(&mut compress_c_info);
+      mozjpeg_sys::jpeg_read_header(&mut de_c_info, 1);
+      let src_coef_arrays = mozjpeg_sys::jpeg_read_coefficients(&mut de_c_info);
+      mozjpeg_sys::jpeg_copy_critical_parameters(&de_c_info, &mut compress_c_info);
+      if opts.optimize_scans.unwrap_or(true) {
+        mozjpeg_sys::jpeg_c_set_bool_param(
+          &mut compress_c_info,
+          mozjpeg_sys::J_BOOLEAN_PARAM::JBOOLEAN_OPTIMIZE_SCANS,
+          1,
+        );
+      }
+      mozjpeg_sys::jpeg_c_set_int_param(
         &mut compress_c_info,
-        mozjpeg_sys::J_BOOLEAN_PARAM::JBOOLEAN_OPTIMIZE_SCANS,
-        1,
+        mozjpeg_sys::J_INT_PARAM::JINT_DC_SCAN_OPT_MODE,
+        0,
       );
-    }
-    mozjpeg_sys::jpeg_c_set_int_param(
-      &mut compress_c_info,
-      mozjpeg_sys::J_INT_PARAM::JINT_DC_SCAN_OPT_MODE,
-      0,
-    );
-    let mut buf = std::ptr::null_mut();
-    let mut outsize = 0;
-    mozjpeg_sys::jpeg_mem_dest(&mut compress_c_info, &mut buf, &mut outsize);
-    mozjpeg_sys::jpeg_write_coefficients(&mut compress_c_info, src_coef_arrays);
-    mozjpeg_sys::jpeg_finish_compress(&mut compress_c_info);
-    mozjpeg_sys::jpeg_finish_decompress(&mut de_c_info);
-    (buf, outsize as usize, de_c_info, compress_c_info)
-  })
-  .map_err(|err| {
-    Error::new(
-      Status::GenericFailure,
-      format!("Compress JPEG failed {err:?}"),
-    )
-  })
-}}
+      let mut buf = std::ptr::null_mut();
+      let mut outsize = 0;
+      mozjpeg_sys::jpeg_mem_dest(&mut compress_c_info, &mut buf, &mut outsize);
+      mozjpeg_sys::jpeg_write_coefficients(&mut compress_c_info, src_coef_arrays);
+      mozjpeg_sys::jpeg_finish_compress(&mut compress_c_info);
+      mozjpeg_sys::jpeg_finish_decompress(&mut de_c_info);
+      (buf, outsize as usize, de_c_info, compress_c_info)
+    })
+    .map_err(|err| {
+      Error::new(
+        Status::GenericFailure,
+        format!("Compress JPEG failed {err:?}"),
+      )
+    })
+  }
+}
 
-unsafe fn create_error_handler() -> mozjpeg_sys::jpeg_error_mgr { unsafe {
-  let mut err: mozjpeg_sys::jpeg_error_mgr = std::mem::zeroed();
-  mozjpeg_sys::jpeg_std_error(&mut err);
-  err.error_exit = Some(unwind_error_exit);
-  err.emit_message = Some(silence_message);
-  err
-}}
+unsafe fn create_error_handler() -> mozjpeg_sys::jpeg_error_mgr {
+  unsafe {
+    let mut err: mozjpeg_sys::jpeg_error_mgr = std::mem::zeroed();
+    mozjpeg_sys::jpeg_std_error(&mut err);
+    err.error_exit = Some(unwind_error_exit);
+    err.emit_message = Some(silence_message);
+    err
+  }
+}
 
 unsafe extern "C-unwind" fn unwind_error_exit(cinfo: &mut mozjpeg_sys::jpeg_common_struct) {
   let message = unsafe {

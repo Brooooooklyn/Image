@@ -997,6 +997,38 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@napi-rs/cli@npm:^3.1.2":
+  version: 3.1.2
+  resolution: "@napi-rs/cli@npm:3.1.2"
+  dependencies:
+    "@inquirer/prompts": "npm:^7.4.0"
+    "@napi-rs/cross-toolchain": "npm:^1.0.0"
+    "@napi-rs/wasm-tools": "npm:^1.0.0"
+    "@octokit/rest": "npm:^22.0.0"
+    clipanion: "npm:^4.0.0-rc.4"
+    colorette: "npm:^2.0.20"
+    debug: "npm:^4.4.0"
+    emnapi: "npm:^1.4.0"
+    find-up: "npm:^7.0.0"
+    js-yaml: "npm:^4.1.0"
+    lodash-es: "npm:^4.17.21"
+    semver: "npm:^7.7.1"
+    typanion: "npm:^3.14.0"
+  peerDependencies:
+    "@emnapi/runtime": ^1.1.0
+    emnapi: ^1.1.0
+  peerDependenciesMeta:
+    "@emnapi/runtime":
+      optional: true
+    emnapi:
+      optional: true
+  bin:
+    napi: dist/cli.js
+    napi-raw: cli.mjs
+  checksum: 10c0/46f24791b08b6cfdf7a98c638b3350f8e32aadab1dc58938ee136396c911db0891af8cdde94f7462a037b77ca054477c72e9661d0168580571beaeb942808b3a
+  languageName: node
+  linkType: hard
+
 "@napi-rs/cross-toolchain@npm:^1.0.0":
   version: 1.0.0
   resolution: "@napi-rs/cross-toolchain@npm:1.0.0"
@@ -1038,8 +1070,8 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@napi-rs/image@workspace:packages/binding"
   dependencies:
-    "@napi-rs/cli": "npm:^3.0.4"
-    "@napi-rs/wasm-runtime": "npm:^1.0.1"
+    "@napi-rs/cli": "npm:^3.1.2"
+    "@napi-rs/wasm-runtime": "npm:^1.0.3"
   languageName: unknown
   linkType: soft
 
@@ -1573,6 +1605,17 @@ __metadata:
     "@emnapi/runtime": "npm:^1.4.5"
     "@tybys/wasm-util": "npm:^0.10.0"
   checksum: 10c0/3244105b75637d8d39e76782921fe46e48105bcd390db01a10dc7b596ee99af0f06b7f2b841d7632e756bd3220a5d595b9d426a5453da1ccc895900b894d098f
+  languageName: node
+  linkType: hard
+
+"@napi-rs/wasm-runtime@npm:^1.0.3":
+  version: 1.0.3
+  resolution: "@napi-rs/wasm-runtime@npm:1.0.3"
+  dependencies:
+    "@emnapi/core": "npm:^1.4.5"
+    "@emnapi/runtime": "npm:^1.4.5"
+    "@tybys/wasm-util": "npm:^0.10.0"
+  checksum: 10c0/7918d82477e75931b6e35bb003464382eb93e526362f81a98bf8610407a67b10f4d041931015ad48072c89db547deb7e471dfb91f4ab11ac63a24d8580297f75
   languageName: node
   linkType: hard
 
