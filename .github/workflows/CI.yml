@@ -141,7 +141,7 @@ jobs:
     env:
       RUST_TARGET: ${{ matrix.settings.target }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Setup node
         uses: actions/setup-node@v4
         with:
@@ -238,7 +238,7 @@ jobs:
           apt-get install -y clang-19
           ln -s /usr/bin/clang-19 /usr/bin/clang
           ln -s /usr/bin/clang++-19 /usr/bin/clang++
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: true
       - name: Setup cmake
@@ -276,7 +276,7 @@ jobs:
     runs-on: ubuntu-latest
     name: Build FreeBSD
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Build
         id: build
         uses: cross-platform-actions/action@v0.29.0
@@ -342,7 +342,7 @@ jobs:
           - '22'
     runs-on: ${{ matrix.settings.host }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Setup node
         uses: actions/setup-node@v4
         if: startsWith(matrix.settings.target, 'x86_64')
@@ -392,7 +392,7 @@ jobs:
           - '22'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Setup node
         uses: actions/setup-node@v4
         with:
@@ -427,7 +427,7 @@ jobs:
           - '22'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Setup node
         uses: actions/setup-node@v4
         with:
@@ -462,7 +462,7 @@ jobs:
           - '22'
     runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Download artifacts
         uses: actions/download-artifact@v5
         with:
@@ -496,7 +496,7 @@ jobs:
           - '22'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Download artifacts
         uses: actions/download-artifact@v5
         with:
@@ -529,7 +529,7 @@ jobs:
     needs:
       - build
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Setup node
         uses: actions/setup-node@v4
         with:
@@ -564,7 +564,7 @@ jobs:
       - test-linux-arm-gnueabihf-binding
       - test-wasi-on-nodejs
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Setup node
         uses: actions/setup-node@v4
         with:
