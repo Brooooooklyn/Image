@@ -266,7 +266,7 @@ fn png_quantize_inner(input: &[u8], options: &PngQuantOptions) -> Result<Vec<u8>
     )
     .map_err(|err| Error::new(Status::GenericFailure, format!("{err}")))?;
   let mut img = liq
-    .new_image(decoded_buf.as_rgba(), width as usize, height as usize, 0.0)
+    .new_image(decoded_buf.as_rgba(), width as usize, height as usize, 0.45)
     .map_err(|err| Error::new(Status::GenericFailure, format!("Create image failed {err}")))?;
   let mut quantization_result = liq
     .quantize(&mut img)
