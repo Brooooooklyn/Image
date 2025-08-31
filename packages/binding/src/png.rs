@@ -231,6 +231,18 @@ pub struct PngQuantOptions {
   /// Number of least significant bits to ignore.
   /// Useful for generating palettes for VGA, 15-bit textures, or other retro platforms.
   pub posterization: Option<u32>,
+  /// Gamma correction for color space handling during quantization.
+  /// 
+  /// This value is the reciprocal of the image's gamma curve and affects color accuracy 
+  /// during palette generation:
+  /// 
+  /// - Default: 0.45 (1/2.2) - appropriate for sRGB images (most common)
+  /// - 1.0 - for linear RGB images  
+  /// - 0.556 (1/1.8) - for older Mac gamma 1.8 images
+  /// - Custom values: 1/gamma_of_source_image for other color spaces
+  /// 
+  /// If unsure, leave as default for sRGB compatibility.
+  pub gamma: Option<f64>,
 }
 
 #[napi]
@@ -255,6 +267,14 @@ fn png_quantize_inner(input: &[u8], options: &PngQuantOptions) -> Result<Vec<u8>
   if decoded_buf.len() < (width * height * 4) as usize {
     return Ok(input.to_vec());
   }
+  
+  // Configure gamma for quantization - this affects color accuracy during palette generation
+  // Default 0.45 is appropriate for sRGB images (1/2.2 gamma)
+  // For non-sRGB images, users can specify the appropriate gamma value:
+  // - Linear RGB images should use gamma = 1.0
+  // - Images with other gamma curves should use the reciprocal of their gamma value
+  let gamma = options.gamma.unwrap_or(0.45);
+  
   let mut liq = imagequant::new();
   liq
     .set_speed(options.speed.unwrap_or(5) as i32)
@@ -266,7 +286,12 @@ fn png_quantize_inner(input: &[u8], options: &PngQuantOptions) -> Result<Vec<u8>
     )
     .map_err(|err| Error::new(Status::GenericFailure, format!("{err}")))?;
   let mut img = liq
-    .new_image(decoded_buf.as_rgba(), width as usize, height as usize, 0.45)
+    .new_image(
+      decoded_buf.as_rgba(), 
+      width as usize, 
+      height as usize, 
+      gamma
+    )
     .map_err(|err| Error::new(Status::GenericFailure, format!("Create image failed {err}")))?;
   let mut quantization_result = liq
     .quantize(&mut img)
