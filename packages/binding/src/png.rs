@@ -236,12 +236,15 @@ pub struct PngQuantOptions {
   /// This value is the reciprocal of the image's gamma curve and affects color accuracy 
   /// during palette generation:
   /// 
-  /// - Default: 0.45 (1/2.2) - appropriate for sRGB images (most common)
+  /// - Default: Auto-detected from PNG metadata (gAMA/sRGB chunks), fallback to 0.45 (sRGB)
   /// - 1.0 - for linear RGB images  
   /// - 0.556 (1/1.8) - for older Mac gamma 1.8 images
   /// - Custom values: 1/gamma_of_source_image for other color spaces
   /// 
-  /// If unsure, leave as default for sRGB compatibility.
+  /// When not specified, the function automatically detects gamma from PNG metadata:
+  /// 1. sRGB chunk → uses gamma 0.45 (1/2.2)
+  /// 2. gAMA chunk → uses reciprocal of the gamma value
+  /// 3. No metadata → defaults to 0.45 (sRGB fallback)
   pub gamma: Option<f64>,
 }
 
@@ -269,11 +272,13 @@ fn png_quantize_inner(input: &[u8], options: &PngQuantOptions) -> Result<Vec<u8>
   }
   
   // Configure gamma for quantization - this affects color accuracy during palette generation
-  // Default 0.45 is appropriate for sRGB images (1/2.2 gamma)
-  // For non-sRGB images, users can specify the appropriate gamma value:
-  // - Linear RGB images should use gamma = 1.0
-  // - Images with other gamma curves should use the reciprocal of their gamma value
-  let gamma = options.gamma.unwrap_or(0.45);
+  // Priority order:
+  // 1. User-specified gamma (if provided)
+  // 2. Automatic gamma detection from PNG metadata (gAMA chunk, sRGB chunk)
+  // 3. Default 0.45 (sRGB fallback)
+  let gamma = options.gamma.unwrap_or_else(|| {
+    detect_gamma_from_png_info(reader.info())
+  });
   
   let mut liq = imagequant::new();
   liq
@@ -318,6 +323,33 @@ fn png_quantize_inner(input: &[u8], options: &PngQuantOptions) -> Result<Vec<u8>
       )
     })?;
   Ok(output)
+}
+
+/// Detects the appropriate gamma value for quantization from PNG metadata
+/// 
+/// Priority order:
+/// 1. If sRGB chunk is present, use sRGB gamma (reciprocal ~0.45)
+/// 2. If gAMA chunk is present, use reciprocal of gamma value
+/// 3. Default fallback to 0.45 (sRGB)
+fn detect_gamma_from_png_info(info: &png::Info) -> f64 {
+  // sRGB color space implies gamma ~2.2, reciprocal ~0.45
+  if info.srgb.is_some() {
+    return 0.45;
+  }
+  
+  // Check for gAMA chunk or source_gamma (same information, different representation)
+  if let Some(gamma) = info.source_gamma {
+    let gamma_value = gamma.into_value() as f64;
+    return 1.0 / gamma_value;
+  }
+  
+  if let Some(gama) = info.gama_chunk {
+    let gamma_value = gama.into_value() as f64;
+    return 1.0 / gamma_value;
+  }
+  
+  // Default fallback to sRGB
+  0.45
 }
 
 pub struct PngQuantTask {
