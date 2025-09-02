@@ -231,21 +231,6 @@ pub struct PngQuantOptions {
   /// Number of least significant bits to ignore.
   /// Useful for generating palettes for VGA, 15-bit textures, or other retro platforms.
   pub posterization: Option<u32>,
-  /// Gamma correction for color space handling during quantization.
-  /// 
-  /// This value is the reciprocal of the image's gamma curve and affects color accuracy 
-  /// during palette generation:
-  /// 
-  /// - Default: Auto-detected from PNG metadata (gAMA/sRGB chunks), fallback to 0.45 (sRGB)
-  /// - 1.0 - for linear RGB images  
-  /// - 0.556 (1/1.8) - for older Mac gamma 1.8 images
-  /// - Custom values: 1/gamma_of_source_image for other color spaces
-  /// 
-  /// When not specified, the function automatically detects gamma from PNG metadata:
-  /// 1. sRGB chunk → uses gamma 0.45 (1/2.2)
-  /// 2. gAMA chunk → uses reciprocal of the gamma value
-  /// 3. No metadata → defaults to 0.45 (sRGB fallback)
-  pub gamma: Option<f64>,
 }
 
 #[napi]
@@ -272,13 +257,8 @@ fn png_quantize_inner(input: &[u8], options: &PngQuantOptions) -> Result<Vec<u8>
   }
   
   // Configure gamma for quantization - this affects color accuracy during palette generation
-  // Priority order:
-  // 1. User-specified gamma (if provided)
-  // 2. Automatic gamma detection from PNG metadata (gAMA chunk, sRGB chunk)
-  // 3. Default 0.45 (sRGB fallback)
-  let gamma = options.gamma.unwrap_or_else(|| {
-    detect_gamma_from_png_info(reader.info())
-  });
+  // Automatically detect gamma from PNG metadata (gAMA chunk, sRGB chunk, or sRGB fallback)
+  let gamma = detect_gamma_from_png_info(reader.info());
   
   let mut liq = imagequant::new();
   liq
