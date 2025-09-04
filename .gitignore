@@ -25,3 +25,4 @@ output-overlay-png.png
 output-debian.jpeg
 *.wasm
 packages/binding/npm
+package-lock.json
