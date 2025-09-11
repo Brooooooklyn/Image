@@ -19,7 +19,7 @@
     "ava": "^6.4.1",
     "blurhash": "^2.0.5",
     "chalk": "^5.4.1",
-    "electron": "^37.2.4",
+    "electron": "^38.0.0",
     "lerna": "^8.2.3",
     "npm-run-all2": "^8.0.4",
     "prettier": "^3.6.2",

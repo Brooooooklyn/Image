@@ -5238,16 +5238,16 @@ __metadata:
   languageName: node
   linkType: hard
 
-"electron@npm:^37.2.4":
-  version: 37.2.4
-  resolution: "electron@npm:37.2.4"
+"electron@npm:^38.0.0":
+  version: 38.1.0
+  resolution: "electron@npm:38.1.0"
   dependencies:
     "@electron/get": "npm:^2.0.0"
     "@types/node": "npm:^22.7.7"
     extract-zip: "npm:^2.0.1"
   bin:
     electron: cli.js
-  checksum: 10c0/1a579ac3ef1dde43673df9b95f343e67020f6e09f2cd4a978eab5953d392ea7afe5c171e7e713fe55501456767b788cbc175f7447e9b12d456ea9d35496f223b
+  checksum: 10c0/186082b15862b0e9617828ca395a79311ebe2a713bb2eb15a67cf6bea208e8cda892395a143e72915e189088ac71e91b29c1a46a0c4d343022cbc33004d4d302
   languageName: node
   linkType: hard
 
@@ -6695,7 +6695,7 @@ __metadata:
     ava: "npm:^6.4.1"
     blurhash: "npm:^2.0.5"
     chalk: "npm:^5.4.1"
-    electron: "npm:^37.2.4"
+    electron: "npm:^38.0.0"
     lerna: "npm:^8.2.3"
     npm-run-all2: "npm:^8.0.4"
     prettier: "npm:^3.6.2"
