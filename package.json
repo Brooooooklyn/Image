@@ -20,7 +20,7 @@
     "blurhash": "^2.0.5",
     "chalk": "^5.4.1",
     "electron": "^38.0.0",
-    "lerna": "^8.2.3",
+    "lerna": "^9.0.0",
     "npm-run-all2": "^8.0.4",
     "prettier": "^3.6.2",
     "rxjs": "^7.8.2",
