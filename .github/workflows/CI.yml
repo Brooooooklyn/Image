@@ -212,7 +212,7 @@ jobs:
         if: ${{ !matrix.settings.docker }}
         shell: bash
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: bindings-${{ matrix.settings.target }}
           path: |
@@ -265,7 +265,7 @@ jobs:
           export CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc
           yarn workspace @napi-rs/image build --target armv7-unknown-linux-gnueabihf --features oxipng_libdeflater
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: bindings-armv7-unknown-linux-gnueabihf
           path: |
@@ -316,7 +316,7 @@ jobs:
             rm -rf target
             rm -rf .yarn
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: bindings-freebsd
           path: packages/*/*.node
@@ -360,7 +360,7 @@ jobs:
       - name: Install dependencies
         run: yarn install --immutable
       - name: Download artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           name: bindings-${{ matrix.settings.target }}
           path: artifacts
@@ -401,7 +401,7 @@ jobs:
       - name: Install dependencies
         run: yarn install --immutable
       - name: Download artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           name: bindings-x86_64-unknown-linux-gnu
           path: artifacts
@@ -436,7 +436,7 @@ jobs:
       - name: Install dependencies
         run: yarn install --immutable --mode=skip-build
       - name: Download artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           name: bindings-x86_64-unknown-linux-musl
           path: artifacts
@@ -464,7 +464,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Download artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           name: bindings-aarch64-unknown-linux-gnu
           path: artifacts
@@ -498,7 +498,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Download artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           name: bindings-armv7-unknown-linux-gnueabihf
           path: artifacts
@@ -535,7 +535,7 @@ jobs:
         with:
           node-version: 22
       - name: Download artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           name: bindings-wasm32-wasip1-threads
           path: packages/binding
@@ -575,7 +575,7 @@ jobs:
       - name: Create npm dirs
         run: yarn workspace @napi-rs/image napi create-npm-dirs
       - name: Download all artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           path: artifacts
       - name: Move artifacts
