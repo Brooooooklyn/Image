@@ -147,7 +147,7 @@ jobs:
       - name: Setup node
         uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 24
           cache: yarn
       - name: Setup nasm
         uses: ilammy/setup-nasm@v1
@@ -250,7 +250,7 @@ jobs:
       - name: Setup node
         uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 24
       - name: Install
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -535,7 +535,7 @@ jobs:
       - name: Setup node
         uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 24
       - name: Download artifacts
         uses: actions/download-artifact@v6
         with:
@@ -570,7 +570,7 @@ jobs:
       - name: Setup node
         uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 24
           cache: yarn
       - name: Install dependencies
         run: yarn install --immutable --mode=skip-build
