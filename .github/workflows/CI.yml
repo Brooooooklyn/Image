@@ -81,6 +81,8 @@ jobs:
               sudo apt-get update
               sudo apt-get install -y musl-dev
               export BINDGEN_EXTRA_CLANG_ARGS="-I/usr/include/x86_64-linux-musl"
+              export CFLAGS="-DLIBDEFLATE_ASSEMBLER_DOES_NOT_SUPPORT_AVX512VNNI -DLIBDEFLATE_ASSEMBLER_DOES_NOT_SUPPORT_VPCLMULQDQ"
+              export CXXFLAGS="-DLIBDEFLATE_ASSEMBLER_DOES_NOT_SUPPORT_AVX512VNNI -DLIBDEFLATE_ASSEMBLER_DOES_NOT_SUPPORT_VPCLMULQDQ"
               yarn workspace @napi-rs/image build -x --target x86_64-unknown-linux-musl --features with_simd
           - host: macos-latest
             target: aarch64-apple-darwin
@@ -164,7 +166,7 @@ jobs:
       - uses: mlugg/setup-zig@v2
         if: ${{ contains(matrix.settings.target, 'musl') }}
         with:
-          version: 0.14.1
+          version: 0.15.2
       - name: Install cargo-zigbuild
         uses: taiki-e/install-action@v2
         if: ${{ contains(matrix.settings.target, 'musl') }}
