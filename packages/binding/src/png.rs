@@ -1,3 +1,5 @@
+use std::io::{BufReader, Cursor};
+
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use rgb::FromSlice;
@@ -241,11 +243,16 @@ pub fn png_quantize_sync(input: &[u8], options: Option<PngQuantOptions>) -> Resu
 
 #[inline(never)]
 fn png_quantize_inner(input: &[u8], options: &PngQuantOptions) -> Result<Vec<u8>> {
-  let decoder = png::Decoder::new(input);
+  let decoder = png::Decoder::new(BufReader::new(Cursor::new(input)));
   let mut reader = decoder
     .read_info()
     .map_err(|err| Error::new(Status::InvalidArg, format!("Read png info failed {err}")))?;
-  let mut decoded_buf = vec![0; reader.output_buffer_size()];
+  let mut decoded_buf = vec![
+    0;
+    reader.output_buffer_size().ok_or_else(|| {
+      Error::new(Status::InvalidArg, "Could not determine output buffer size")
+    })?
+  ];
   let output_info = reader
     .next_frame(&mut decoded_buf)
     .map_err(|err| Error::new(Status::InvalidArg, format!("Read png frame failed {err}")))?;
@@ -255,11 +262,11 @@ fn png_quantize_inner(input: &[u8], options: &PngQuantOptions) -> Result<Vec<u8>
   if decoded_buf.len() < (width * height * 4) as usize {
     return Ok(input.to_vec());
   }
-  
+
   // Configure gamma for quantization - this affects color accuracy during palette generation
   // Automatically detect gamma from PNG metadata (gAMA chunk, sRGB chunk, or sRGB fallback)
   let gamma = detect_gamma_from_png_info(reader.info());
-  
+
   let mut liq = imagequant::new();
   liq
     .set_speed(options.speed.unwrap_or(5) as i32)
@@ -272,10 +279,10 @@ fn png_quantize_inner(input: &[u8], options: &PngQuantOptions) -> Result<Vec<u8>
     .map_err(|err| Error::new(Status::GenericFailure, format!("{err}")))?;
   let mut img = liq
     .new_image(
-      decoded_buf.as_rgba(), 
-      width as usize, 
-      height as usize, 
-      gamma
+      decoded_buf.as_rgba(),
+      width as usize,
+      height as usize,
+      gamma,
     )
     .map_err(|err| Error::new(Status::GenericFailure, format!("Create image failed {err}")))?;
   let mut quantization_result = liq
@@ -306,7 +313,7 @@ fn png_quantize_inner(input: &[u8], options: &PngQuantOptions) -> Result<Vec<u8>
 }
 
 /// Detects the appropriate gamma value for quantization from PNG metadata
-/// 
+///
 /// Priority order:
 /// 1. If sRGB chunk is present, use sRGB gamma (reciprocal ~0.45)
 /// 2. If gAMA chunk is present, use reciprocal of gamma value
@@ -316,18 +323,18 @@ fn detect_gamma_from_png_info(info: &png::Info) -> f64 {
   if info.srgb.is_some() {
     return 0.45;
   }
-  
+
   // Check for gAMA chunk or source_gamma (same information, different representation)
   if let Some(gamma) = info.source_gamma {
     let gamma_value = gamma.into_value() as f64;
     return 1.0 / gamma_value;
   }
-  
+
   if let Some(gama) = info.gama_chunk {
     let gamma_value = gama.into_value() as f64;
     return 1.0 / gamma_value;
   }
-  
+
   // Default fallback to sRGB
   0.45
 }

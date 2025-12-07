@@ -49,22 +49,17 @@ impl From<FastResizeFilter> for FilterType {
 }
 
 #[napi]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub enum ResizeFit {
   /// (default) Preserving aspect ratio
   /// ensure the image covers both provided dimensions by cropping/clipping to fit.
+  #[default]
   Cover,
   /// Ignore the aspect ratio of the input and stretch to both provided dimensions.
   Fill,
   /// Preserving aspect ratio
   /// resize the image to be as large as possible while ensuring its dimensions are less than or equal to both those specified.
   Inside,
-}
-
-impl Default for ResizeFit {
-  fn default() -> Self {
-    Self::Cover
-  }
 }
 
 #[napi(object)]
