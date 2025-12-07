@@ -219,11 +219,9 @@ impl ThreadsafeDynamicImage {
             format!("Guess format from input image failed {err}"),
           )
         })?;
-        if with_exif {
-          if let Some((_exif, _orientation)) = parse_exif(input_buf, &image_format) {
-            exif = _exif;
-            orientation = _orientation;
-          }
+        if with_exif && let Some((_exif, _orientation)) = parse_exif(input_buf, &image_format) {
+          exif = _exif;
+          orientation = _orientation;
         }
         let dynamic_image = if image_format == ImageFormat::Avif {
           let avif = libavif::decode_rgb(input_buf).map_err(|err| {
@@ -464,20 +462,18 @@ impl Task for EncodeTask {
       .orientation
       .map(Ok)
       .or_else(|| meta.orientation.map(|o| o.try_into()));
-    if self.image_transform_args.rotate || self.image_transform_args.orientation.is_some() {
-      if let Some(orientation) = orientation {
-        match orientation? {
-          Orientation::Horizontal => {}
-          Orientation::MirrorHorizontal => meta.image = meta.image.fliph(),
-          Orientation::Rotate180 => meta.image = meta.image.rotate180(),
-          Orientation::MirrorVertical => meta.image = meta.image.flipv(),
-          Orientation::MirrorHorizontalAndRotate270Cw => {
-            meta.image = meta.image.fliph().rotate270()
-          }
-          Orientation::Rotate90Cw => meta.image = meta.image.rotate270(),
-          Orientation::MirrorHorizontalAndRotate90Cw => meta.image = meta.image.flipv().rotate270(),
-          Orientation::Rotate270Cw => meta.image = meta.image.rotate90(),
-        }
+    if (self.image_transform_args.rotate || self.image_transform_args.orientation.is_some())
+      && let Some(orientation) = orientation
+    {
+      match orientation? {
+        Orientation::Horizontal => {}
+        Orientation::MirrorHorizontal => meta.image = meta.image.fliph(),
+        Orientation::Rotate180 => meta.image = meta.image.rotate180(),
+        Orientation::MirrorVertical => meta.image = meta.image.flipv(),
+        Orientation::MirrorHorizontalAndRotate270Cw => meta.image = meta.image.fliph().rotate270(),
+        Orientation::Rotate90Cw => meta.image = meta.image.rotate270(),
+        Orientation::MirrorHorizontalAndRotate90Cw => meta.image = meta.image.flipv().rotate270(),
+        Orientation::Rotate270Cw => meta.image = meta.image.rotate90(),
       }
     }
     let raw_width = meta.image.width();

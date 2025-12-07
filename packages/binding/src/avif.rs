@@ -1,4 +1,4 @@
-use image::{buffer::ConvertBuffer, DynamicImage, GenericImageView, ImageBuffer, Rgb};
+use image::{DynamicImage, GenericImageView, ImageBuffer, Rgb, buffer::ConvertBuffer};
 use libavif::{AvifData, AvifImage, RgbPixels, YuvFormat};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
@@ -211,7 +211,7 @@ pub(crate) fn encode_avif_inner(
       return Err(Error::new(
         Status::InvalidArg,
         "Unsupported image type".to_owned(),
-      ))
+      ));
     }
   }?;
   encoder
