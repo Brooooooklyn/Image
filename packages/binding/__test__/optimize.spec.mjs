@@ -53,15 +53,19 @@ test('should be able to lossless encode webp from jpeg', (t) => {
 })
 
 test('should be able to encode avif from png', (t) => {
-  t.true(new Transformer(PNG).avifSync({
-    speed: 10,
-    threads: 1,
-  }).length < PNG.length)
+  t.true(
+    new Transformer(PNG).avifSync({
+      speed: 10,
+      threads: 1,
+    }).length < PNG.length,
+  )
 })
 
 test('should be able to encode avif from jpeg', (t) => {
-  t.true(new Transformer(JPEG).avifSync({
-    speed: 10,
-    threads: 1,
-  }).length < JPEG.length)
+  t.true(
+    new Transformer(JPEG).avifSync({
+      speed: 10,
+      threads: 1,
+    }).length < JPEG.length,
+  )
 })

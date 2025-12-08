@@ -43,7 +43,7 @@ svgtypes          = "0.16"
   version          = "2"
 
 [target.'cfg(not(all(target_os = "macos", target_arch = "x86_64")))'.dependencies]
-libwebp-sys = { version = "0.14", default-features = false, features = ["std", "parallel", "avx2", "sse41", "neon", "generate-bindings"] }
+libwebp-sys = { version = "0.14", default-features = false, features = ["std", "parallel", "avx2", "sse41", "neon"] }
 
 [target.'cfg(all(target_os = "macos", target_arch = "x86_64"))'.dependencies]
 libwebp-sys = { version = "0.14", default-features = false, features = ["std", "parallel", "generate-bindings"] }

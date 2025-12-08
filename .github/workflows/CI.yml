@@ -104,9 +104,6 @@ jobs:
             build: |
               export TARGET_CC=clang
               export TARGET_CXX=clang++
-              export HOME_DIR=$(node -e "console.log(os.homedir())")
-              export CROSS_TOOLCHAIN_VERSION=$(node -e "console.log(require('@napi-rs/cross-toolchain/package.json').version)")
-              export BINDGEN_EXTRA_CLANG_ARGS="--sysroot=$HOME_DIR/.napi-rs/cross-toolchain/$CROSS_TOOLCHAIN_VERSION/aarch64-unknown-linux-gnu/aarch64-unknown-linux-gnu/sysroot"
               yarn workspace @napi-rs/image build --features with_simd --target aarch64-unknown-linux-gnu --use-napi-cross
           - host: ubuntu-latest
             target: aarch64-linux-android
@@ -155,7 +152,7 @@ jobs:
         uses: KyleMayes/install-llvm-action@v2
         if: ${{ matrix.settings.target == 'x86_64-unknown-linux-musl' }}
         with:
-          version: "20"
+          version: '20'
       - name: Install cargo-xwin
         uses: taiki-e/install-action@v2
         if: matrix.settings.target == 'i686-pc-windows-msvc' || matrix.settings.target == 'aarch64-pc-windows-msvc'
@@ -221,8 +218,7 @@ jobs:
             packages/binding/*.node
             packages/binding/image.wasm32-wasi.wasm
           if-no-files-found: error
-  
-  
+
   build-armv7-linux-gnueabihf:
     name: Build armv7-unknown-linux-gnueabihf
     runs-on: ubuntu-latest

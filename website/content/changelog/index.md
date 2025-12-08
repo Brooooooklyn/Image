@@ -1,3 +1,107 @@
+---
+title: '@napi-rs/image'
+description: '@napi-rs/image changelog.'
+---
+
+# @napi-rs/image
+
+## <a href="https://github.com/Brooooooklyn/Image/releases/tag/%40napi-rs/image%401.11.2" target="_blank" rel="noopener">@napi-rs/image@1.11.2</a>
+
+8/9/2025
+
+## What's Changed
+
+- chore: bump up actions/download-artifact action to v5 by @renovate[bot] in <a 
+                href="https://github.com/Brooooooklyn/Image/pull/144"
+                target="_blank"
+                rel="noopener" 
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/144</a>
+- chore: bump up Rust crate libwebp-sys to 0.13 by @renovate[bot] in <a 
+                href="https://github.com/Brooooooklyn/Image/pull/143"
+                target="_blank"
+                rel="noopener" 
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/143</a>
+
+**Full Changelog**: <a 
+              href="https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.11.1...@napi-rs/image@1.11.2"
+              target="_blank"
+              rel="noopener" 
+              className="x:text-primary-600">@napi-rs/image@1.11.1...@napi-rs/image@1.11.2</a>
+
+## <a href="https://github.com/Brooooooklyn/Image/releases/tag/%40napi-rs/image%401.11.1" target="_blank" rel="noopener">@napi-rs/image@1.11.1</a>
+
+7/25/2025
+
+## What's Changed
+
+- ci: upgrade wasi-sdk to v25 by [@Brooooooklyn](https://github.com/Brooooooklyn) in <a 
+                href="https://github.com/Brooooooklyn/Image/pull/139"
+                target="_blank"
+                rel="noopener" 
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/139</a>
+- chore: upgrade to NAPI-RS 3.0 stable by [@Brooooooklyn](https://github.com/Brooooooklyn) in <a 
+                href="https://github.com/Brooooooklyn/Image/pull/142"
+                target="_blank"
+                rel="noopener" 
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/142</a>
+
+**Full Changelog**: <a 
+              href="https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.11.0...@napi-rs/image@1.11.1"
+              target="_blank"
+              rel="noopener" 
+              className="x:text-primary-600">@napi-rs/image@1.11.0...@napi-rs/image@1.11.1</a>
+
+## <a href="https://github.com/Brooooooklyn/Image/releases/tag/%40napi-rs/image%401.11.0" target="_blank" rel="noopener">@napi-rs/image@1.11.0</a>
+
+7/7/2025
+
+## What's Changed
+
+- feat: metadataSync by [@vsn4ik](https://github.com/vsn4ik) in <a 
+                href="https://github.com/Brooooooklyn/Image/pull/137"
+                target="_blank"
+                rel="noopener" 
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/137</a>
+
+## New Contributors
+
+- [@vsn4ik](https://github.com/vsn4ik) made their first contribution in <a 
+                href="https://github.com/Brooooooklyn/Image/pull/137"
+                target="_blank"
+                rel="noopener" 
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/137</a>
+
+**Full Changelog**: <a 
+              href="https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.10.0...@napi-rs/image@1.11.0"
+              target="_blank"
+              rel="noopener" 
+              className="x:text-primary-600">@napi-rs/image@1.10.0...@napi-rs/image@1.11.0</a>
+
+## <a href="https://github.com/Brooooooklyn/Image/releases/tag/%40napi-rs/image%401.10.0" target="_blank" rel="noopener">@napi-rs/image@1.10.0</a>
+
+6/28/2025
+
+## What's Changed
+
+### Add aarch64-pc-windows-msvc target
+
+- feat: upgrade all deps by [@Brooooooklyn](https://github.com/Brooooooklyn) in <a 
+                href="https://github.com/Brooooooklyn/Image/pull/132"
+                target="_blank"
+                rel="noopener" 
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/132</a>
+- chore(image): use slice rather than Uint8Array by [@Brooooooklyn](https://github.com/Brooooooklyn) in <a 
+                href="https://github.com/Brooooooklyn/Image/pull/134"
+                target="_blank"
+                rel="noopener" 
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/134</a>
+
+**Full Changelog**: <a 
+              href="https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.9.2...@napi-rs/image@1.10.0"
+              target="_blank"
+              rel="noopener" 
+              className="x:text-primary-600">@napi-rs/image@1.9.2...@napi-rs/image@1.10.0</a>
+
 ## <a href="https://github.com/Brooooooklyn/Image/releases/tag/%40napi-rs/image%401.9.2" target="_blank" rel="noopener">@napi-rs/image@1.9.2</a>
 
 4/20/2024
@@ -8,32 +112,32 @@
                 href="https://github.com/Brooooooklyn/Image/pull/89"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/89</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/89</a>
 - chore: bump up Yarn to v4.1.1 by [@renovate](https://github.com/renovate) in <a 
                 href="https://github.com/Brooooooklyn/Image/pull/90"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/90</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/90</a>
 - chore: bump up electron version to v30 by [@renovate](https://github.com/renovate) in <a 
                 href="https://github.com/Brooooooklyn/Image/pull/92"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/92</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/92</a>
 - chore: bump up all non-major dependencies by [@renovate](https://github.com/renovate) in <a 
                 href="https://github.com/Brooooooklyn/Image/pull/91"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/91</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/91</a>
 - chore: bump up @napi-rs/wasm-runtime version to ^0.2.0 by [@renovate](https://github.com/renovate) in <a 
                 href="https://github.com/Brooooooklyn/Image/pull/93"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/93</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/93</a>
 - refactor: use `no-const-enum` by [@kyranet](https://github.com/kyranet) in <a 
                 href="https://github.com/Brooooooklyn/Image/pull/94"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/94</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/94</a>
 
 ## New Contributors
 
@@ -41,13 +145,13 @@
                 href="https://github.com/Brooooooklyn/Image/pull/94"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/94</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/94</a>
 
 **Full Changelog**: <a 
               href="https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.9.1...@napi-rs/image@1.9.2"
               target="_blank"
               rel="noopener" 
-              className="nx-text-primary-600">@napi-rs/image@1.9.1...@napi-rs/image@1.9.2</a>
+              className="x:text-primary-600">@napi-rs/image@1.9.1...@napi-rs/image@1.9.2</a>
 
 ## <a href="https://github.com/Brooooooklyn/Image/releases/tag/%40napi-rs/image%401.9.1" target="_blank" rel="noopener">@napi-rs/image@1.9.1</a>
 
@@ -59,18 +163,18 @@
                 href="https://github.com/Brooooooklyn/Image/pull/87"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/87</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/87</a>
 - fix(image): wasm fallback logic in js-binding file by [@Brooooooklyn](https://github.com/Brooooooklyn) in <a 
                 href="https://github.com/Brooooooklyn/Image/pull/88"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/88</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/88</a>
 
 **Full Changelog**: <a 
               href="https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.9.0...@napi-rs/image@1.9.1"
               target="_blank"
               rel="noopener" 
-              className="nx-text-primary-600">@napi-rs/image@1.9.0...@napi-rs/image@1.9.1</a>
+              className="x:text-primary-600">@napi-rs/image@1.9.0...@napi-rs/image@1.9.1</a>
 
 ## <a href="https://github.com/Brooooooklyn/Image/releases/tag/%40napi-rs/image%401.9.0" target="_blank" rel="noopener">@napi-rs/image@1.9.0</a>
 
@@ -82,18 +186,18 @@
                 href="https://github.com/Brooooooklyn/Image/pull/85"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/85</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/85</a>
 - feat: upgrade resvg by [@Brooooooklyn](https://github.com/Brooooooklyn) in <a 
                 href="https://github.com/Brooooooklyn/Image/pull/86"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/86</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/86</a>
 
 **Full Changelog**: <a 
               href="https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.8.0...@napi-rs/image@1.9.0"
               target="_blank"
               rel="noopener" 
-              className="nx-text-primary-600">@napi-rs/image@1.8.0...@napi-rs/image@1.9.0</a>
+              className="x:text-primary-600">@napi-rs/image@1.8.0...@napi-rs/image@1.9.0</a>
 
 ## <a href="https://github.com/Brooooooklyn/Image/releases/tag/%40napi-rs/image%401.8.0" target="_blank" rel="noopener">@napi-rs/image@1.8.0</a>
 
@@ -105,33 +209,33 @@
                 href="https://github.com/Brooooooklyn/Image/pull/66"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/66</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/66</a>
 - chore: upgrade dependencies and CI template by [@Brooooooklyn](https://github.com/Brooooooklyn) in <a 
                 href="https://github.com/Brooooooklyn/Image/pull/73"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/73</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/73</a>
 - chore: Replace npm-run-all version with npm-run-all2 ^5.0.0 by [@renovate](https://github.com/renovate) in <a 
                 href="https://github.com/Brooooooklyn/Image/pull/80"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/80</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/80</a>
 - chore: bump up npm-run-all2 version to v6 by [@renovate](https://github.com/renovate) in <a 
                 href="https://github.com/Brooooooklyn/Image/pull/82"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/82</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/82</a>
 - feat: add wasm build by [@Brooooooklyn](https://github.com/Brooooooklyn) in <a 
                 href="https://github.com/Brooooooklyn/Image/pull/81"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/81</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/81</a>
 
 **Full Changelog**: <a 
               href="https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.7.0...@napi-rs/image@1.8.0"
               target="_blank"
               rel="noopener" 
-              className="nx-text-primary-600">@napi-rs/image@1.7.0...@napi-rs/image@1.8.0</a>
+              className="x:text-primary-600">@napi-rs/image@1.7.0...@napi-rs/image@1.8.0</a>
 
 ## <a href="https://github.com/Brooooooklyn/Image/releases/tag/%40napi-rs/image%401.7.0" target="_blank" rel="noopener">@napi-rs/image@1.7.0</a>
 
@@ -148,42 +252,42 @@
                 href="https://github.com/Brooooooklyn/Image/pull/50"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/50</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/50</a>
 - chore: bump up electron version to v26 by [@renovate](https://github.com/renovate) in <a 
                 href="https://github.com/Brooooooklyn/Image/pull/58"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/58</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/58</a>
 - chore: bump up Yarn to v3.6.2 by [@renovate](https://github.com/renovate) in <a 
                 href="https://github.com/Brooooooklyn/Image/pull/59"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/59</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/59</a>
 - chore: bump up Yarn to v3.6.3 by [@renovate](https://github.com/renovate) in <a 
                 href="https://github.com/Brooooooklyn/Image/pull/60"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/60</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/60</a>
 - chore: bump up actions/checkout action to v4 by [@renovate](https://github.com/renovate) in <a 
                 href="https://github.com/Brooooooklyn/Image/pull/62"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/62</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/62</a>
 - chore: bump up docker/setup-qemu-action action to v3 by [@renovate](https://github.com/renovate) in <a 
                 href="https://github.com/Brooooooklyn/Image/pull/63"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/63</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/63</a>
 - chore: bump up Rust crate mozjpeg-sys to v2 by [@renovate](https://github.com/renovate) in <a 
                 href="https://github.com/Brooooooklyn/Image/pull/61"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/61</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/61</a>
 - chore: upgrade dependencies by [@Brooooooklyn](https://github.com/Brooooooklyn) in <a 
                 href="https://github.com/Brooooooklyn/Image/pull/64"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/64</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/64</a>
 
 ## New Contributors
 
@@ -191,13 +295,13 @@
                 href="https://github.com/Brooooooklyn/Image/pull/58"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/58</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/58</a>
 
 **Full Changelog**: <a 
               href="https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.6.1...@napi-rs/image@1.7.0"
               target="_blank"
               rel="noopener" 
-              className="nx-text-primary-600">@napi-rs/image@1.6.1...@napi-rs/image@1.7.0</a>
+              className="x:text-primary-600">@napi-rs/image@1.6.1...@napi-rs/image@1.7.0</a>
 
 ## <a href="https://github.com/Brooooooklyn/Image/releases/tag/%40napi-rs/image%401.6.1" target="_blank" rel="noopener">@napi-rs/image@1.6.1</a>
 
@@ -209,22 +313,22 @@
                 href="https://github.com/Brooooooklyn/Image/pull/45"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/45</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/45</a>
 - docs: improve changelog parser by [@liby](https://github.com/liby) in <a 
                 href="https://github.com/Brooooooklyn/Image/pull/46"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/46</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/46</a>
 - fix(docs): typo correction by [@ggallon](https://github.com/ggallon) in <a 
                 href="https://github.com/Brooooooklyn/Image/pull/47"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/47</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/47</a>
 - perf(image): lazy load fontdb Database by [@Brooooooklyn](https://github.com/Brooooooklyn) in <a 
                 href="https://github.com/Brooooooklyn/Image/pull/49"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/49</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/49</a>
 
 ## New Contributors
 
@@ -232,13 +336,13 @@
                 href="https://github.com/Brooooooklyn/Image/pull/47"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/47</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/47</a>
 
 **Full Changelog**: <a 
               href="https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.6.0...@napi-rs/image@1.6.1"
               target="_blank"
               rel="noopener" 
-              className="nx-text-primary-600">@napi-rs/image@1.6.0...@napi-rs/image@1.6.1</a>
+              className="x:text-primary-600">@napi-rs/image@1.6.0...@napi-rs/image@1.6.1</a>
 
 ## <a href="https://github.com/Brooooooklyn/Image/releases/tag/%40napi-rs/image%401.6.0" target="_blank" rel="noopener">@napi-rs/image@1.6.0</a>
 
@@ -250,12 +354,12 @@
                 href="https://github.com/Brooooooklyn/Image/pull/41"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/41</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/41</a>
 - feat(image): support Transformer from SVG by [@liby](https://github.com/liby) in <a 
                 href="https://github.com/Brooooooklyn/Image/pull/44"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/44</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/44</a>
 
 ## New Contributors
 
@@ -263,13 +367,13 @@
                 href="https://github.com/Brooooooklyn/Image/pull/41"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/41</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/41</a>
 
 **Full Changelog**: <a 
               href="https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.5.1...@napi-rs/image@1.6.0"
               target="_blank"
               rel="noopener" 
-              className="nx-text-primary-600">@napi-rs/image@1.5.1...@napi-rs/image@1.6.0</a>
+              className="x:text-primary-600">@napi-rs/image@1.5.1...@napi-rs/image@1.6.0</a>
 
 ## <a href="https://github.com/Brooooooklyn/Image/releases/tag/%40napi-rs/image%401.5.1" target="_blank" rel="noopener">@napi-rs/image@1.5.1</a>
 
@@ -349,22 +453,22 @@ writeFileSync('output-overlay-png.png', await new Transformer(PNG).overlay(PNG, 
                 href="https://github.com/Brooooooklyn/Image/pull/32"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/32</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/32</a>
 - feat(image): implement `overlay` by [@liby](https://github.com/liby) in <a 
                 href="https://github.com/Brooooooklyn/Image/pull/33"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/33</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/33</a>
 - feat(image): provide fast resize method by [@Brooooooklyn](https://github.com/Brooooooklyn) in <a 
                 href="https://github.com/Brooooooklyn/Image/pull/34"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/34</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/34</a>
 - perf(image): make overlay lazy by [@Brooooooklyn](https://github.com/Brooooooklyn) in <a 
                 href="https://github.com/Brooooooklyn/Image/pull/35"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/35</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/35</a>
 
 ## New Contributors
 
@@ -372,13 +476,13 @@ writeFileSync('output-overlay-png.png', await new Transformer(PNG).overlay(PNG, 
                 href="https://github.com/Brooooooklyn/Image/pull/32"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/32</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/32</a>
 
 **Full Changelog**: <a 
               href="https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.4.4...@napi-rs/image@1.5.0"
               target="_blank"
               rel="noopener" 
-              className="nx-text-primary-600">@napi-rs/image@1.4.4...@napi-rs/image@1.5.0</a>
+              className="x:text-primary-600">@napi-rs/image@1.4.4...@napi-rs/image@1.5.0</a>
 
 ## <a href="https://github.com/Brooooooklyn/Image/releases/tag/%40napi-rs/image%401.4.4" target="_blank" rel="noopener">@napi-rs/image@1.4.4</a>
 
@@ -390,13 +494,13 @@ writeFileSync('output-overlay-png.png', await new Transformer(PNG).overlay(PNG, 
                 href="https://github.com/Brooooooklyn/Image/pull/30"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/30</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/30</a>
 
 **Full Changelog**: <a 
               href="https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.4.3...@napi-rs/image@1.4.4"
               target="_blank"
               rel="noopener" 
-              className="nx-text-primary-600">@napi-rs/image@1.4.3...@napi-rs/image@1.4.4</a>
+              className="x:text-primary-600">@napi-rs/image@1.4.3...@napi-rs/image@1.4.4</a>
 
 ## <a href="https://github.com/Brooooooklyn/Image/releases/tag/%40napi-rs/image%401.4.3" target="_blank" rel="noopener">@napi-rs/image@1.4.3</a>
 
@@ -408,13 +512,13 @@ writeFileSync('output-overlay-png.png', await new Transformer(PNG).overlay(PNG, 
                 href="https://github.com/Brooooooklyn/Image/pull/29"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/29</a>
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">Brooooooklyn/Image/pull/29</a>
 
 **Full Changelog**: <a 
               href="https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.4.2...@napi-rs/image@1.4.3"
               target="_blank"
               rel="noopener" 
-              className="nx-text-primary-600">@napi-rs/image@1.4.2...@napi-rs/image@1.4.3</a>
+              className="x:text-primary-600">@napi-rs/image@1.4.2...@napi-rs/image@1.4.3</a>
 
 ## <a href="https://github.com/Brooooooklyn/Image/releases/tag/%40napi-rs/image%401.4.2" target="_blank" rel="noopener">@napi-rs/image@1.4.2</a>
 

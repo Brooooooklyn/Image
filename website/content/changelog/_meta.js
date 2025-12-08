@@ -1,7 +1,7 @@
 export default {
-  'index': {
+  index: {
     theme: {
       sidebar: false,
-    }
-  }
+    },
+  },
 }

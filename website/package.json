@@ -4,15 +4,15 @@
   "version": "0.0.0",
   "type": "module",
   "dependencies": {
-    "@napi-rs/canvas": "^0.1.74",
-    "@napi-rs/image": "^1.11.0",
-    "chalk": "^5.4.1",
-    "next": "^15.4.3",
-    "nextra": "^3",
-    "nextra-theme-docs": "^3",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0",
-    "sharp": "^0.34.3"
+    "@napi-rs/canvas": "^0.1.84",
+    "@napi-rs/image": "^1.11.2",
+    "chalk": "^5.6.2",
+    "next": "^16.0.7",
+    "nextra": "^4.6.1",
+    "nextra-theme-docs": "^4.6.1",
+    "react": "^19.2.1",
+    "react-dom": "^19.2.1",
+    "sharp": "^0.34.5"
   },
   "scripts": {
     "build": "node generate-img.js && node changelog.js && next build",

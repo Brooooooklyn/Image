@@ -21,7 +21,7 @@ const changelog = releases
                 href="$&"
                 target="_blank"
                 rel="noopener" 
-                className="nx-text-primary-600 nx-underline nx-decoration-from-font [text-underline-position:from-font]">$1</a>`,
+                className="x:text-primary-600 x:underline x:decoration-from-font [text-underline-position:from-font]">$1</a>`,
       )
       .replace(
         /https:\/\/github\.com\/(.+?)\/(.+?)\/compare\/(.+?)@(.+?)\.\.\.(.+?)@(.+?)$/g,
@@ -29,7 +29,7 @@ const changelog = releases
               href="$&"
               target="_blank"
               rel="noopener" 
-              className="nx-text-primary-600">$3@$4...$5@$6</a>`,
+              className="x:text-primary-600">$3@$4...$5@$6</a>`,
       )
     return `## <a href="${release.html_url}" target="_blank" rel="noopener">${release.tag_name}</a> 
   ${new Date(release.published_at).toLocaleDateString(locale)} \n${body}`
@@ -37,7 +37,7 @@ const changelog = releases
   .join('\n\n')
 
 await writeFile(
-  join(fileURLToPath(import.meta.url), '..', 'pages', 'changelog', 'index.md'),
+  join(fileURLToPath(import.meta.url), '..', 'content', 'changelog', 'index.md'),
   `---
 title: '@napi-rs/image'
 description: '@napi-rs/image changelog.'
