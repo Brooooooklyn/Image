@@ -7,7 +7,7 @@
     "@napi-rs/canvas": "^0.1.74",
     "@napi-rs/image": "^1.11.0",
     "chalk": "^5.4.1",
-    "next": "^15.4.3",
+    "next": "^16.0.0",
     "nextra": "^3",
     "nextra-theme-docs": "^3",
     "react": "^19.1.0",
