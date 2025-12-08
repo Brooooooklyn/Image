@@ -3,6 +3,16 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+# [1.12.0](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.11.2...@napi-rs/image@1.12.0) (2025-12-08)
+
+### Bug Fixes
+
+- webp build ([#147](https://github.com/Brooooooklyn/Image/issues/147)) ([06948ae](https://github.com/Brooooooklyn/Image/commit/06948ae832d7a12c4e92fe5e8a26e4af177b489d))
+
+### Features
+
+- **png:** add automatic gamma detection from PNG metadata for color-accurate quantization ([#152](https://github.com/Brooooooklyn/Image/issues/152)) ([ec6e322](https://github.com/Brooooooklyn/Image/commit/ec6e322148843caa3c39cee28137a1471d25156e))
+
 ## [1.11.2](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.11.1...@napi-rs/image@1.11.2) (2025-08-09)
 
 **Note:** Version bump only for package @napi-rs/image
