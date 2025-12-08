@@ -39,10 +39,7 @@ const navbar = (
     logo={
       <>
         <img src="/img/favicon.png" width={32} alt="@napi-rs/image" />
-        <span
-          style={{ width: 170 }}
-          className="x:mx-2 x:font-extrabold x:md:inline x:select-none"
-        >
+        <span style={{ width: 170 }} className="x:mx-2 x:font-extrabold x:md:inline x:select-none">
           @napi-rs/image
         </span>
       </>
@@ -74,14 +71,9 @@ const footer = (
 export default async function RootLayout({ children }) {
   return (
     <html lang="en" dir="ltr" suppressHydrationWarning>
-      <Head
-        color={{ hue: 300, saturation: 100 }}
-      >
+      <Head color={{ hue: 300, saturation: 100 }}>
         <meta name="msapplication-TileColor" content="#ffffff" />
-        <Script
-          src="https://www.googletagmanager.com/gtag/js?id=G-50ZQKJLY5K"
-          strategy="afterInteractive"
-        />
+        <Script src="https://www.googletagmanager.com/gtag/js?id=G-50ZQKJLY5K" strategy="afterInteractive" />
         <Script
           id="gtag-init"
           strategy="afterInteractive"

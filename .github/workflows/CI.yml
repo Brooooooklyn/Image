@@ -155,7 +155,7 @@ jobs:
         uses: KyleMayes/install-llvm-action@v2
         if: ${{ matrix.settings.target == 'x86_64-unknown-linux-musl' }}
         with:
-          version: "20"
+          version: '20'
       - name: Install cargo-xwin
         uses: taiki-e/install-action@v2
         if: matrix.settings.target == 'i686-pc-windows-msvc' || matrix.settings.target == 'aarch64-pc-windows-msvc'
@@ -221,8 +221,7 @@ jobs:
             packages/binding/*.node
             packages/binding/image.wasm32-wasi.wasm
           if-no-files-found: error
-  
-  
+
   build-armv7-linux-gnueabihf:
     name: Build armv7-unknown-linux-gnueabihf
     runs-on: ubuntu-latest
