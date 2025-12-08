@@ -104,9 +104,6 @@ jobs:
             build: |
               export TARGET_CC=clang
               export TARGET_CXX=clang++
-              export HOME_DIR=$(node -e "console.log(os.homedir())")
-              export CROSS_TOOLCHAIN_VERSION=$(node -e "console.log(require('@napi-rs/cross-toolchain/package.json').version)")
-              export BINDGEN_EXTRA_CLANG_ARGS="--sysroot=$HOME_DIR/.napi-rs/cross-toolchain/$CROSS_TOOLCHAIN_VERSION/aarch64-unknown-linux-gnu/aarch64-unknown-linux-gnu/sysroot"
               yarn workspace @napi-rs/image build --features with_simd --target aarch64-unknown-linux-gnu --use-napi-cross
           - host: ubuntu-latest
             target: aarch64-linux-android

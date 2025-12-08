@@ -26,12 +26,7 @@ export declare class Transformer {
    * The image is scaled to the maximum possible size that fits
    * within the bounds specified by `width` and `height`.
    */
-  resize(
-    widthOrOptions: number | ResizeOptions,
-    height?: number | undefined | null,
-    filter?: ResizeFilterType | undefined | null,
-    fit?: ResizeFit | undefined | null,
-  ): this
+  resize(widthOrOptions: number | ResizeOptions, height?: number | undefined | null, filter?: ResizeFilterType | undefined | null, fit?: ResizeFit | undefined | null): this
   /**
    * Resize this image using the specified filter algorithm.
    * The image is scaled to the maximum possible size that fits
@@ -172,7 +167,7 @@ export declare enum ChromaSubsampling {
    * What if the chroma subsampling model is 4:0:0?
    * That says to use every pixel of luma data, but that each row has 0 chroma samples applied to it. The resulting image, then, is comprised solely of the luminance data—a greyscale image.
    */
-  Yuv400 = 3,
+  Yuv400 = 3
 }
 
 export declare enum CompressionType {
@@ -181,14 +176,10 @@ export declare enum CompressionType {
   /** Fast, minimal compression */
   Fast = 1,
   /** High compression level */
-  Best = 2,
+  Best = 2
 }
 
-export declare function compressJpeg(
-  input: Uint8Array,
-  options?: JpegCompressOptions | undefined | null,
-  signal?: AbortSignal | undefined | null,
-): Promise<Buffer>
+export declare function compressJpeg(input: Uint8Array, options?: JpegCompressOptions | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>
 
 export declare function compressJpegSync(input: Uint8Array, options?: JpegCompressOptions | undefined | null): Buffer
 
@@ -229,7 +220,7 @@ export declare enum FastResizeFilter {
    * Lanczos filter (a truncated sinc) on all pixels that may contribute
    * to the output value.
    */
-  Lanczos3 = 5,
+  Lanczos3 = 5
 }
 
 export interface FastResizeOptions {
@@ -257,7 +248,7 @@ export declare enum FilterType {
    * Uses a heuristic to select one of the preceding filters for each
    * scanline rather than one filter for the entire image
    */
-  Adaptive = 5,
+  Adaptive = 5
 }
 
 export interface JpegCompressOptions {
@@ -290,14 +281,10 @@ export declare enum JsColorType {
   /** Pixel is 32-bit float RGB */
   Rgb32F = 8,
   /** Pixel is 32-bit float RGBA */
-  Rgba32F = 9,
+  Rgba32F = 9
 }
 
-export declare function losslessCompressPng(
-  input: Uint8Array,
-  options?: PNGLosslessOptions | undefined | null,
-  signal?: AbortSignal | undefined | null,
-): Promise<Buffer>
+export declare function losslessCompressPng(input: Uint8Array, options?: PNGLosslessOptions | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>
 
 export declare function losslessCompressPngSync(input: Buffer, options?: PNGLosslessOptions | undefined | null): Buffer
 
@@ -319,7 +306,7 @@ export declare enum Orientation {
   MirrorHorizontalAndRotate270Cw = 5,
   Rotate90Cw = 6,
   MirrorHorizontalAndRotate90Cw = 7,
-  Rotate270Cw = 8,
+  Rotate270Cw = 8
 }
 
 export interface PngEncodeOptions {
@@ -372,11 +359,7 @@ export interface PNGLosslessOptions {
   strip?: boolean
 }
 
-export declare function pngQuantize(
-  input: Uint8Array,
-  options?: PngQuantOptions | undefined | null,
-  signal?: AbortSignal | undefined | null,
-): Promise<Buffer>
+export declare function pngQuantize(input: Uint8Array, options?: PngQuantOptions | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>
 
 export declare function pngQuantizeSync(input: Uint8Array, options?: PngQuantOptions | undefined | null): Buffer
 
@@ -403,7 +386,7 @@ export declare enum PngRowFilter {
   Sub = 1,
   Up = 2,
   Average = 3,
-  Paeth = 4,
+  Paeth = 4
 }
 
 /**
@@ -484,7 +467,7 @@ export declare enum ResizeFilterType {
   /** Gaussian Filter */
   Gaussian = 3,
   /** Lanczos with window 3 */
-  Lanczos3 = 4,
+  Lanczos3 = 4
 }
 
 export declare enum ResizeFit {
@@ -499,7 +482,7 @@ export declare enum ResizeFit {
    * Preserving aspect ratio
    * resize the image to be as large as possible while ensuring its dimensions are less than or equal to both those specified.
    */
-  Inside = 2,
+  Inside = 2
 }
 
 export interface ResizeOptions {
