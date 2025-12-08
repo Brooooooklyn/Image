@@ -154,7 +154,7 @@ fn to_oxipng_options(opt: &PNGLosslessOptions) -> oxipng::Options {
       })
       .unwrap_or(oxipng::StripChunks::Safe),
     #[cfg(target_arch = "arm")]
-    deflate: oxipng::Deflaters::Libdeflater { compression: 12 },
+    deflater: oxipng::Deflater::Libdeflater { compression: 12 },
     ..Default::default()
   }
 }
