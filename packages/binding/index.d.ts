@@ -386,12 +386,7 @@ export declare enum PngRowFilter {
   Sub = 1,
   Up = 2,
   Average = 3,
-  Paeth = 4,
-  MinSum = 5,
-  Entropy = 6,
-  Bigrams = 7,
-  BigEnt = 8,
-  Brute = 9
+  Paeth = 4
 }
 
 /**
