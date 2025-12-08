@@ -70,33 +70,21 @@ pub struct PngEncodeOptions {
 
 #[napi]
 pub enum PngRowFilter {
-  // Standard filter types
   None,
   Sub,
   Up,
   Average,
   Paeth,
-  // Heuristic strategies
-  MinSum,
-  Entropy,
-  Bigrams,
-  BigEnt,
-  Brute,
 }
 
-impl From<&PngRowFilter> for oxipng::RowFilter {
+impl From<&PngRowFilter> for oxipng::FilterStrategy {
   fn from(value: &PngRowFilter) -> Self {
     match value {
-      PngRowFilter::None => oxipng::RowFilter::None,
-      PngRowFilter::Sub => oxipng::RowFilter::Sub,
-      PngRowFilter::Up => oxipng::RowFilter::Up,
-      PngRowFilter::Average => oxipng::RowFilter::Average,
-      PngRowFilter::Paeth => oxipng::RowFilter::Paeth,
-      PngRowFilter::MinSum => oxipng::RowFilter::MinSum,
-      PngRowFilter::Entropy => oxipng::RowFilter::Entropy,
-      PngRowFilter::Bigrams => oxipng::RowFilter::Bigrams,
-      PngRowFilter::BigEnt => oxipng::RowFilter::BigEnt,
-      PngRowFilter::Brute => oxipng::RowFilter::Brute,
+      PngRowFilter::None => oxipng::FilterStrategy::NONE,
+      PngRowFilter::Sub => oxipng::FilterStrategy::SUB,
+      PngRowFilter::Up => oxipng::FilterStrategy::UP,
+      PngRowFilter::Average => oxipng::FilterStrategy::AVERAGE,
+      PngRowFilter::Paeth => oxipng::FilterStrategy::PAETH,
     }
   }
 }
@@ -137,17 +125,17 @@ fn to_oxipng_options(opt: &PNGLosslessOptions) -> oxipng::Options {
   oxipng::Options {
     fix_errors: opt.fix_errors.unwrap_or(false),
     force: opt.force.unwrap_or(false),
-    filter: opt
+    filters: opt
       .filter
       .as_ref()
       .map(|v| v.iter().map(|i| i.into()).collect())
       .unwrap_or_else(|| {
         oxipng::IndexSet::from_iter([
-          oxipng::RowFilter::None,
-          oxipng::RowFilter::Sub,
-          oxipng::RowFilter::Up,
-          oxipng::RowFilter::Average,
-          oxipng::RowFilter::Paeth,
+          oxipng::FilterStrategy::NONE,
+          oxipng::FilterStrategy::SUB,
+          oxipng::FilterStrategy::UP,
+          oxipng::FilterStrategy::AVERAGE,
+          oxipng::FilterStrategy::PAETH,
         ])
       }),
     bit_depth_reduction: opt.bit_depth_reduction.unwrap_or(true),
