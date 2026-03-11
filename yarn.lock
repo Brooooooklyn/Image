@@ -5610,16 +5610,16 @@ __metadata:
   languageName: node
   linkType: hard
 
-"electron@npm:^40.0.0":
-  version: 40.0.0
-  resolution: "electron@npm:40.0.0"
+"electron@npm:^41.0.0":
+  version: 41.0.0
+  resolution: "electron@npm:41.0.0"
   dependencies:
     "@electron/get": "npm:^2.0.0"
     "@types/node": "npm:^24.9.0"
     extract-zip: "npm:^2.0.1"
   bin:
     electron: cli.js
-  checksum: 10c0/acd42835a64f007817ba43969d7bdd1281f109f26fbf4c6639208a8262b80ee1b89dfb844a30de694baa152ff4afc1be1d1e09b0a69629a57be03f9bbf3f9416
+  checksum: 10c0/b4fa6b3860fddd24d141f28d9272a708554b28c83986f262f265aa52b6ff33012cebec6ca0f2d4f809278ae918b61853e9073c994da3b6837de58f5353089095
   languageName: node
   linkType: hard
 
@@ -7054,7 +7054,7 @@ __metadata:
     ava: "npm:^7.0.0"
     blurhash: "npm:^2.0.5"
     chalk: "npm:^5.6.2"
-    electron: "npm:^40.0.0"
+    electron: "npm:^41.0.0"
     lerna: "npm:^9.0.3"
     npm-run-all2: "npm:^8.0.4"
     prettier: "npm:^3.7.4"
