@@ -25,23 +25,6 @@ See [index.d.ts](./packages/binding/index.d.ts) for API reference.
 
 ![CI](https://github.com/Brooooooklyn/image/workflows/CI/badge.svg)
 
-## Support matrix
-
-|                       | node10 | node12 | node14 | node16 | node18 |
-| --------------------- | ------ | ------ | ------ | ------ | ------ |
-| Windows x64           | ✓      | ✓      | ✓      | ✓      | ✓      |
-| Windows x32           | ✓      | ✓      | ✓      | ✓      | ✓      |
-| macOS x64             | ✓      | ✓      | ✓      | ✓      | ✓      |
-| macOS arm64 (m chips) | ✓      | ✓      | ✓      | ✓      | ✓      |
-| Linux x64 gnu         | ✓      | ✓      | ✓      | ✓      | ✓      |
-| Linux x64 musl        | ✓      | ✓      | ✓      | ✓      | ✓      |
-| Linux arm gnu         | ✓      | ✓      | ✓      | ✓      | ✓      |
-| Linux arm64 gnu       | ✓      | ✓      | ✓      | ✓      | ✓      |
-| Linux arm64 musl      | ✓      | ✓      | ✓      | ✓      | ✓      |
-| Android arm64         | ✓      | ✓      | ✓      | ✓      | ✓      |
-| Android armv7         | ✓      | ✓      | ✓      | ✓      | ✓      |
-| FreeBSD x64           | ✓      | ✓      | ✓      | ✓      | ✓      |
-
 ## Performance
 
 System info
