@@ -70,6 +70,11 @@
       "pre-commit": "lint-staged && cargo fmt --all"
     }
   },
+  "dependenciesMeta": {
+    "electron": {
+      "built": true
+    }
+  },
   "packageManager": "yarn@4.14.0",
   "repository": "git@github.com:Brooooooklyn/Image.git"
 }
