@@ -135,7 +135,7 @@ jobs:
               export TARGET_CFLAGS="$TARGET_CXXFLAGS"
               yarn workspace @napi-rs/image build --target wasm32-wasip1-threads
 
-    name: stable - ${{ matrix.settings.target }} - node@22
+    name: stable - ${{ matrix.settings.target }} - node@24
     runs-on: ${{ matrix.settings.host }}
     env:
       RUST_TARGET: ${{ matrix.settings.target }}
@@ -163,7 +163,7 @@ jobs:
       - uses: mlugg/setup-zig@v2
         if: ${{ contains(matrix.settings.target, 'musl') }}
         with:
-          version: 0.15.2
+          version: 0.16.0
       - name: Install cargo-zigbuild
         uses: taiki-e/install-action@v2
         if: ${{ contains(matrix.settings.target, 'musl') }}
@@ -336,8 +336,8 @@ jobs:
           - host: macos-latest
             target: aarch64-apple-darwin
         node:
-          - '20'
           - '22'
+          - '24'
     runs-on: ${{ matrix.settings.host }}
     steps:
       - uses: actions/checkout@v6
@@ -386,8 +386,8 @@ jobs:
       fail-fast: false
       matrix:
         node:
-          - '20'
           - '22'
+          - '24'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -421,8 +421,8 @@ jobs:
       fail-fast: false
       matrix:
         node:
-          - '20'
           - '22'
+          - '24'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -456,8 +456,8 @@ jobs:
       fail-fast: false
       matrix:
         node:
-          - '20'
           - '22'
+          - '24'
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v6
@@ -490,7 +490,6 @@ jobs:
       fail-fast: false
       matrix:
         node:
-          - '20'
           - '22'
     runs-on: ubuntu-latest
     steps:
