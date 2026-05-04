@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "dependencies": {
-    "@napi-rs/canvas": "^0.1.84",
+    "@napi-rs/canvas": "^1.0.0",
     "@napi-rs/image": "^1.11.2",
     "chalk": "^5.6.2",
     "next": "^16.0.7",
