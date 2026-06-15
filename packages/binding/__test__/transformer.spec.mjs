@@ -74,3 +74,66 @@ test('should be able to create transformer from raw rgba pixels', async (t) => {
 test('should be able to create transformer from SVG', (t) => {
   t.notThrows(() => Transformer.fromSvg(SVG).jpegSync())
 })
+
+// Regression test for https://github.com/Brooooooklyn/Image/issues/199
+// Each fixture stores the inverse of a canonical upright scene tagged with its EXIF
+// orientation, so a correct `.rotate()` must reproduce the same upright scene:
+//   TL = red, TR = green, BL = blue, BR = white   (canonical 64x48)
+const ORIENTATION_DIR = join(__DIRNAME, 'orientation')
+const CANONICAL_WIDTH = 64
+const CANONICAL_HEIGHT = 48
+
+// Classify a pixel into the canonical corner colors via high/low channels,
+// robust to JPEG decode rounding.
+function classify(r, g, b) {
+  const hi = (v) => v >= 160
+  const lo = (v) => v <= 95
+  if (hi(r) && lo(g) && lo(b)) return 'red'
+  if (lo(r) && hi(g) && lo(b)) return 'green'
+  if (lo(r) && lo(g) && hi(b)) return 'blue'
+  if (hi(r) && hi(g) && hi(b)) return 'white'
+  return `unknown(${r},${g},${b})`
+}
+
+for (let orientation = 1; orientation <= 8; orientation++) {
+  test(`rotate() honors exif orientation ${orientation} (#199)`, async (t) => {
+    const buffer = await fs.readFile(join(ORIENTATION_DIR, `orientation_${orientation}.jpg`))
+
+    // The fixture must carry the orientation we expect to exercise.
+    const metadata = await new Transformer(buffer).metadata(true)
+    t.is(metadata.orientation, orientation)
+
+    const raw = await new Transformer(buffer).rotate().rawPixels()
+    const bpp = raw.length / (CANONICAL_WIDTH * CANONICAL_HEIGHT)
+    t.is(bpp, 3, 'output must be the upright canonical size (64x48 RGB)')
+
+    const pixel = (x, y) => {
+      const offset = (y * CANONICAL_WIDTH + x) * bpp
+      return classify(raw[offset], raw[offset + 1], raw[offset + 2])
+    }
+    // centers of each quadrant
+    t.is(pixel(16, 12), 'red', 'top-left')
+    t.is(pixel(48, 12), 'green', 'top-right')
+    t.is(pixel(16, 36), 'blue', 'bottom-left')
+    t.is(pixel(48, 36), 'white', 'bottom-right')
+  })
+}
+
+// Calling `metadata()` (which does not parse EXIF) before `.rotate()` on the same
+// Transformer must not poison the cache and turn `.rotate()` into a no-op (#199).
+test('rotate() still applies exif orientation after metadata() (#199)', async (t) => {
+  const buffer = await fs.readFile(join(ORIENTATION_DIR, 'orientation_6.jpg'))
+  const transformer = new Transformer(buffer)
+  await transformer.metadata() // no EXIF requested
+  const raw = await transformer.rotate().rawPixels()
+  const bpp = raw.length / (CANONICAL_WIDTH * CANONICAL_HEIGHT)
+  t.is(bpp, 3, 'output must be the upright canonical size (64x48 RGB)')
+  const pixel = (x, y) => {
+    const offset = (y * CANONICAL_WIDTH + x) * bpp
+    return classify(raw[offset], raw[offset + 1], raw[offset + 2])
+  }
+  t.is(pixel(16, 12), 'red', 'top-left')
+  t.is(pixel(48, 12), 'green', 'top-right')
+  t.is(pixel(16, 36), 'blue', 'bottom-left')
+  t.is(pixel(48, 36), 'white', 'bottom-right')
+})

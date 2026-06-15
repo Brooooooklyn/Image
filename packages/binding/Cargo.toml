@@ -9,9 +9,18 @@ crate-type = ["cdylib"]
 [[bin]]
 name = "logo"
 path = "logo.rs"
+# `napi_build::setup()` emits package-scoped `--export=napi_register_wasm_v1`
+# (and emnapi_*) link args that apply to every target in the crate, including
+# this helper bin. Since Rust 1.96 stopped passing `--allow-undefined` on wasm
+# targets, wasm-ld treats those missing exports as a hard error and the wasi
+# build fails on `bin "logo"`. This bin is a one-off logo generator and is not
+# part of the addon, so gate it behind an opt-in feature to keep cargo from
+# building it during `napi build`. Build it with `cargo run --bin logo -F logo`.
+required-features = ["logo"]
 
 [features]
 default            = ["oxipng/parallel"]
+logo               = []
 oxipng_libdeflater = ["oxipng/zopfli", "oxipng/parallel"]
 with_simd          = ["mozjpeg-sys/nasm_simd_parallel_build"]
 
