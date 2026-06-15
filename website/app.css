@@ -1,0 +1,17 @@
+@import 'tailwindcss';
+@import '@void/md/theme-content.css';
+@custom-variant dark (&:where(.dark, .dark *));
+@theme {
+  --color-bg: #0a0a0f;
+  --color-fg: #e7e7ee;
+  --color-muted: #9aa0b4;
+  --color-accent: oklch(72% 0.23 250);
+}
+:root { color-scheme: dark; }
+html, body {
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+code, kbd, pre { font-family: ui-monospace, 'SFMono-Regular', 'JetBrains Mono', Menlo, monospace; }
+.void-md { --vmd-link: var(--color-accent); }
