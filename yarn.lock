@@ -5227,7 +5227,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"buffer@npm:^5.5.0":
+"buffer@npm:^5.5.0, buffer@npm:^5.7.1":
   version: 5.7.1
   resolution: "buffer@npm:5.7.1"
   dependencies:
@@ -12315,6 +12315,7 @@ __metadata:
     "@types/react-dom": "npm:^19.0.0"
     "@void/md": "npm:0.9.3"
     "@void/react": "npm:0.9.3"
+    buffer: "npm:^5.7.1"
     chalk: "npm:^5.6.2"
     react: "npm:^19.2.1"
     react-dom: "npm:^19.2.1"

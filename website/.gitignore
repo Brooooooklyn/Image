@@ -4,3 +4,8 @@ public/img/example.mjs
 public/img/sharp.mjs
 public/img/*.manipulated.webp
 public/img/og.png
+
+# Playwright e2e artifacts
+test-results
+playwright-report
+.playwright-mcp
