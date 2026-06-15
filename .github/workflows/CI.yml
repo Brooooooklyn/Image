@@ -374,6 +374,8 @@ jobs:
         if: startsWith(matrix.settings.target, 'aarch64')
         run: |
           yarn test
+          node ./.github/install-electron.mjs
+          node -e "const p='node_modules/electron/path.txt'; if(!require('fs').existsSync(p)){console.log('::error::Electron binary missing ('+p+') after install');process.exit(1)}"
           yarn electron electron.js
       - name: Test bindings
         if: startsWith(matrix.settings.target, 'x86_64')
