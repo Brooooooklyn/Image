@@ -24,7 +24,7 @@
     "npm-run-all2": "^8.0.4",
     "prettier": "^3.7.4",
     "rxjs": "^7.8.2",
-    "sharp": "^0.34.5",
+    "sharp": "^0.35.0",
     "typescript": "^6.0.0"
   },
   "scripts": {
@@ -75,6 +75,6 @@
       "built": true
     }
   },
-  "packageManager": "yarn@4.14.1",
+  "packageManager": "yarn@4.17.0",
   "repository": "git@github.com:Brooooooklyn/Image.git"
 }
