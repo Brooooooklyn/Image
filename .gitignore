@@ -26,3 +26,5 @@ output-debian.jpeg
 *.wasm
 packages/binding/npm
 package-lock.json
+.void
+.wrangler

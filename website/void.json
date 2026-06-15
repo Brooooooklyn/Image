@@ -1,0 +1,46 @@
+{
+  "$schema": "./node_modules/void/schema.json",
+  "output": "server",
+  "routing": {
+    "revalidate": {
+      "/playground": 0,
+      "/": 31536000,
+      "/docs/*": 31536000,
+      "/changelog": 31536000,
+      "*": 60
+    },
+    "headers": {
+      "/playground": [
+        "Cross-Origin-Opener-Policy: same-origin",
+        "Cross-Origin-Embedder-Policy: require-corp"
+      ],
+      "/playground/*": [
+        "Cross-Origin-Opener-Policy: same-origin",
+        "Cross-Origin-Embedder-Policy: require-corp"
+      ]
+    },
+    "redirects": {
+      "/docs/": {
+        "to": "/docs",
+        "status": 308
+      },
+      "/docs/credits/": {
+        "to": "/docs/credits",
+        "status": 308
+      },
+      "/changelog/": {
+        "to": "/changelog",
+        "status": 308
+      }
+    }
+  },
+  "head": {
+    "titleTemplate": "%s | @napi-rs/image",
+    "htmlAttrs": {
+      "lang": "en"
+    }
+  },
+  "worker": {
+    "compatibility_date": "2026-02-24"
+  }
+}
