@@ -4,29 +4,17 @@ import { voidReact } from '@void/react/plugin'
 import { voidMarkdown } from '@void/md/plugin'
 import tailwindcss from '@tailwindcss/vite'
 
-let assetsGenerated = false
-
+// Build-time asset generation (OG image, demo images, changelog) runs via the
+// `build` npm script (`node scripts/build-assets.mjs && vite build`) instead of
+// a buildStart hook. The hook approach is unreliable because Vite compiles this
+// config into node_modules/.vite-temp, which breaks relative imports of the
+// scripts dir; running the script first also guarantees the generated files
+// (e.g. public/img/og.png) exist before Vite copies the public/ directory.
 export default defineConfig({
   plugins: [
     voidPlugin(),
     voidReact(),
     voidMarkdown(), // enforce:'pre', auto-detects React → MUST come after voidReact()
     tailwindcss(),
-    {
-      name: 'gen-build-assets',
-      apply: 'build',
-      async buildStart() {
-        if (assetsGenerated) return
-        assetsGenerated = true
-        // Computed specifier so the config bundler does not statically resolve
-        // (and require) this module at config-load time. The script is added in
-        // a later migration group; until then `vite build` is intentionally not run.
-        const mod = './scripts/build-assets.mjs'
-        const { generateAssets } = (await import(/* @vite-ignore */ mod)) as {
-          generateAssets: () => Promise<void>
-        }
-        await generateAssets()
-      },
-    },
   ],
 })
