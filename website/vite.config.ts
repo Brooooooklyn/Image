@@ -17,6 +17,12 @@ import tailwindcss from '@tailwindcss/vite'
 let assetsGenerated = false
 
 export default defineConfig({
+  // The @napi-rs/image browser build is a top-level-await ESM that spawns its
+  // own internal module worker (wasi-worker-browser.mjs). Our playground runs it
+  // inside our own Worker, so BOTH worker layers must be emitted as ES modules —
+  // the default 'iife' worker format cannot handle the top-level await in the
+  // wasm package, which fails the build. format:'es' fixes the nested worker.
+  worker: { format: 'es' },
   plugins: [
     voidPlugin(),
     voidReact(),
