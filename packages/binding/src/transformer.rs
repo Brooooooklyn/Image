@@ -263,7 +263,10 @@ impl ThreadsafeDynamicImage {
           exif,
           orientation,
           format: image_format,
-          has_parsed_exif: true,
+          // Only mark EXIF as parsed when we actually attempted it. Otherwise a later
+          // `get(true)` (e.g. from `.rotate()`) would see `has_parsed_exif == true`,
+          // skip parsing, and silently drop the orientation. See issue #199.
+          has_parsed_exif: with_exif,
           color_type,
         });
         Ok(image.as_mut().unwrap())
@@ -471,9 +474,9 @@ impl Task for EncodeTask {
         Orientation::Rotate180 => meta.image = meta.image.rotate180(),
         Orientation::MirrorVertical => meta.image = meta.image.flipv(),
         Orientation::MirrorHorizontalAndRotate270Cw => meta.image = meta.image.fliph().rotate270(),
-        Orientation::Rotate90Cw => meta.image = meta.image.rotate270(),
+        Orientation::Rotate90Cw => meta.image = meta.image.rotate90(),
         Orientation::MirrorHorizontalAndRotate90Cw => meta.image = meta.image.flipv().rotate270(),
-        Orientation::Rotate270Cw => meta.image = meta.image.rotate90(),
+        Orientation::Rotate270Cw => meta.image = meta.image.rotate270(),
       }
     }
     let raw_width = meta.image.width();
