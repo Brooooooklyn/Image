@@ -1,4 +1,5 @@
 import { resolve } from 'node:path'
+import { readdirSync, rmSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import { defineConfig } from 'vite'
 import { voidPlugin } from 'void'
@@ -85,6 +86,47 @@ export default defineConfig({
         const mod = pathToFileURL(resolve(process.cwd(), 'scripts/build-assets.mjs')).href
         const { generateAssets } = await import(/* @vite-ignore */ mod)
         await generateAssets()
+      },
+    },
+    // Prune benchmark leftovers from the client bundle.
+    //
+    // public/img/ contains benchmark INPUT files (nasa-4928x3279.png is a 13 MB
+    // symlink to the repo root; sharp.mjs is the benchmark script that reads it).
+    // They are NOT web assets and must NOT ship to production.
+    //
+    // Why post-build deletion instead of publicDir exclusion:
+    //   Vite copies the entire publicDir wholesale — there is no per-file ignore
+    //   list. Adding an explicit exclusion API does not exist in Vite's publicDir
+    //   config. We therefore let Vite copy everything and then delete the unwanted
+    //   files from dist/client AFTER the client bundle is written.
+    //
+    // Guard: closeBundle fires once per build environment (client + SSR/worker).
+    // We only act on the client output path. rmSync with { force: true } is a
+    // no-op when the file was already gone (e.g. second env invocation, or the
+    // file was never present in an earlier build).
+    {
+      name: 'prune-benchmark-leftovers',
+      apply: 'build',
+      closeBundle() {
+        const imgDir = resolve(process.cwd(), 'dist/client/img')
+
+        // Known benchmark inputs — NOT web assets.
+        const knownJunk = [
+          resolve(imgDir, 'nasa-4928x3279.png'),
+          resolve(imgDir, 'sharp.mjs'),
+        ]
+        for (const p of knownJunk) {
+          rmSync(p, { force: true })
+        }
+
+        // Also sweep for any stray *.mjs files that may have crept in.
+        let entries: string[] = []
+        try { entries = readdirSync(imgDir) } catch { /* dir may not exist on SSR pass */ }
+        for (const name of entries) {
+          if (name.endsWith('.mjs')) {
+            rmSync(resolve(imgDir, name), { force: true })
+          }
+        }
       },
     },
   ],

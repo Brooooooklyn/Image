@@ -38,7 +38,10 @@
     "titleTemplate": "%s | @napi-rs/image",
     "htmlAttrs": {
       "lang": "en"
-    }
+    },
+    "link": [
+      { "rel": "icon", "href": "/favicon.svg" }
+    ]
   },
   "worker": {
     "compatibility_date": "2026-02-24"
