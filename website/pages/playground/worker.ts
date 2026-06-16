@@ -2,13 +2,21 @@
 //
 // DEPLOY REQUIREMENT — this module is bundled to a hashed `assets/worker-*.js` and spawned from the
 // COEP:require-corp /playground document. A dedicated worker created by a require-corp document is
-// itself blocked (net::ERR_BLOCKED_BY_RESPONSE) unless its OWN response carries
-// `Cross-Origin-Embedder-Policy: require-corp`. That header is set on `/assets/*` in void.json. If
-// the playground hangs on "Loading image metadata…" in production, the worker asset is being served
-// without COEP (e.g. a stale immutable cache entry from a pre-COEP deploy) — bump this file to mint a
-// fresh asset hash so the dispatch worker re-stamps the header, then redeploy.
+// itself blocked unless its OWN response carries `Cross-Origin-Embedder-Policy: require-corp`. That
+// header is set on `/assets/*` in void.json. BUT hashed-asset cache keys are unversioned and survive
+// deploys (CF edge caches per content-encoding variant), so a no-COEP response cached before the
+// header existed keeps being served to browsers even after the rule is added — the worker then spawns
+// with `ONERROR` and the playground hangs on "Loading image metadata…". The only reliable fix is to
+// mint a NEW asset hash so the URL has no stale cache history. The BUILD_TAG below changes the emitted
+// bytes (a comment alone is stripped by minification and does NOT change the hash). Bump it whenever
+// the COEP/serving story changes and a clean asset URL is needed.
 import { Buffer } from 'buffer'
 import type { WorkerRequest, WorkerResponse, ConvertOp, CompressOp, TransformOp } from './protocol'
+
+// Names the worker thread (visible in devtools) AND, as a live side effect on `self`, survives
+// minification — so editing BUILD_TAG mints a fresh `assets/worker-*.js` hash. See header note.
+const BUILD_TAG = 'napi-image-engine@coep-2026-06-16'
+;(self as { name?: string }).name = BUILD_TAG
 
 // @napi-rs/image's encoders return a Node Buffer; the emnapi runtime needs globalThis.Buffer
 // defined BEFORE the dynamic import('@napi-rs/image'), or it throws NotSupportBufferError.
