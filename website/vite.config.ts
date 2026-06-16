@@ -17,16 +17,26 @@ import tailwindcss from '@tailwindcss/vite'
 // (e.g. public/img/og.png) exist before Vite copies the public/ directory.
 let assetsGenerated = false
 
-// Shared dev/preview middleware that (1) stamps CORP/COEP on every response so the
-// cross-origin-isolated /playground can load its worker, wasm and image subresources,
-// and (2) de-doubles the @napi-rs/image-wasm32-wasi nested-worker path that `vite dev`
-// otherwise resolves with the package directory duplicated. See the plugin below.
+// Shared dev/preview middleware that (1) stamps COOP/COEP on the document and CORP on
+// every response so the cross-origin-isolated /playground can load its worker, wasm and
+// image subresources, and (2) de-doubles the @napi-rs/image-wasm32-wasi nested-worker
+// path that `vite dev` otherwise resolves with the package directory duplicated.
+//
+// COOP is the easy one to forget: `self.crossOriginIsolated` (which gates
+// SharedArrayBuffer, and therefore the wasm threads the playground needs) is only true
+// when the DOCUMENT carries BOTH Cross-Origin-Opener-Policy: same-origin AND
+// Cross-Origin-Embedder-Policy: require-corp. The deployed worker sets both for
+// /playground via void.json `routing.headers`; `vite preview` does not replay those, so
+// without COOP here the preview document is not isolated and the island falls back to its
+// StaticFallback ("In-browser demo unavailable") instead of the interactive UI. See the
+// plugin below.
 const DUPLICATED_WASM_PKG = '@napi-rs/image-wasm32-wasi/@napi-rs/image-wasm32-wasi/'
 function playgroundIsolationMiddleware(
   req: { url?: string },
   res: { setHeader: (name: string, value: string) => void },
   next: () => void,
 ) {
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin')
   res.setHeader('Cross-Origin-Resource-Policy', 'same-origin')
   res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp')
   if (req.url && req.url.includes(DUPLICATED_WASM_PKG)) {
