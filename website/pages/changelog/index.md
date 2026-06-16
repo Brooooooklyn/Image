@@ -4,6 +4,45 @@ title: 'Changelog'
 
 # @napi-rs/image
 
+## [@napi-rs/image@1.12.1](https://github.com/Brooooooklyn/Image/releases/tag/%40napi-rs/image%401.12.1)
+
+6/16/2026
+
+## What's Changed
+* chore: bump up cross-platform-actions/action action to v0.31.0 by @renovate[bot] in https://github.com/Brooooooklyn/Image/pull/173
+* chore: bump up actions/cache action to v5 by @renovate[bot] in https://github.com/Brooooooklyn/Image/pull/171
+* chore: bump up GitHub Artifact Actions (major) by @renovate[bot] in https://github.com/Brooooooklyn/Image/pull/172
+* chore: bump up cross-platform-actions/action action to v0.32.0 by @renovate[bot] in https://github.com/Brooooooklyn/Image/pull/174
+* chore: bump up Rust crate resvg to 0.46 by @renovate[bot] in https://github.com/Brooooooklyn/Image/pull/175
+* chore: bump up electron version to v40 by @renovate[bot] in https://github.com/Brooooooklyn/Image/pull/177
+* chore: bump up Rust crate fast_image_resize to v6 by @renovate[bot] in https://github.com/Brooooooklyn/Image/pull/176
+* chore: bump up Rust crate resvg to 0.47 by @renovate[bot] in https://github.com/Brooooooklyn/Image/pull/178
+* chore: bump up ava version to v7 by @renovate[bot] in https://github.com/Brooooooklyn/Image/pull/180
+* chore: bump up GitHub Artifact Actions (major) by @renovate[bot] in https://github.com/Brooooooklyn/Image/pull/179
+* chore: bump up docker/setup-qemu-action action to v4 by @renovate[bot] in https://github.com/Brooooooklyn/Image/pull/181
+* chore: bump up electron version to v41 by @renovate[bot] in https://github.com/Brooooooklyn/Image/pull/182
+* chore: bump up Yarn to v4.13.0 by @renovate[bot] in https://github.com/Brooooooklyn/Image/pull/183
+* chore: bump up typescript version to v6 by @renovate[bot] in https://github.com/Brooooooklyn/Image/pull/184
+* chore: bump up debian Docker tag to bullseye-20260316 by @renovate[bot] in https://github.com/Brooooooklyn/Image/pull/185
+* chore: bump up debian Docker tag to bullseye-20260406 by @renovate[bot] in https://github.com/Brooooooklyn/Image/pull/186
+* chore: bump up cross-platform-actions/action action to v1 by @renovate[bot] in https://github.com/Brooooooklyn/Image/pull/187
+* ci: upgrade Node.js to 24 and Zig to 0.16.0 in CI by [@Brooooooklyn](https://github.com/Brooooooklyn) in https://github.com/Brooooooklyn/Image/pull/189
+* chore: bump up Yarn to v4.14.0 by @renovate[bot] in https://github.com/Brooooooklyn/Image/pull/188
+* chore: bump up Yarn to v4.14.1 by @renovate[bot] in https://github.com/Brooooooklyn/Image/pull/190
+* chore: bump up debian Docker tag to bullseye-20260421 by @renovate[bot] in https://github.com/Brooooooklyn/Image/pull/191
+* chore: bump up ava version to v8 by @renovate[bot] in https://github.com/Brooooooklyn/Image/pull/192
+* chore: bump up @napi-rs/canvas version to v1 by @renovate[bot] in https://github.com/Brooooooklyn/Image/pull/193
+* chore: bump up electron version to v42 by @renovate[bot] in https://github.com/Brooooooklyn/Image/pull/194
+* chore: bump up debian Docker tag to bullseye-20260505 by @renovate[bot] in https://github.com/Brooooooklyn/Image/pull/195
+* chore: bump up cross-platform-actions/action action to v1.1.0 by @renovate[bot] in https://github.com/Brooooooklyn/Image/pull/196
+* fix: correct swapped EXIF orientation rotations (#199) by [@Brooooooklyn](https://github.com/Brooooooklyn) in https://github.com/Brooooooklyn/Image/pull/200
+* chore: bump up all non-major dependencies by @renovate[bot] in https://github.com/Brooooooklyn/Image/pull/198
+* chore: bump up npm-run-all2 version to v9 by @renovate[bot] in https://github.com/Brooooooklyn/Image/pull/197
+* fix(wasm): rebuild against emnapi 1.11.1 + 16MB stack so threaded codecs work in browser by [@Brooooooklyn](https://github.com/Brooooooklyn) in https://github.com/Brooooooklyn/Image/pull/201
+
+
+**Full Changelog**: https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.12.0...@napi-rs/image@1.12.1
+
 ## [@napi-rs/image@1.12.0](https://github.com/Brooooooklyn/Image/releases/tag/%40napi-rs/image%401.12.0)
 
 12/8/2025
