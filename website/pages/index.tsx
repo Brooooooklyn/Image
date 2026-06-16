@@ -1,17 +1,22 @@
-export default function Home() {
+import type { Props } from './index.server'
+import Hero from './_components/Hero'
+import OptimizationShowcase from './_components/OptimizationShowcase'
+import Benchmarks from './_components/Benchmarks'
+import FormatMatrix from './_components/FormatMatrix'
+import FilterGallery from './_components/FilterGallery'
+import CodeSample from './_components/CodeSample'
+import CtaBand from './_components/CtaBand'
+
+export default function Home({ heroHtml, fullHtml }: Props) {
   return (
-    <section className="px-6 py-24 text-center">
-      <h1 className="text-5xl font-bold tracking-tight">
-        Fast image processing, <span className="text-(--color-accent)">in Rust</span>
-      </h1>
-      <p className="mt-4 text-(--color-muted)">
-        Encode, compress, and transform images. Landing content lands in P2.
-      </p>
-      <p className="mt-8">
-        <a className="text-(--color-accent) underline" href="/playground">
-          Open the playground →
-        </a>
-      </p>
-    </section>
+    <>
+      <Hero codeHtml={heroHtml} />
+      <OptimizationShowcase />
+      <Benchmarks />
+      <FormatMatrix />
+      <FilterGallery />
+      <CodeSample html={fullHtml} />
+      <CtaBand />
+    </>
   )
 }
