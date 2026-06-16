@@ -37,7 +37,8 @@
   "head": {
     "titleTemplate": "%s | @napi-rs/image",
     "htmlAttrs": {
-      "lang": "en"
+      "lang": "en",
+      "data-theme": "dark"
     },
     "link": [
       { "rel": "icon", "href": "/favicon.svg" }
