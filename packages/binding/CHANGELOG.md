@@ -3,6 +3,13 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## [1.12.1](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.12.0...@napi-rs/image@1.12.1) (2026-06-16)
+
+### Bug Fixes
+
+- correct swapped EXIF orientation rotations ([#199](https://github.com/Brooooooklyn/Image/issues/199)) ([#200](https://github.com/Brooooooklyn/Image/issues/200)) ([8967fe3](https://github.com/Brooooooklyn/Image/commit/8967fe3127487224d326fa9892afa08a0bbffb81)), closes [rust-lang/rust#149868](https://github.com/rust-lang/rust/issues/149868) [napi-rs/napi-rs#3319](https://github.com/napi-rs/napi-rs/issues/3319)
+- **wasm:** rebuild against emnapi 1.11.1 + 16MB stack so threaded codecs work in browser ([#201](https://github.com/Brooooooklyn/Image/issues/201)) ([b604f16](https://github.com/Brooooooklyn/Image/commit/b604f1674d8b20c00335ae49f68174caad513e14)), closes [toyobayashi/emnapi#198](https://github.com/toyobayashi/emnapi/issues/198)
+
 # [1.12.0](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.11.2...@napi-rs/image@1.12.0) (2025-12-08)
 
 ### Bug Fixes
