@@ -165,6 +165,14 @@ export function CompressControls({
 
   useEffect(() => {
     onDisabledChange?.(unsupported)
+    // Normalize the codec to the input format so Run uses the right one even if the
+    // user never touches the dropdown. The default CompressOp codec is 'jpeg'; without
+    // this, a PNG input would run compressJpeg on PNG bytes (decode error).
+    if (isPng && value.codec !== 'pngLossless' && value.codec !== 'pngQuantize') {
+      onChange({ ...value, codec: 'pngLossless' })
+    } else if (isJpeg && value.codec !== 'jpeg') {
+      onChange({ ...value, codec: 'jpeg' })
+    }
   }, [inputFormat]) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (unsupported) {

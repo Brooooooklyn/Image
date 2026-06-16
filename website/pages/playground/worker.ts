@@ -33,9 +33,16 @@ async function runConvert(mod: Mod, u8: Uint8Array, op: ConvertOp): Promise<Uint
 }
 
 async function runCompress(mod: Mod, u8: Uint8Array, op: CompressOp): Promise<Uint8Array> {
+  // Use the ASYNC variants. oxipng (`oxipng/parallel`) and imagequant fan out
+  // via rayon, which spawns wasi pthreads. emnapi runs these async tasks on its
+  // async-work worker pool, and emnapi >= 1.9.0 (@emnapi/wasi-threads >= 1.2.0)
+  // routes `spawn-thread` requests from those async-work workers correctly, so
+  // the rayon spawn no longer deadlocks. (Pre-1.9.0 dropped that message and the
+  // call hung forever — both sync and async.) The async path keeps the worker's
+  // event loop free to service the thread-creation round-trip.
   switch (op.codec) {
     case 'jpeg': return mod.compressJpeg(u8, { quality: op.quality })
-    case 'pngLossless': return mod.losslessCompressPng(u8)
+    case 'pngLossless': return mod.losslessCompressPng(Buffer.from(u8))
     case 'pngQuantize': return mod.pngQuantize(u8, { maxQuality: op.maxQuality })
   }
 }
