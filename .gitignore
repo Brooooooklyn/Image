@@ -28,3 +28,4 @@ packages/binding/npm
 package-lock.json
 .void
 .wrangler
+.playwright-mcp

@@ -42,6 +42,21 @@ export default defineConfig({
   // the default 'iife' worker format cannot handle the top-level await in the
   // wasm package, which fails the build. format:'es' fixes the nested worker.
   worker: { format: 'es' },
+  resolve: {
+    // The playground worker imports the public `@napi-rs/image` API, but in the
+    // browser that wrapper's `main` (index.js) is the universal NATIVE loader — it
+    // `require()`s a platform .node binary (e.g. @napi-rs/image-darwin-arm64), and
+    // Vite/rolldown dies trying to parse that binary as JS ("stream did not contain
+    // valid UTF-8"). The package's `browser` field already points at browser.js,
+    // which is just `export * from '@napi-rs/image-wasm32-wasi'`, so alias straight
+    // to the wasm build everywhere Vite bundles. The native loader is never touched.
+    // (This only surfaced after a clean install of the published release pulled the
+    // native package in; the build-time asset script runs as a plain Node import and
+    // is unaffected by this alias.)
+    alias: {
+      '@napi-rs/image': '@napi-rs/image-wasm32-wasi',
+    },
+  },
   plugins: [
     // Make the cross-origin-isolated /playground actually run the @napi-rs/image wasm
     // worker under `vite dev` / `vite preview`. Two dev-only gaps to bridge:

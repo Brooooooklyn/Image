@@ -12,8 +12,8 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
-    "@napi-rs/image": "1.12.0",
-    "@napi-rs/image-wasm32-wasi": "1.12.0",
+    "@napi-rs/image": "1.12.1",
+    "@napi-rs/image-wasm32-wasi": "1.12.1",
     "@void/md": "0.9.3",
     "@void/react": "0.9.3",
     "buffer": "^5.7.1",
