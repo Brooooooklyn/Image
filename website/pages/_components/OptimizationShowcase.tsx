@@ -1,4 +1,4 @@
-import BeforeAfter from './_BeforeAfter' with { island: 'visible' }
+import BeforeAfter from './_BeforeAfter'
 import { showcaseRows, pct, kb } from '../_data/showcase'
 
 export default function OptimizationShowcase() {

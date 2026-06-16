@@ -1,4 +1,4 @@
-import CopyButton from './_CopyButton' with { island: 'visible' }
+import CopyButton from './_CopyButton'
 
 const CMD = 'npm install @napi-rs/image'
 
