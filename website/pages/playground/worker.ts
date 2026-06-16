@@ -11,8 +11,14 @@ if (typeof (globalThis as { Buffer?: unknown }).Buffer === 'undefined') {
 type Mod = typeof import('@napi-rs/image')
 
 function toArrayBuffer(out: Uint8Array): ArrayBuffer {
-  // Copy out of the wasm heap into a standalone, transferable ArrayBuffer.
-  return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength) as ArrayBuffer
+  // Copy into a FRESH regular ArrayBuffer. The wasm runs with threads, so its
+  // Memory is `shared: true` and HEAPU8.buffer is a SharedArrayBuffer; if the
+  // returned Buffer views that heap, `out.buffer.slice()` would yield another
+  // SharedArrayBuffer — which postMessage cannot TRANSFER. Building a new
+  // ArrayBuffer and copying the bytes is transferable regardless of the source.
+  const ab = new ArrayBuffer(out.byteLength)
+  new Uint8Array(ab).set(out)
+  return ab
 }
 
 async function runConvert(mod: Mod, u8: Uint8Array, op: ConvertOp): Promise<Uint8Array> {
