@@ -9,7 +9,8 @@
     "skipLibCheck": true,
     "types": ["vite/client", "node"],
     "verbatimModuleSyntax": true,
-    "noEmit": true
+    "noEmit": true,
+    "resolveJsonModule": true
   },
   "include": ["pages", "scripts", "e2e", "vite.config.ts", "void.json", ".void"]
 }
