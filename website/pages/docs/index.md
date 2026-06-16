@@ -58,14 +58,17 @@ await writeFile('./small.png', await losslessCompressPng(await readFile('./big.p
 
 There are two entry points, and they cover different jobs:
 
-```
-Transformer(input)        decode → transform (resize/rotate/crop/…) → encode to ANY format
-  .resize().rotate()…       chainable, returns `this`
-  .webp() .avif() …         async encoders → Promise<Buffer>
-  .webpSync() …             sync encoders → Buffer
+```ts
+new Transformer(input)        // decode → transform (resize/rotate/crop) → encode to ANY format
+  .resize()
+  .rotate()                   // chainable, returns `this`
+  .webp()                     // async encoders → Promise<Buffer>
+  .webpSync()                 // sync encoders  → Buffer
 
-compressJpeg / losslessCompressPng / pngQuantize
-                          optimize bytes IN PLACE, same format in → same format out
+// Standalone optimizers — same format in → same format out, bytes shrunk IN PLACE:
+compressJpeg(bytes)
+losslessCompressPng(bytes)
+pngQuantize(bytes)
 ```
 
 - **`Transformer`** is for decoding, geometry/color transforms, and converting between formats. Construct it from encoded bytes (`new Transformer(bytes)`), from SVG (`Transformer.fromSvg`), or from raw RGBA pixels (`Transformer.fromRgbaPixels`).

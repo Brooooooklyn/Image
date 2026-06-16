@@ -52,7 +52,9 @@ function Select({
       id={id}
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className="flex-1 rounded border border-white/10 bg-white/5 px-2 py-1 text-sm text-(--color-fg) focus:outline-none focus:ring-1 focus:ring-(--color-accent)"
+      // color-scheme:dark makes the browser render the native option popup dark; without it
+      // Chrome/Safari draw a light popup and the light --color-fg option text is unreadable.
+      className="[color-scheme:dark] flex-1 rounded border border-white/10 bg-white/5 px-2 py-1 text-sm text-(--color-fg) focus:outline-none focus:ring-1 focus:ring-(--color-accent)"
     >
       {children}
     </select>

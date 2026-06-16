@@ -1,4 +1,12 @@
 /// <reference lib="webworker" />
+//
+// DEPLOY REQUIREMENT — this module is bundled to a hashed `assets/worker-*.js` and spawned from the
+// COEP:require-corp /playground document. A dedicated worker created by a require-corp document is
+// itself blocked (net::ERR_BLOCKED_BY_RESPONSE) unless its OWN response carries
+// `Cross-Origin-Embedder-Policy: require-corp`. That header is set on `/assets/*` in void.json. If
+// the playground hangs on "Loading image metadata…" in production, the worker asset is being served
+// without COEP (e.g. a stale immutable cache entry from a pre-COEP deploy) — bump this file to mint a
+// fresh asset hash so the dispatch worker re-stamps the header, then redeploy.
 import { Buffer } from 'buffer'
 import type { WorkerRequest, WorkerResponse, ConvertOp, CompressOp, TransformOp } from './protocol'
 

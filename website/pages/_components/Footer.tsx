@@ -1,6 +1,9 @@
+// All badges must be served with `Cross-Origin-Resource-Policy: cross-origin` so they load on the
+// COEP:require-corp /playground document. shields.io sends that header; packagephobia does not (and
+// rate-limits to 429), so its install-size badge was dropped — there is no CORP-safe install-size
+// source for a native addon (bundlephobia only measures the JS, missing the platform .node binaries).
 const badges = [
   { src: 'https://img.shields.io/npm/v/@napi-rs/image.svg', href: 'https://www.npmjs.com/package/@napi-rs/image', alt: 'npm version' },
-  { src: 'https://packagephobia.com/badge?p=@napi-rs/image', href: 'https://packagephobia.com/result?p=@napi-rs/image', alt: 'install size' },
   { src: 'https://img.shields.io/npm/dm/@napi-rs/image.svg', href: 'https://npmcharts.com/compare/@napi-rs/image?minimal=true', alt: 'downloads' },
 ]
 
