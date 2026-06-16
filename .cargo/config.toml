@@ -9,5 +9,13 @@ rustflags = ["-C", "target-feature=+crc"]
 [target.aarch64-unknown-linux-musl]
 linker = "aarch64-linux-musl-gcc"
 rustflags = ["-C", "target-feature=-crt-static"]
+# aom's AVIF (all-intra RDO) recurses deeply with large stack frames; the wasm-ld
+# default 1 MiB shadow stack overflows -> `RuntimeError: memory access out of bounds`.
+# Raise it to 16 MiB. Set under both the legacy (`wasm32-wasi-preview1-threads`) and
+# current (`wasm32-wasip1-threads`) rustc triple names so the flag applies whichever
+# name cargo is invoked with.
 [target.wasm32-wasi-preview1-threads]
-rustflags = ["-C", "target-feature=+simd128"]
+rustflags = ["-C", "target-feature=+simd128", "-C", "link-arg=-zstack-size=16777216"]
+
+[target.wasm32-wasip1-threads]
+rustflags = ["-C", "target-feature=+simd128", "-C", "link-arg=-zstack-size=16777216"]
