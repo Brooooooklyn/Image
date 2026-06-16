@@ -12,16 +12,29 @@ export async function generateChangelog() {
     headers.Authorization = `token ${process.env.GITHUB_TOKEN}`
   }
 
-  const releases = await fetch(`https://api.github.com/repos/Brooooooklyn/Image/releases?per_page=100`, {
-    headers,
-  }).then((res) => res.json())
+  // The committed pages/changelog/index.md is the source of truth that ships if this
+  // refresh can't reach GitHub. NEVER let a network blip, rate-limit, or DNS failure
+  // abort the whole build/`void deploy` — fall back to the committed file instead.
+  let releases
+  try {
+    releases = await fetch(`https://api.github.com/repos/Brooooooklyn/Image/releases?per_page=100`, {
+      headers,
+    }).then((res) => res.json())
+  } catch (err) {
+    console.warn(
+      `[changelog] GitHub releases fetch failed (${err}); keeping committed pages/changelog/index.md.`,
+    )
+    return
+  }
 
   if (!Array.isArray(releases)) {
-    throw new Error(
-      `Unexpected GitHub releases response (expected an array). ` +
-        `This is usually a rate-limited 403 when no GITHUB_TOKEN is set. ` +
+    // Usually a rate-limited 403 when no GITHUB_TOKEN is set. Keep the committed file.
+    console.warn(
+      `[changelog] Unexpected GitHub releases response (expected an array; likely a rate-limited ` +
+        `403 without GITHUB_TOKEN); keeping committed pages/changelog/index.md. ` +
         `Response: ${JSON.stringify(releases)}`,
     )
+    return
   }
 
   const changelog = releases
