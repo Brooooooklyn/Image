@@ -4,6 +4,7 @@ public/img/example.mjs
 public/img/sharp.mjs
 public/img/*.manipulated.webp
 public/img/og.png
+public/showcase-manifest.json
 
 # Playwright e2e artifacts
 test-results
