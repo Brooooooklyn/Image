@@ -1,5 +1,5 @@
 import { resolve } from 'node:path'
-import { readdirSync, rmSync } from 'node:fs'
+import { existsSync, readdirSync, rmSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import { defineConfig } from 'vite'
 import { voidPlugin } from 'void'
@@ -7,15 +7,37 @@ import { voidReact } from '@void/react/plugin'
 import { voidMarkdown } from '@void/md/plugin'
 import tailwindcss from '@tailwindcss/vite'
 
-// Build-time asset generation (OG image, demo images, changelog) runs via a
-// `buildStart` hook so it executes for BOTH local `vite build` AND `void deploy`
-// (which invokes the `vite build` binary directly, bypassing the package.json
-// `build` script). The script is resolved by ABSOLUTE path because Vite compiles
-// this config into node_modules/.vite-temp, which breaks relative imports of the
-// scripts dir. `vite build` always runs with cwd = website/, so resolving from
-// process.cwd() is stable. buildStart fires early enough that the generated files
-// (e.g. public/img/og.png) exist before Vite copies the public/ directory.
+// Asset generation (demo images, OG image, changelog, showcase-manifest.json) is
+// gitignored build output, so it must run for `vite dev` too, not just builds:
+//   - `vite build` / `void deploy`  -> full pass (fresh OG image + changelog + images)
+//   - `vite dev` on a fresh clone   -> network-free subset, or the landing 500s:
+//     index.tsx statically imports public/showcase-manifest.json and the showcase/
+//     filter sections render the demo images, none of which are committed. Dev runs
+//     ONLY generateDevAssets (demo images + manifest); the OG/changelog network
+//     fetches are skipped so a flaky connection can't abort dev / the Playwright e2e.
+// On `serve` we generate ONLY when the manifest is missing so warm dev restarts stay
+// instant; `build` always does a fresh full pass. The manifest is written LAST (after
+// the demo images it stat()s), so "manifest exists" implies the demo images do too.
+//
+// The script is resolved by ABSOLUTE path because Vite compiles this config into
+// node_modules/.vite-temp, which breaks relative imports of the scripts dir. Vite
+// always runs with cwd = website/, so resolving from process.cwd() is stable.
+// Generation finishes before the dev server listens / before Vite copies public/.
 let assetsGenerated = false
+let viteCommand: 'build' | 'serve' = 'build'
+const MANIFEST = resolve(process.cwd(), 'public/showcase-manifest.json')
+
+async function ensureBuildAssets(mode: 'build' | 'serve') {
+  if (assetsGenerated) return // fires per-environment (client+worker) and per-hook; run once
+  if (mode === 'serve' && existsSync(MANIFEST)) {
+    assetsGenerated = true
+    return
+  }
+  assetsGenerated = true
+  const mod = pathToFileURL(resolve(process.cwd(), 'scripts/build-assets.mjs')).href
+  const { generateAssets, generateDevAssets } = await import(/* @vite-ignore */ mod)
+  await (mode === 'serve' ? generateDevAssets() : generateAssets())
+}
 
 // Shared dev/preview middleware that (1) stamps COOP/COEP on the document and CORP on
 // every response so the cross-origin-isolated /playground can load its worker, wasm and
@@ -104,13 +126,19 @@ export default defineConfig({
     tailwindcss(),
     {
       name: 'gen-build-assets',
-      apply: 'build',
-      async buildStart() {
-        if (assetsGenerated) return // buildStart fires per-environment (client+worker); run once
-        assetsGenerated = true
-        const mod = pathToFileURL(resolve(process.cwd(), 'scripts/build-assets.mjs')).href
-        const { generateAssets } = await import(/* @vite-ignore */ mod)
-        await generateAssets()
+      configResolved(config) {
+        viteCommand = config.command
+      },
+      // dev: generate on server start, but only if the manifest is missing
+      // (fresh clone / CI) so warm restarts stay instant. configureServer is
+      // awaited before the dev server listens, so assets exist for the first request.
+      configureServer() {
+        return ensureBuildAssets('serve')
+      },
+      // build / void deploy: full pass. buildStart may also fire under `vite dev`;
+      // viteCommand routes that to the network-free 'serve' subset (and the manifest check).
+      buildStart() {
+        return ensureBuildAssets(viteCommand)
       },
     },
     // Prune benchmark leftovers from the client bundle.
