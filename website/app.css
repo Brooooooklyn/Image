@@ -1,0 +1,187 @@
+@import 'tailwindcss';
+@import '@void/md/theme-content.css';
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ── Self-hosted variable fonts (latin subset, woff2 in public/fonts) ───────── */
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 300 700;
+  src: url('/fonts/space-grotesk-var.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url('/fonts/inter-var.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 800;
+  src: url('/fonts/jetbrains-mono-var.woff2') format('woff2');
+}
+
+/* ── Design tokens ─────────────────────────────────────────────────────────── */
+@theme {
+  /* surfaces & ink — warm near-black, warm off-white */
+  --color-bg: #0b0a09;
+  --color-surface-1: #131210;
+  --color-surface-2: #1b1916;
+  --color-border: rgb(255 250 245 / 0.08);
+  --color-border-strong: rgb(255 250 245 / 0.14);
+  --color-fg: #f4f1ec;
+  --color-muted: #a8a298;
+  /* faint: de-emphasised, but still ≥4.5:1 (AA) on bg + surface-1 for small text */
+  --color-faint: #8c867c;
+
+  /* rust / amber accent */
+  --color-accent: oklch(68% 0.16 52);
+  --color-accent-strong: oklch(73% 0.17 52);
+  --color-accent-muted: oklch(68% 0.16 52 / 0.16);
+  --color-accent-glow: oklch(70% 0.18 52 / 0.22);
+  /* dark foreground for text/icons on an accent-filled surface (≈6:1 on accent) */
+  --color-accent-fg: #1a1208;
+
+  /* type families */
+  --font-display: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+
+  /* fluid display scale */
+  --text-eyebrow: 0.78rem;
+  --text-eyebrow--line-height: 1;
+  --text-eyebrow--letter-spacing: 0.14em;
+
+  --text-display-xl: clamp(2.5rem, 6vw, 4.5rem);
+  --text-display-xl--line-height: 1.02;
+  --text-display-xl--letter-spacing: -0.02em;
+  --text-display-xl--font-weight: 600;
+
+  --text-display-lg: clamp(2rem, 4.5vw, 3rem);
+  --text-display-lg--line-height: 1.05;
+  --text-display-lg--letter-spacing: -0.02em;
+  --text-display-lg--font-weight: 600;
+
+  --text-h2: clamp(1.75rem, 3vw, 2.5rem);
+  --text-h2--line-height: 1.1;
+  --text-h2--letter-spacing: -0.01em;
+  --text-h2--font-weight: 600;
+}
+
+/* ── Base ──────────────────────────────────────────────────────────────────── */
+:root {
+  color-scheme: dark;
+}
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  scroll-behavior: smooth;
+}
+body {
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  font-size: 1rem;
+  line-height: 1.6;
+}
+::selection {
+  background: var(--color-accent-muted);
+  color: var(--color-fg);
+}
+code,
+kbd,
+pre {
+  font-family: var(--font-mono);
+}
+.void-md {
+  --vmd-link: var(--color-accent);
+}
+
+/* faint film grain — fixed, decorative, never intercepts pointer events */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+  opacity: 0.022;
+  mix-blend-mode: soft-light;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+/* ── Reusable primitives layer ─────────────────────────────────────────────── */
+@layer components {
+  /* page gutter — every section's inner wrapper */
+  .container-page {
+    margin-inline: auto;
+    width: 100%;
+    max-width: 1140px;
+    padding-inline: 1.5rem;
+  }
+  @media (min-width: 768px) {
+    .container-page {
+      padding-inline: 2rem;
+    }
+  }
+
+  /* sticky site header — translucent, blurred, hairline */
+  .site-header {
+    background: color-mix(in oklab, var(--color-bg) 82%, transparent);
+    backdrop-filter: saturate(140%) blur(12px);
+    -webkit-backdrop-filter: saturate(140%) blur(12px);
+  }
+
+  /* rust radial glow — drop behind a hero/cta section (position:relative parent) */
+  .accent-glow {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: radial-gradient(60% 50% at 50% 0%, var(--color-accent-glow), transparent 70%);
+  }
+
+  /* mono numbered eyebrow */
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: var(--text-eyebrow);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--color-accent);
+  }
+
+  /* scroll-reveal. Hidden state is gated behind html.js (set by an inline script
+     in the layout) so no-JS / crawler HTML renders fully visible — SEO-safe.
+     The Reveal observer adds .is-visible when the block scrolls into view. */
+  .reveal {
+    transition:
+      opacity 0.6s cubic-bezier(0.22, 1, 0.36, 1),
+      transform 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+    will-change: opacity, transform;
+  }
+  .js .reveal {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  .reveal.is-visible {
+    opacity: 1;
+    transform: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .js .reveal {
+      opacity: 1;
+      transform: none;
+    }
+    .reveal {
+      transition: none;
+    }
+  }
+}

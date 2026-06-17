@@ -1,7 +1,13 @@
+!lib
 .next
 .yarn
 public/img/example.mjs
 public/img/sharp.mjs
 public/img/*.manipulated.webp
 public/img/og.png
-pages/changelog/index.md
+public/showcase-manifest.json
+
+# Playwright e2e artifacts
+test-results
+playwright-report
+.playwright-mcp

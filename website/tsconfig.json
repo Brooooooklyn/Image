@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ESNext", "DOM", "DOM.Iterable", "WebWorker"],
+    "jsx": "react-jsx",
+    "strict": true,
+    "skipLibCheck": true,
+    "types": ["vite/client", "node"],
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
+    "resolveJsonModule": true
+  },
+  "include": ["pages", "lib", "scripts", "e2e", "types", "vite.config.ts", "void.json", ".void"]
+}

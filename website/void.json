@@ -1,0 +1,56 @@
+{
+  "$schema": "./node_modules/void/schema.json",
+  "output": "server",
+  "routing": {
+    "revalidate": {
+      "/playground": 0,
+      "/": 31536000,
+      "/docs/*": 31536000,
+      "/changelog": 31536000,
+      "*": 60
+    },
+    "headers": {
+      "/playground": [
+        "Cross-Origin-Opener-Policy: same-origin",
+        "Cross-Origin-Embedder-Policy: require-corp"
+      ],
+      "/playground/*": [
+        "Cross-Origin-Opener-Policy: same-origin",
+        "Cross-Origin-Embedder-Policy: require-corp"
+      ],
+      "/assets/*": [
+        "Cross-Origin-Embedder-Policy: require-corp",
+        "Cross-Origin-Resource-Policy: same-origin"
+      ]
+    },
+    "redirects": {
+      "/docs/": {
+        "to": "/docs",
+        "status": 308
+      },
+      "/docs/credits/": {
+        "to": "/docs/credits",
+        "status": 308
+      },
+      "/changelog/": {
+        "to": "/changelog",
+        "status": 308
+      }
+    }
+  },
+  "head": {
+    "titleTemplate": "%s | @napi-rs/image",
+    "htmlAttrs": {
+      "lang": "en",
+      "data-theme": "dark"
+    },
+    "link": [
+      { "rel": "icon", "href": "/favicon.svg" },
+      { "rel": "preload", "href": "/fonts/space-grotesk-var.woff2", "as": "font", "type": "font/woff2", "crossorigin": "anonymous" },
+      { "rel": "preload", "href": "/fonts/inter-var.woff2", "as": "font", "type": "font/woff2", "crossorigin": "anonymous" }
+    ]
+  },
+  "worker": {
+    "compatibility_date": "2026-02-24"
+  }
+}
