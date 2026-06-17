@@ -45,6 +45,9 @@
     "arrowParens": "always"
   },
   "ava": {
+    "files": [
+      "packages/**/*.spec.mjs"
+    ],
     "extensions": [
       "mjs"
     ],
