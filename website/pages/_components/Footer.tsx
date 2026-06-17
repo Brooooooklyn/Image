@@ -3,7 +3,7 @@ const links = [
   { label: 'Docs', href: '/docs' },
   { label: 'Changelog', href: '/changelog' },
   { label: 'GitHub', href: 'https://github.com/Brooooooklyn/Image' },
-  { label: 'npm', href: 'https://npmx.dev/@napi-rs/image' },
+  { label: 'npmx', href: 'https://npmx.dev/@napi-rs/image' },
   { label: 'Discord', href: 'https://discord.gg/SpWzYHsKHs' },
 ]
 
