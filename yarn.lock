@@ -1064,6 +1064,27 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@fontsource-variable/inter@npm:^5.2.8":
+  version: 5.2.8
+  resolution: "@fontsource-variable/inter@npm:5.2.8"
+  checksum: 10c0/35b46df31c8c18f55f87228acf6297e4dac6cc9f38d0faaafdaf5a40e40c386cf1bfb115fb0fe0dcdb9b7e14f582843693ccf070d9c903072a5b2fc0f8dfde56
+  languageName: node
+  linkType: hard
+
+"@fontsource-variable/jetbrains-mono@npm:^5.2.8":
+  version: 5.2.8
+  resolution: "@fontsource-variable/jetbrains-mono@npm:5.2.8"
+  checksum: 10c0/574e5463b802cfdd6ec8dd16724d2fd5ee38204815729c9dca0f457a417f0a4d32e6ec4ed2dfa0e5a5de5a9b0deaeb9f3c0b49b332763ed40172de43d6b1502f
+  languageName: node
+  linkType: hard
+
+"@fontsource-variable/space-grotesk@npm:^5.2.10":
+  version: 5.2.10
+  resolution: "@fontsource-variable/space-grotesk@npm:5.2.10"
+  checksum: 10c0/976123dc55a4c73d1986e0ca0c3f6210862cc48ebbec0fc4ba416f17195452e661e40504436ad4972692d34c530e1833cd5e9a0e377b4b9b062b781c6a4eeb74
+  languageName: node
+  linkType: hard
+
 "@hono/oauth-providers@npm:^0.8.5":
   version: 0.8.5
   resolution: "@hono/oauth-providers@npm:0.8.5"
@@ -12458,6 +12479,9 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "website@workspace:website"
   dependencies:
+    "@fontsource-variable/inter": "npm:^5.2.8"
+    "@fontsource-variable/jetbrains-mono": "npm:^5.2.8"
+    "@fontsource-variable/space-grotesk": "npm:^5.2.10"
     "@napi-rs/canvas": "npm:^1.0.0"
     "@napi-rs/image": "npm:1.12.1"
     "@napi-rs/image-wasm32-wasi": "npm:1.12.1"

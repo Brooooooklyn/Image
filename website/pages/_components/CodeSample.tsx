@@ -1,11 +1,27 @@
+import SectionHeader from './SectionHeader'
+import CodeBlock from './CodeBlock'
+import Reveal from './_Reveal'
+import { fullSample } from '../_data/samples'
+
 export default function CodeSample({ html }: { html: string }) {
   return (
-    <section className="mx-auto max-w-4xl px-6 py-20">
-      <h2 className="text-3xl font-bold">Three formats, one pipeline</h2>
-      <div
-        className="mt-8 overflow-x-auto rounded-lg border border-white/10 bg-black/30 p-4 text-sm [&_pre]:bg-transparent!"
-        dangerouslySetInnerHTML={{ __html: html }}
-      />
+    <section className="border-t border-(--color-border)">
+      <div className="container-page py-20 md:py-28">
+        <SectionHeader
+          index="05"
+          label="PIPELINE"
+          title={<>One <span className="text-(--color-accent)">pipeline</span></>}
+          subhead="From raw bytes to every format — a few lines, all native."
+        />
+        <Reveal className="mt-12">
+          <CodeBlock
+            html={html}
+            copyText={fullSample}
+            filename="optimize.ts"
+            className="mx-auto max-w-3xl"
+          />
+        </Reveal>
+      </div>
     </section>
   )
 }

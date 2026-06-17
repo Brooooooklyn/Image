@@ -1,24 +1,41 @@
 import { filterDemos } from '../_data/showcase'
+import SectionHeader from './SectionHeader'
+import Reveal from './_Reveal'
+import Chip from './Chip'
 
 export default function FilterGallery() {
   return (
-    <section className="mx-auto max-w-5xl px-6 py-20">
-      <h2 className="text-center text-3xl font-bold tracking-tight">Built-in filters</h2>
-      <p className="mx-auto mt-3 max-w-xl text-center text-(--color-muted)">
-        Transform images with zero extra dependencies — all filters run natively in Rust.
-      </p>
-      <div className="mt-10 grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
-        {filterDemos.map((d) => (
-          <div key={d.label} className="flex flex-col gap-2">
-            <img
-              src={d.src}
-              alt={d.label}
-              loading="lazy"
-              className="aspect-square w-full rounded-lg border border-white/10 object-cover"
-            />
-            <code className="text-center text-xs text-(--color-muted)">{d.label}</code>
+    <section className="border-t border-(--color-border)">
+      <div className="container-page py-20 md:py-28">
+        <SectionHeader
+          index="04"
+          label="FILTERS"
+          title={<>Built-in <span className="text-(--color-accent)">filters</span></>}
+          subhead="grayscale, blur, hue-rotate, contrast and more — applied natively in Rust."
+        />
+        <Reveal className="mt-12">
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+            {filterDemos.map((d, i) => (
+              <Reveal key={d.label} delay={i * 60}>
+                <div className="group rounded-xl border border-(--color-border) bg-(--color-surface-1) overflow-hidden transition hover:border-(--color-border-strong) hover:-translate-y-0.5">
+                  <div className="aspect-[3/2] w-full overflow-hidden">
+                    <img
+                      src={d.src}
+                      alt={d.label}
+                      loading="lazy"
+                      className="w-full h-full object-cover transition duration-300 group-hover:scale-[1.02]"
+                    />
+                  </div>
+                  <div className="px-3 py-2.5">
+                    <Chip tone="muted" className="tabular-nums">
+                      {d.label}
+                    </Chip>
+                  </div>
+                </div>
+              </Reveal>
+            ))}
           </div>
-        ))}
+        </Reveal>
       </div>
     </section>
   )

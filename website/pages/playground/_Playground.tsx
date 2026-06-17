@@ -407,7 +407,7 @@ export default function Playground() {
                 className={[
                   'flex-1 rounded px-2 py-1.5 text-xs font-medium capitalize transition-colors',
                   activeTab === tab
-                    ? 'bg-(--color-accent) text-white'
+                    ? 'bg-(--color-accent) text-(--color-accent-fg)'
                     : 'text-(--color-muted) hover:text-(--color-fg)',
                 ].join(' ')}
               >
@@ -436,7 +436,7 @@ export default function Playground() {
           <button
             onClick={handleRun}
             disabled={runDisabled}
-            className="w-full rounded-lg bg-(--color-accent) px-4 py-2.5 text-sm font-semibold text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-40 hover:opacity-90"
+            className="w-full rounded-lg bg-(--color-accent) px-4 py-2.5 text-sm font-semibold text-(--color-accent-fg) transition-opacity disabled:cursor-not-allowed disabled:opacity-40 hover:opacity-90"
           >
             Run
           </button>

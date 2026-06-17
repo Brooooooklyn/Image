@@ -41,18 +41,26 @@ export default function Layout({ children }: { children: ReactNode }) {
   }, [path])
 
   return (
-    <div className="min-h-screen">
-      <header className="flex items-center justify-between border-b border-white/10 px-6 py-4">
-        <a href="/" className="font-mono font-bold">@napi-rs/image</a>
-        <nav className="flex gap-4 text-sm text-(--color-muted)">
-          <a href="/playground" className="hover:text-(--color-fg)">Playground</a>
-          <a href="/docs" className="hover:text-(--color-fg)">Docs</a>
-          <a href="/changelog" className="hover:text-(--color-fg)">Changelog</a>
-          <a href="https://github.com/Brooooooklyn/Image" className="hover:text-(--color-fg)">GitHub</a>
-        </nav>
-      </header>
-      <main>{children}</main>
-      <Footer />
-    </div>
+    <>
+      {/* Mark JS-capable clients before first paint so scroll-reveal hidden state
+          (gated behind html.js in app.css) only applies when JS can reveal it —
+          no-JS / crawler HTML stays fully visible. */}
+      <script dangerouslySetInnerHTML={{ __html: "document.documentElement.classList.add('js')" }} />
+      <div className="min-h-screen">
+        <header className="site-header sticky top-0 z-50 border-b border-(--color-border)">
+          <div className="container-page flex h-14 items-center justify-between">
+            <a href="/" className="font-mono text-sm font-medium tracking-tight text-(--color-fg)">@napi-rs/image</a>
+            <nav className="flex items-center gap-6 text-sm text-(--color-muted)">
+              <a href="/playground" className="transition-colors hover:text-(--color-fg)">Playground</a>
+              <a href="/docs" className="transition-colors hover:text-(--color-fg)">Docs</a>
+              <a href="/changelog" className="transition-colors hover:text-(--color-fg)">Changelog</a>
+              <a href="https://github.com/Brooooooklyn/Image" className="transition-colors hover:text-(--color-fg)">GitHub</a>
+            </nav>
+          </div>
+        </header>
+        <main>{children}</main>
+        <Footer />
+      </div>
+    </>
   )
 }

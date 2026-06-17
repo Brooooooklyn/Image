@@ -12,6 +12,9 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@fontsource-variable/inter": "^5.2.8",
+    "@fontsource-variable/jetbrains-mono": "^5.2.8",
+    "@fontsource-variable/space-grotesk": "^5.2.10",
     "@napi-rs/image": "1.12.1",
     "@napi-rs/image-wasm32-wasi": "1.12.1",
     "@void/md": "0.9.3",
