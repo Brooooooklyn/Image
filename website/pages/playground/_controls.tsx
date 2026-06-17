@@ -52,9 +52,12 @@ function Select({
       id={id}
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      // color-scheme:dark makes the browser render the native option popup dark; without it
-      // Chrome/Safari draw a light popup and the light --color-fg option text is unreadable.
-      className="[color-scheme:dark] flex-1 rounded border border-white/10 bg-white/5 px-2 py-1 text-sm text-(--color-fg) focus:outline-none focus:ring-1 focus:ring-(--color-accent)"
+      // The native option popup must stay readable regardless of how the browser draws it.
+      // color-scheme:dark hints a dark popup, but Chrome on macOS still paints a light surface,
+      // leaving the light --color-fg option text invisible. So set each option's background AND
+      // text explicitly (dark bg + light fg) — modern Chrome/Firefox honor per-option colors, and
+      // Safari falls back to the color-scheme:dark popup. Either way the options stay legible.
+      className="[color-scheme:dark] [&_option]:bg-(--color-bg) [&_option]:text-(--color-fg) flex-1 rounded border border-white/10 bg-white/5 px-2 py-1 text-sm text-(--color-fg) focus:outline-none focus:ring-1 focus:ring-(--color-accent)"
     >
       {children}
     </select>
