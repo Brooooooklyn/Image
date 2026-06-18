@@ -29,3 +29,5 @@ package-lock.json
 .void
 .wrangler
 .playwright-mcp
+website/.void
+website/public/showcase-manifest.json
