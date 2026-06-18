@@ -3,11 +3,7 @@
   "output": "server",
   "routing": {
     "revalidate": {
-      "/playground": 0,
-      "/": 31536000,
-      "/docs/*": 31536000,
-      "/changelog": 31536000,
-      "*": 60
+      "*": 0
     },
     "headers": {
       "/playground": [
