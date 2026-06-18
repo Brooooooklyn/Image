@@ -68,7 +68,10 @@ export default function Layout({ children }: { children: ReactNode }) {
         <header className="site-header sticky top-0 z-50 border-b border-(--color-border)">
           {/* CSS-only drawer toggle: header-level so .nav-menu / the bar's icons
               are later siblings the :checked rule (app.css) can reach. */}
-          <input id="nav-toggle" type="checkbox" className="sr-only" aria-label="Toggle navigation menu" />
+          {/* sr-only keeps it focusable on mobile; md:hidden drops it from the
+              desktop tab order (the label + drawer are md-hidden, so a focusable
+              desktop checkbox would be a dead, invisible tab stop). */}
+          <input id="nav-toggle" type="checkbox" className="sr-only md:hidden" aria-label="Toggle navigation menu" />
           <div className="container-page flex h-14 items-center justify-between gap-4">
             <a
               href="/"
