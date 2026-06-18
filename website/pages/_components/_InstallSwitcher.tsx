@@ -44,7 +44,7 @@ export default function InstallSwitcher() {
               type="button"
               onClick={() => onSelect(pm.id)}
               className={cx(
-                'relative pb-2 transition-colors',
+                'relative inline-flex min-h-10 items-center pb-2 transition-colors',
                 isActive ? 'text-(--color-accent)' : 'text-(--color-muted) hover:text-(--color-fg)',
               )}
             >

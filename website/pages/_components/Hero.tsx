@@ -25,7 +25,7 @@ export default function Hero({ codeHtml }: { codeHtml: string }) {
     <section className="relative overflow-hidden">
       <div className="accent-glow" />
       <div className="container-page grid items-start gap-12 pt-20 pb-16 md:pt-28 lg:grid-cols-[minmax(0,1fr)_minmax(0,540px)] lg:gap-16">
-        <div className="flex flex-col">
+        <div className="flex min-w-0 flex-col">
           <span className="eyebrow">NATIVE NODE ADDON · POWERED BY RUST</span>
           <h1 className="mt-5 font-display text-display-xl text-(--color-fg)">
             Fast image processing
@@ -45,15 +45,15 @@ export default function Hero({ codeHtml }: { codeHtml: string }) {
           </div>
         </div>
 
-        <Reveal className="flex flex-col gap-6" delay={120}>
+        <Reveal className="flex min-w-0 flex-col gap-6" delay={120}>
           <CodeBlock html={codeHtml} filename="transform.ts" copyText={heroSample} />
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-3 gap-2 sm:gap-3">
             {stats.map((s) => (
               <div
                 key={s.label}
-                className="rounded-xl border border-(--color-border) bg-(--color-surface-1) px-4 py-5 transition-colors hover:border-(--color-border-strong)"
+                className="rounded-xl border border-(--color-border) bg-(--color-surface-1) px-3 py-4 transition-colors hover:border-(--color-border-strong) sm:px-4 sm:py-5"
               >
-                <div className="font-mono text-2xl tabular-nums text-(--color-fg) md:text-3xl">{s.node}</div>
+                <div className="font-mono text-xl tabular-nums text-(--color-fg) sm:text-2xl md:text-3xl">{s.node}</div>
                 <div className="mt-2 font-mono text-[0.7rem] uppercase leading-snug tracking-wide text-(--color-faint)">
                   {s.label}
                 </div>

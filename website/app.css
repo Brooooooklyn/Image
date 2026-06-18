@@ -88,6 +88,10 @@ body {
   font-family: var(--font-sans);
   font-size: 1rem;
   line-height: 1.6;
+  /* Backstop only — every known overflow source is fixed at the root (grid
+     min-width, scrollable tables/code). clip (not hidden) avoids creating a
+     scroll container, so sticky/position:sticky keeps working. */
+  overflow-x: clip;
 }
 ::selection {
   background: var(--color-accent-muted);
@@ -184,4 +188,38 @@ body::after {
       transition: none;
     }
   }
+}
+
+/* ── Mobile nav (CSS-only disclosure) ──────────────────────────────────────────
+   #nav-toggle (a visually-hidden checkbox in the header) toggles the drawer and
+   swaps the hamburger for a close icon. Works without JS, so it still functions
+   on non-hydrating pages like /playground.
+
+   These rules are intentionally UNLAYERED: Tailwind's `.hidden` / `.md:hidden`
+   live in `@layer utilities`, and cascade-layer order beats selector specificity
+   — an `@layer components` rule (however specific) loses to a utility. Unlayered
+   declarations outrank every layer, so they win over `.hidden` without
+   `!important`. The drawer keeps `md:!hidden` so a keyboard user focusing the
+   hidden checkbox on desktop can't reveal it (that `!important` beats these). */
+#nav-toggle:checked ~ .nav-drawer {
+  display: block;
+}
+#nav-toggle:checked ~ .container-page .nav-icon-open {
+  display: none;
+}
+#nav-toggle:checked ~ .container-page .nav-icon-close {
+  display: block;
+}
+/* Keyboard focus ring for the (visually-hidden) toggle, surfaced on its label. */
+#nav-toggle:focus-visible ~ .container-page .nav-toggle-btn {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* Mobile docs <details> caret flips when open. */
+.nav-caret {
+  transition: transform 0.18s ease;
+}
+details[open] > summary .nav-caret {
+  transform: rotate(180deg);
 }

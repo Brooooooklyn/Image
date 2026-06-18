@@ -29,8 +29,8 @@ export default function FormatMatrix() {
           subhead={matrixCaption}
         />
         <Reveal className="mt-12">
-          <div className="rounded-xl border border-(--color-border) bg-(--color-surface-1) overflow-hidden">
-            <table className="w-full border-collapse text-left">
+          <div className="overflow-x-auto rounded-xl border border-(--color-border) bg-(--color-surface-1)">
+            <table className="w-full min-w-[34rem] border-collapse text-left">
               <thead>
                 <tr className="border-b border-(--color-border-strong)">
                   <th className="px-6 py-3 font-mono text-xs uppercase tracking-wider text-(--color-faint) font-normal">
