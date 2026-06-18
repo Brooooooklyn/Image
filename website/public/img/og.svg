@@ -1,0 +1,175 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">@napi-rs/image — Image processing for Node.js</title>
+  <desc id="desc">A clean Open Graph image showing multiple image formats flowing through a single image-processing pipeline.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1200" y2="630" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#071827"/>
+      <stop offset="0.5" stop-color="#091326"/>
+      <stop offset="1" stop-color="#120C22"/>
+    </linearGradient>
+    <radialGradient id="glowCyan" cx="0" cy="0" r="1" gradientTransform="translate(212 96) rotate(39) scale(468 350)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2DD4FF" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#2DD4FF" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowPink" cx="0" cy="0" r="1" gradientTransform="translate(1080 545) rotate(-153) scale(486 340)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F05CCF" stop-opacity="0.2"/>
+      <stop offset="1" stop-color="#F05CCF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#63E6FF"/>
+      <stop offset="0.5" stop-color="#8B8CFF"/>
+      <stop offset="1" stop-color="#FF66C7"/>
+    </linearGradient>
+    <linearGradient id="accentHorizontal" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#63E6FF"/>
+      <stop offset="0.5" stop-color="#9E8BFF"/>
+      <stop offset="1" stop-color="#FF66C7"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="680" y1="154" x2="1138" y2="524" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#12263B" stop-opacity="0.92"/>
+      <stop offset="1" stop-color="#16172E" stop-opacity="0.88"/>
+    </linearGradient>
+    <linearGradient id="pill" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#FFFFFF" stop-opacity="0.095"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.045"/>
+    </linearGradient>
+    <pattern id="grid" width="42" height="42" patternUnits="userSpaceOnUse">
+      <path d="M42 0H0V42" fill="none" stroke="#C8E9FF" stroke-opacity="0.035"/>
+    </pattern>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#000814" flood-opacity="0.42"/>
+    </filter>
+    <filter id="softGlow" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="9"/>
+    </filter>
+    <clipPath id="panelClip">
+      <rect x="660" y="150" width="478" height="372" rx="28"/>
+    </clipPath>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect width="1200" height="630" fill="url(#glowCyan)"/>
+  <rect width="1200" height="630" fill="url(#glowPink)"/>
+  <rect width="1200" height="630" fill="url(#grid)"/>
+
+  <!-- top brand -->
+  <g transform="translate(64 56)">
+    <rect x="0" y="0" width="58" height="58" rx="17" fill="#0D1A2D" stroke="url(#accent)" stroke-width="2"/>
+    <circle cx="41" cy="17" r="4" fill="#EAFBFF"/>
+    <path d="M13 40L24.2 27.7C25.5 26.3 27.6 26.2 29 27.5L35.2 33.3L40 28.5L47 40" fill="none" stroke="#F4FAFF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="77" y="38" fill="#F7FBFF" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700" letter-spacing="-0.5">@napi-rs/image</text>
+  </g>
+
+  <!-- domain pill -->
+  <g transform="translate(962 60)">
+    <rect width="174" height="42" rx="21" fill="#FFFFFF" fill-opacity="0.055" stroke="#FFFFFF" stroke-opacity="0.12"/>
+    <circle cx="20" cy="21" r="4" fill="#6EF2BE"/>
+    <text x="34" y="27" fill="#DCE8F5" font-family="Inter, Arial, sans-serif" font-size="15" font-weight="600">image.napi.rs</text>
+  </g>
+
+  <!-- left copy -->
+  <text x="64" y="218" fill="#F7FBFF" font-family="Inter, Arial, sans-serif" font-size="64" font-weight="780" letter-spacing="-2.2">Image processing</text>
+  <text x="64" y="286" fill="url(#accentHorizontal)" font-family="Inter, Arial, sans-serif" font-size="64" font-weight="780" letter-spacing="-2.2">for Node.js</text>
+  <text x="67" y="345" fill="#AFC1D6" font-family="Inter, Arial, sans-serif" font-size="25" font-weight="430" letter-spacing="-0.2">Convert · resize · optimize</text>
+
+  <!-- format chips -->
+  <g transform="translate(64 395)" font-family="Inter, Arial, sans-serif" font-size="15" font-weight="700">
+    <g>
+      <rect width="78" height="42" rx="14" fill="url(#pill)" stroke="#FFFFFF" stroke-opacity="0.12"/>
+      <text x="39" y="27" text-anchor="middle" fill="#C8F6FF">PNG</text>
+    </g>
+    <g transform="translate(90 0)">
+      <rect width="82" height="42" rx="14" fill="url(#pill)" stroke="#FFFFFF" stroke-opacity="0.12"/>
+      <text x="41" y="27" text-anchor="middle" fill="#D2DEFF">JPEG</text>
+    </g>
+    <g transform="translate(184 0)">
+      <rect width="86" height="42" rx="14" fill="url(#pill)" stroke="#FFFFFF" stroke-opacity="0.12"/>
+      <text x="43" y="27" text-anchor="middle" fill="#DDD2FF">WebP</text>
+    </g>
+    <g transform="translate(282 0)">
+      <rect width="80" height="42" rx="14" fill="url(#pill)" stroke="#FFFFFF" stroke-opacity="0.12"/>
+      <text x="40" y="27" text-anchor="middle" fill="#F1C8F0">AVIF</text>
+    </g>
+    <g transform="translate(374 0)">
+      <rect width="76" height="42" rx="14" fill="url(#pill)" stroke="#FFFFFF" stroke-opacity="0.12"/>
+      <text x="38" y="27" text-anchor="middle" fill="#FFD0E8">TIFF</text>
+    </g>
+  </g>
+
+  <text x="65" y="560" fill="#71869E" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="650" letter-spacing="1.9">ONE PIPELINE · MANY FORMATS</text>
+
+  <!-- flow panel -->
+  <g filter="url(#shadow)">
+    <rect x="660" y="150" width="478" height="372" rx="28" fill="url(#panel)" stroke="#9CCBFF" stroke-opacity="0.18" stroke-width="1.5"/>
+  </g>
+  <g clip-path="url(#panelClip)">
+    <circle cx="1110" cy="168" r="150" fill="#A67CFF" opacity="0.055"/>
+    <circle cx="688" cy="520" r="135" fill="#35D9FF" opacity="0.045"/>
+  </g>
+
+  <text x="690" y="188" fill="#8EA5BD" font-family="Inter, Arial, sans-serif" font-size="12" font-weight="760" letter-spacing="2">FORMAT FLOW</text>
+
+  <!-- connections under nodes -->
+  <g fill="none" stroke-linecap="round" stroke-width="2.2">
+    <path d="M776 241 C824 241, 827 279, 866 299" stroke="#5BDFFF" stroke-opacity="0.5"/>
+    <path d="M776 313 C824 313, 832 313, 866 313" stroke="#8D91FF" stroke-opacity="0.52"/>
+    <path d="M776 385 C824 385, 827 347, 866 327" stroke="#F36DBB" stroke-opacity="0.48"/>
+    <path d="M934 299 C974 279, 978 241, 1022 241" stroke="#72E8C8" stroke-opacity="0.5"/>
+    <path d="M934 313 C974 313, 984 313, 1022 313" stroke="#6ED9FF" stroke-opacity="0.5"/>
+    <path d="M934 327 C974 347, 978 385, 1022 385" stroke="#E67BD1" stroke-opacity="0.48"/>
+  </g>
+
+  <!-- connection dots -->
+  <g>
+    <circle cx="822" cy="264" r="3" fill="#67E5FF"/>
+    <circle cx="831" cy="313" r="3" fill="#A79BFF"/>
+    <circle cx="822" cy="362" r="3" fill="#FF7FC8"/>
+    <circle cx="978" cy="264" r="3" fill="#79EACB"/>
+    <circle cx="982" cy="313" r="3" fill="#72DBFF"/>
+    <circle cx="978" cy="362" r="3" fill="#EC83D3"/>
+  </g>
+
+  <!-- input nodes -->
+  <g font-family="Inter, Arial, sans-serif" font-size="16" font-weight="700">
+    <g>
+      <rect x="690" y="216" width="86" height="50" rx="14" fill="#10273A" stroke="#58D8F2" stroke-opacity="0.35"/>
+      <text x="733" y="247" text-anchor="middle" fill="#A9EDFF">.png</text>
+    </g>
+    <g>
+      <rect x="690" y="288" width="86" height="50" rx="14" fill="#181F3A" stroke="#9997FF" stroke-opacity="0.34"/>
+      <text x="733" y="319" text-anchor="middle" fill="#C5C1FF">.tiff</text>
+    </g>
+    <g>
+      <rect x="690" y="360" width="86" height="50" rx="14" fill="#2A1B35" stroke="#F176C3" stroke-opacity="0.34"/>
+      <text x="733" y="391" text-anchor="middle" fill="#F6B1DB">.hdr</text>
+    </g>
+  </g>
+
+  <!-- center engine glow -->
+  <circle cx="900" cy="313" r="76" fill="#7B93FF" opacity="0.14" filter="url(#softGlow)"/>
+  <rect x="854" y="267" width="92" height="92" rx="28" fill="#0A1427" stroke="url(#accent)" stroke-width="2"/>
+  <circle cx="900" cy="313" r="19" fill="#14233B" stroke="#FFFFFF" stroke-opacity="0.12"/>
+  <circle cx="908" cy="306" r="3" fill="#F4FAFF"/>
+  <path d="M888 323L896 314.5L901 319L905 315L912 323" fill="none" stroke="#F4FAFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- output nodes -->
+  <g font-family="Inter, Arial, sans-serif" font-size="16" font-weight="700">
+    <g>
+      <rect x="1022" y="216" width="88" height="50" rx="14" fill="#102C30" stroke="#6DE9C8" stroke-opacity="0.38"/>
+      <text x="1066" y="247" text-anchor="middle" fill="#A6F4DE">.webp</text>
+    </g>
+    <g>
+      <rect x="1022" y="288" width="88" height="50" rx="14" fill="#10283A" stroke="#60D8FF" stroke-opacity="0.38"/>
+      <text x="1066" y="319" text-anchor="middle" fill="#A8EAFF">.avif</text>
+    </g>
+    <g>
+      <rect x="1022" y="360" width="88" height="50" rx="14" fill="#2A1B35" stroke="#E57CD1" stroke-opacity="0.38"/>
+      <text x="1066" y="391" text-anchor="middle" fill="#F1B5E4">.jpg</text>
+    </g>
+  </g>
+
+  <!-- subtle panel footer -->
+  <line x1="690" y1="464" x2="1108" y2="464" stroke="#FFFFFF" stroke-opacity="0.08"/>
+  <circle cx="704" cy="490" r="4" fill="#6FEFC0"/>
+  <text x="717" y="495" fill="#9FB2C8" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="600">Native performance, simple API</text>
+</svg>
