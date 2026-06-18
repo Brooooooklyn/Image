@@ -100,7 +100,14 @@
     </g>
   </g>
 
-  <text x="65" y="560" fill="#8c867c" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="13" font-weight="600" letter-spacing="1.9">ONE PIPELINE · ANY RUNTIME</text>
+  <!-- primary CTA (arrow drawn as a path: the Latin font subset has no U+2192) -->
+  <g transform="translate(64 466)">
+    <rect width="250" height="48" rx="12" fill="#E37726"/>
+    <text x="25" y="31" fill="#1a1208" font-family="Inter, Arial, sans-serif" font-size="17" font-weight="600" letter-spacing="-0.2">Try it in your browser</text>
+    <path d="M209 24L227 24M221 18L228 24L221 30" fill="none" stroke="#1a1208" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <text x="66" y="566" fill="#8c867c" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="13" font-weight="600" letter-spacing="1.9">ONE PIPELINE · ANY RUNTIME</text>
 
   <!-- flow panel -->
   <g filter="url(#shadow)">
