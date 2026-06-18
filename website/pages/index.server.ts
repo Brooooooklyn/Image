@@ -2,7 +2,11 @@ import { defineHandler, defineHead, type InferProps } from 'void'
 import { highlight } from '../lib/highlight'
 import { heroSample, fullSample } from './_data/samples'
 
-export const prerender = true
+// index.html must never be served from cache — keep it pure SSR (no prerender, plus
+// revalidate:0 in void.json) so a deploy is live on the very next request, with no
+// edge/ISR copy that could go stale. The shiki highlighter is a module-level
+// singleton, so per-request rendering stays cheap.
+export const prerender = false
 
 export const loader = defineHandler(async () => ({
   heroHtml: await highlight(heroSample),
