@@ -44,6 +44,9 @@
       "lang": "en",
       "data-theme": "dark"
     },
+    "meta": [
+      { "name": "viewport", "content": "width=device-width, initial-scale=1" }
+    ],
     "link": [
       { "rel": "icon", "href": "/favicon.svg" },
       { "rel": "preload", "href": "/fonts/space-grotesk-var.woff2", "as": "font", "type": "font/woff2", "crossorigin": "anonymous" },
