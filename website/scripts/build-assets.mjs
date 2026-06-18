@@ -7,8 +7,8 @@ import { generateShowcaseManifest } from './showcase-manifest.mjs'
 // clone: the demo images the showcase/filter sections display, plus the manifest that
 // pages/index.tsx statically imports (a missing manifest 500s the page). Neither step
 // touches the network, so a flaky connection can't abort `vite dev` or the Playwright
-// e2e. The OG image (fetches a font from GitHub) and changelog refresh (GitHub releases
-// API) are intentionally excluded — dev's /changelog renders from the committed
+// e2e. The OG image (fetches the Inter font from Google Fonts) and changelog refresh
+// (GitHub releases API) are intentionally excluded — dev's /changelog renders from the committed
 // pages/changelog/index.md and og.png is only referenced as a <head> meta URL.
 export async function generateDevAssets() {
   await generateDemoImages()

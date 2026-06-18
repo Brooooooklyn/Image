@@ -1,187 +1,81 @@
 import { promises as fs } from 'fs'
 
 import { createCanvas, GlobalFonts, Image } from '@napi-rs/canvas'
-import { pngQuantize } from '@napi-rs/image'
+import { losslessCompressPng } from '@napi-rs/image'
+
+const OG_WIDTH = 1200
+const OG_HEIGHT = 630
+const SVG_PATH = 'public/img/og.svg'
+
+// The OG SVG sets its text in the site's three faces — Space Grotesk (display),
+// Inter (body) and JetBrains Mono (labels/code). resvg (inside @napi-rs/canvas) only
+// renders glyphs for fonts it can find, so register them before rasterizing. Google
+// Fonts hands back static .ttf URLs (resvg can't read the repo's .woff2 builds) when
+// asked with a legacy user-agent; we resolve them fresh each build so the links can't
+// go stale. If the network is down each face falls back to the SVG's declared
+// Arial/sans-serif/monospace stack, so a flaky connection degrades the typeface
+// instead of breaking the build.
+const FONTS = [
+  { family: 'Space Grotesk', spec: 'Space+Grotesk:500,600,700' },
+  { family: 'Inter', spec: 'Inter:400,500,600,700' },
+  { family: 'JetBrains Mono', spec: 'JetBrains+Mono:400,500,600,700' },
+]
+
+// Google Fonts (and the gstatic CDN) occasionally drop the connection mid-handshake,
+// so retry a few times before giving up on a face.
+async function fetchRetry(url, init, tries = 4) {
+  let lastErr
+  for (let i = 0; i < tries; i++) {
+    try {
+      const res = await fetch(url, init)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      return res
+    } catch (err) {
+      lastErr = err
+    }
+  }
+  throw lastErr
+}
+
+async function registerFont({ family, spec }) {
+  if (GlobalFonts.families.some((f) => f.family === family)) return
+  try {
+    const css = await fetchRetry(`https://fonts.googleapis.com/css?family=${spec}`, {
+      headers: { 'User-Agent': 'Mozilla/4.0 (compatible)' },
+      redirect: 'follow',
+    }).then((res) => res.text())
+    const urls = [...css.matchAll(/https:\/\/[^)]+\.ttf/g)].map((m) => m[0])
+    if (!urls.length) throw new Error('no .ttf urls in css')
+    await Promise.all(
+      urls.map(async (url) => {
+        const ttf = await fetchRetry(url, { redirect: 'follow' }).then((res) => res.arrayBuffer())
+        GlobalFonts.register(Buffer.from(ttf), family)
+      }),
+    )
+  } catch (err) {
+    console.warn(`[og-image] could not load ${family}, falling back to system fonts:`, err.message)
+  }
+}
+
+async function registerFonts() {
+  await Promise.all(FONTS.map(registerFont))
+}
 
 export async function generateOgImage() {
-  const canvas = createCanvas(1200, 700)
+  await registerFonts()
+
+  const svg = await fs.readFile(SVG_PATH)
+  const image = new Image()
+  image.src = svg
+
+  const canvas = createCanvas(OG_WIDTH, OG_HEIGHT)
   const ctx = canvas.getContext('2d')
-
-  ctx.globalCompositeOperation = 'destination-over'
-
-  const FONT_URL = `https://github.com/Brooooooklyn/canvas/raw/main/__test__/fonts/iosevka-slab-regular.ttf`
-
-  if (!GlobalFonts.families.some(({ family }) => family === 'Iosevka Slab')) {
-    const font = await fetch(FONT_URL, {
-      redirect: 'follow',
-      follow: 10,
-    }).then((res) => res.arrayBuffer())
-    GlobalFonts.register(Buffer.from(font))
-  }
-
-  ctx.fillStyle = 'white'
-  ctx.font = '48px Iosevka Slab'
-  const Title = '@napi-rs/image'
-  ctx.fillText(Title, 80, 100)
-
-  const Arrow = new Image()
-  Arrow.src = Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1088 615" version="1.1">
-  <g stroke-width="1" fill="none" fill-rule="evenodd">
-    <text font-family="Iosevka Slab" font-size="18" font-weight="600" fill="#00e676">
-      <tspan x="900" y="459">Optimized Images</tspan>
-    </text>
-    <g transform="translate(1002, 326)">
-      <g>
-        <use fill-opacity="0.1" fill="#b3e5fc" fill-rule="evenodd" xlink:href="#path-1"></use>
-        <rect stroke="#b3e5fc" stroke-width="4" x="-2" y="-2" width="84" height="84" rx="3"></rect>
-      </g>
-      <text font-family="Iosevka Slab" font-size="22" font-weight="400" fill="#a7f3d0">
-        <tspan x="18.891" y="46.7096774">.png</tspan>
-      </text>
-    </g>
-    <g transform="translate(1002, 214)">
-      <g>
-        <use fill-opacity="0.1" fill="#b3e5fc" fill-rule="evenodd" xlink:href="#path-2"></use>
-        <rect stroke="#b3e5fc" stroke-width="4" x="-2" y="-2" width="84" height="84" rx="3"></rect>
-      </g>
-      <text font-family="Iosevka Slab" font-size="22" font-weight="500" fill="#a7f3d0">
-        <tspan x="15" y="46.7096774">.avif</tspan>
-      </text>
-    </g>
-    <g transform="translate(894, 326)">
-      <g>
-        <use fill-opacity="0.1" fill="#b3e5fc" fill-rule="evenodd" xlink:href="#path-3"></use>
-        <rect stroke="#b3e5fc" stroke-width="4" x="-2" y="-2" width="84" height="84" rx="3"></rect>
-      </g>
-      <text font-family="Iosevka Slab" font-size="22" font-weight="500" fill="#a7f3d0">
-        <tspan x="21.817" y="46.7096774">.jpg</tspan>
-      </text>
-    </g>
-    <g transform="translate(894, 214)">
-      <g>
-        <use fill-opacity="0.1" fill="#b3e5fc" fill-rule="evenodd" xlink:href="#path-4"></use>
-        <rect stroke="#b3e5fc" stroke-width="4" x="-2" y="-2" width="84" height="84" rx="3"></rect>
-      </g>
-      <text font-family="Iosevka Slab" font-size="22" font-weight="500" fill="#a7f3d0">
-        <tspan x="9" y="46.7096774">.webp</tspan>
-      </text>
-    </g>
-    <g transform="translate(342, 225)" stroke="#73e8ff" stroke-width="4">
-      <path
-        d="M499.558824,86.52 C499.558824,86.52 484.852941,81.02 439.908088,109.436667 C394.963235,137.853333 380.992647,164.436667 380.992647,164.436667"
-        stroke-dasharray="7"></path>
-      <path
-        d="M499.558824,86.0616667 C499.558824,86.0616667 484.852941,91.5616667 439.908088,63.145 C394.963235,34.7283333 380.992647,8.145 380.992647,8.145"
-        stroke-dasharray="7"></path>
-      <path d="M0.477941176,170.395 C0.477941176,170.395 169.382939,98.895 447.847936,98.895" stroke-dasharray="6">
-      </path>
-      <path d="M0.477941176,72.395 C0.477941176,72.395 169.382939,0.895 447.847936,0.895" stroke-dasharray="6"
-        transform="translate(224.162939, 36.645000) scale(1, -1) translate(-224.162939, -36.645000) "></path>
-    </g>
-    <text font-family="Iosevka Slab" font-size="18" font-weight="600" fill="#ffcc80">
-      <tspan x="24.934" y="562">Raw Images</tspan>
-    </text>
-    <g transform="translate(228, 335)">
-      <g>
-        <use fill-opacity="0.1" fill="#b3e5fc" fill-rule="evenodd" xlink:href="#path-5"></use>
-        <rect stroke="#b3e5fc" stroke-width="4" x="-2" y="-2" width="66" height="66" rx="3"></rect>
-      </g>
-      <text font-family="Iosevka Slab" font-size="22" font-weight="500" fill="#fde68a">
-        <tspan x="10" y="38">.jpg</tspan>
-      </text>
-    </g>
-    <g transform="translate(228, 223)">
-      <g>
-        <use fill-opacity="0.1" fill="#b3e5fc" fill-rule="evenodd" xlink:href="#path-6"></use>
-        <rect stroke="#b3e5fc" stroke-width="4" x="-2" y="-2" width="66" height="66" rx="3"></rect>
-      </g>
-      <text font-family="Iosevka Slab" font-size="22" font-weight="500" fill="#fde68a">
-        <tspan x="10" y="38">.png</tspan>
-      </text>
-    </g>
-    <g transform="translate(116, 391)">
-      <g>
-        <use fill-opacity="0.1" fill="#b3e5fc" fill-rule="evenodd" xlink:href="#path-7"></use>
-        <rect stroke="#b3e5fc" stroke-width="4" x="-2" y="-2" width="66" height="66" rx="3"></rect>
-      </g>
-      <text font-family="Iosevka Slab" font-size="22" font-weight="500" fill="#fde68a">
-        <tspan x="10" y="38">.tiff</tspan>
-      </text>
-    </g>
-    <g transform="translate(116, 279)">
-      <g>
-        <use fill-opacity="0.1" fill="#b3e5fc" fill-rule="evenodd" xlink:href="#path-8"></use>
-        <rect stroke="#b3e5fc" stroke-width="4" x="-2" y="-2" width="66" height="66" rx="3"></rect>
-      </g>
-      <text font-family="Iosevka Slab" font-size="22" font-weight="500" fill="#fde68a">
-        <tspan x="10" y="38">.ico</tspan>
-      </text>
-    </g>
-    <g transform="translate(116, 167)">
-      <g>
-        <use fill-opacity="0.1" fill="#b3e5fc" fill-rule="evenodd" xlink:href="#path-9"></use>
-        <rect stroke="#b3e5fc" stroke-width="4" x="-2" y="-2" width="66" height="66" rx="3"></rect>
-      </g>
-      <text font-family="Iosevka Slab" font-size="22" font-weight="500" fill="#fde68a">
-        <tspan x="10" y="38">.pnm</tspan>
-      </text>
-    </g>
-    <g transform="translate(4, 447)">
-      <g>
-        <use fill-opacity="0.1" fill="#b3e5fc" fill-rule="evenodd" xlink:href="#path-10"></use>
-        <rect stroke="#b3e5fc" stroke-width="4" x="-2" y="-2" width="66" height="66" rx="3"></rect>
-      </g>
-      <text font-family="Iosevka Slab" font-size="22" font-weight="500" fill="#fde68a">
-        <tspan x="10" y="38">.bmp</tspan>
-      </text>
-    </g>
-    <g transform="translate(4, 335)">
-      <g>
-        <use fill-opacity="0.1" fill="#b3e5fc" fill-rule="evenodd" xlink:href="#path-11"></use>
-        <rect stroke="#b3e5fc" stroke-width="4" x="-2" y="-2" width="66" height="66" rx="3"></rect>
-      </g>
-      <text font-family="Iosevka Slab" font-size="22" font-weight="500" fill="#fde68a">
-        <tspan x="10" y="38">.tga</tspan>
-      </text>
-    </g>
-    <g transform="translate(4, 223)">
-      <g>
-        <use fill-opacity="0.1" fill="#b3e5fc" fill-rule="evenodd" xlink:href="#path-12"></use>
-        <rect stroke="#b3e5fc" stroke-width="4" x="-2" y="-2" width="66" height="66" rx="3"></rect>
-      </g>
-      <text font-family="Iosevka Slab" font-size="22" font-weight="500" fill="#fde68a">
-        <tspan x="10" y="38">.hdr</tspan>
-      </text>
-    </g>
-    <g transform="translate(4, 111)">
-      <g>
-        <use fill-opacity="0.1" fill="#b3e5fc" fill-rule="evenodd" xlink:href="#path-13"></use>
-        <rect stroke="#b3e5fc" stroke-width="4" x="-2" y="-2" width="66" height="66" rx="3"></rect>
-      </g>
-      <text font-family="Iosevka Slab" font-size="22" font-weight="500" fill="#fde68a">
-        <tspan x="10" y="38">.dxt</tspan>
-      </text>
-    </g>
-  </g>
-</svg>`)
-  ctx.drawImage(Arrow, 80, 60)
-
-  const ViceCityGradient = ctx.createLinearGradient(0, 0, 1200, 0)
-  ViceCityGradient.addColorStop(0, '#3494e6')
-  ViceCityGradient.addColorStop(1, '#EC6EAD')
-  ctx.fillStyle = ViceCityGradient
-  ctx.fillRect(0, 0, 1200, 700)
+  ctx.drawImage(image, 0, 0, OG_WIDTH, OG_HEIGHT)
 
   await fs.mkdir('public/img', { recursive: true })
-
-  await fs.writeFile(
-    'public/img/og.png',
-    await pngQuantize(await canvas.encode('png'), {
-      maxQuality: 90,
-      minQuality: 75,
-    }),
-  )
+  // Lossless, not palette-quantized: the warm gradients band badly when reduced to
+  // 256 colors, and an OG image is fetched once by scrapers so size isn't critical.
+  await fs.writeFile('public/img/og.png', await losslessCompressPng(await canvas.encode('png')))
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) await generateOgImage()

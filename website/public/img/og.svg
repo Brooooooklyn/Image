@@ -1,0 +1,186 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">@napi-rs/image — Image processing for Node.js and the browser</title>
+  <desc id="desc">A warm-dark Open Graph image: a single Rust image-processing pipeline that runs on Node.js and in the browser via WebAssembly, converting between many formats.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1200" y2="630" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0b0a09"/>
+      <stop offset="0.5" stop-color="#100b08"/>
+      <stop offset="1" stop-color="#150d0a"/>
+    </linearGradient>
+    <radialGradient id="glowAmber" cx="0" cy="0" r="1" gradientTransform="translate(232 104) rotate(42) scale(470 350)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F89A3C" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#F89A3C" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowRust" cx="0" cy="0" r="1" gradientTransform="translate(1064 548) rotate(-150) scale(486 340)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#C2571A" stop-opacity="0.14"/>
+      <stop offset="1" stop-color="#C2571A" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="accentWarm" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F6A24A"/>
+      <stop offset="1" stop-color="#E0641C"/>
+    </linearGradient>
+    <linearGradient id="accentWarmH" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#F6A24A"/>
+      <stop offset="1" stop-color="#E0641C"/>
+    </linearGradient>
+    <linearGradient id="flowGrad" x1="690" y1="313" x2="1110" y2="313" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F6A24A"/>
+      <stop offset="0.5" stop-color="#EB7A2A"/>
+      <stop offset="1" stop-color="#E0641C"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="680" y1="154" x2="1138" y2="524" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#16140f" stop-opacity="0.94"/>
+      <stop offset="1" stop-color="#1b1916" stop-opacity="0.9"/>
+    </linearGradient>
+    <linearGradient id="pill" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#FFFAF5" stop-opacity="0.07"/>
+      <stop offset="1" stop-color="#FFFAF5" stop-opacity="0.03"/>
+    </linearGradient>
+    <pattern id="grid" width="42" height="42" patternUnits="userSpaceOnUse">
+      <path d="M42 0H0V42" fill="none" stroke="#FFFAF5" stroke-opacity="0.03"/>
+    </pattern>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#040301" flood-opacity="0.5"/>
+    </filter>
+    <filter id="softGlow" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="9"/>
+    </filter>
+    <clipPath id="panelClip">
+      <rect x="660" y="150" width="478" height="372" rx="28"/>
+    </clipPath>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect width="1200" height="630" fill="url(#glowAmber)"/>
+  <rect width="1200" height="630" fill="url(#glowRust)"/>
+  <rect width="1200" height="630" fill="url(#grid)"/>
+
+  <!-- top brand -->
+  <g transform="translate(64 56)">
+    <rect x="0" y="0" width="58" height="58" rx="17" fill="#15110c" stroke="url(#accentWarm)" stroke-width="2"/>
+    <circle cx="41" cy="17" r="4" fill="#FBF3E8"/>
+    <path d="M13 40L24.2 27.7C25.5 26.3 27.6 26.2 29 27.5L35.2 33.3L40 28.5L47 40" fill="none" stroke="#FBF7F1" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="77" y="38" fill="#F4F1EC" font-family="'Space Grotesk', Inter, Arial, sans-serif" font-size="30" font-weight="600" letter-spacing="-0.6">@napi-rs/image</text>
+  </g>
+
+  <!-- domain pill -->
+  <g transform="translate(962 60)">
+    <rect width="174" height="42" rx="21" fill="#FFFAF5" fill-opacity="0.05" stroke="#FFFAF5" stroke-opacity="0.12"/>
+    <circle cx="20" cy="21" r="4" fill="#6FEFC0"/>
+    <text x="34" y="27" fill="#D9D2C7" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="14" font-weight="500">image.napi.rs</text>
+  </g>
+
+  <!-- left copy -->
+  <text x="64" y="190" fill="#F4F1EC" font-family="'Space Grotesk', Inter, Arial, sans-serif" font-size="58" font-weight="600" letter-spacing="-1.6">Image processing</text>
+  <text x="64" y="250" fill="#F4F1EC" font-family="'Space Grotesk', Inter, Arial, sans-serif" font-size="58" font-weight="600" letter-spacing="-1.6">for Node.js</text>
+  <text x="64" y="310" fill="url(#accentWarmH)" font-family="'Space Grotesk', Inter, Arial, sans-serif" font-size="58" font-weight="600" letter-spacing="-1.6">&amp; the browser</text>
+  <text x="66" y="360" fill="#A8A298" font-family="Inter, Arial, sans-serif" font-size="23" font-weight="430" letter-spacing="-0.2">One Rust pipeline · WebAssembly · no install</text>
+
+  <!-- format chips -->
+  <g transform="translate(64 398)" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="15" font-weight="600">
+    <g>
+      <rect width="78" height="42" rx="14" fill="url(#pill)" stroke="#FFFAF5" stroke-opacity="0.12"/>
+      <text x="39" y="27" text-anchor="middle" fill="#C9C2B6">PNG</text>
+    </g>
+    <g transform="translate(90 0)">
+      <rect width="82" height="42" rx="14" fill="url(#pill)" stroke="#FFFAF5" stroke-opacity="0.12"/>
+      <text x="41" y="27" text-anchor="middle" fill="#C9C2B6">JPEG</text>
+    </g>
+    <g transform="translate(184 0)">
+      <rect width="86" height="42" rx="14" fill="url(#pill)" stroke="#FFFAF5" stroke-opacity="0.12"/>
+      <text x="43" y="27" text-anchor="middle" fill="#C9C2B6">WebP</text>
+    </g>
+    <g transform="translate(282 0)">
+      <rect width="80" height="42" rx="14" fill="url(#pill)" stroke="#FFFAF5" stroke-opacity="0.12"/>
+      <text x="40" y="27" text-anchor="middle" fill="#C9C2B6">AVIF</text>
+    </g>
+    <g transform="translate(374 0)">
+      <rect width="76" height="42" rx="14" fill="url(#pill)" stroke="#FFFAF5" stroke-opacity="0.12"/>
+      <text x="38" y="27" text-anchor="middle" fill="#C9C2B6">TIFF</text>
+    </g>
+  </g>
+
+  <!-- primary CTA (arrow drawn as a path: the Latin font subset has no U+2192) -->
+  <g transform="translate(64 466)">
+    <rect width="250" height="48" rx="12" fill="#E37726"/>
+    <text x="25" y="31" fill="#1a1208" font-family="Inter, Arial, sans-serif" font-size="17" font-weight="600" letter-spacing="-0.2">Try it in your browser</text>
+    <path d="M209 24L227 24M221 18L228 24L221 30" fill="none" stroke="#1a1208" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <text x="66" y="566" fill="#8c867c" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="13" font-weight="600" letter-spacing="1.9">ONE PIPELINE · ANY RUNTIME</text>
+
+  <!-- flow panel -->
+  <g filter="url(#shadow)">
+    <rect x="660" y="150" width="478" height="372" rx="28" fill="url(#panel)" stroke="#FFFAF5" stroke-opacity="0.12" stroke-width="1.5"/>
+  </g>
+  <g clip-path="url(#panelClip)">
+    <circle cx="1110" cy="168" r="150" fill="#F2913A" opacity="0.05"/>
+    <circle cx="688" cy="520" r="135" fill="#E0641C" opacity="0.045"/>
+  </g>
+
+  <text x="690" y="188" fill="#E37726" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="12" font-weight="700" letter-spacing="2">FORMAT FLOW</text>
+
+  <!-- connections under nodes -->
+  <g fill="none" stroke="url(#flowGrad)" stroke-linecap="round" stroke-width="2.2" stroke-opacity="0.5">
+    <path d="M776 241 C824 241, 827 279, 866 299"/>
+    <path d="M776 313 C824 313, 832 313, 866 313"/>
+    <path d="M776 385 C824 385, 827 347, 866 327"/>
+    <path d="M934 299 C974 279, 978 241, 1022 241"/>
+    <path d="M934 313 C974 313, 984 313, 1022 313"/>
+    <path d="M934 327 C974 347, 978 385, 1022 385"/>
+  </g>
+
+  <!-- connection dots -->
+  <g fill="#F2913A">
+    <circle cx="822" cy="264" r="3"/>
+    <circle cx="831" cy="313" r="3"/>
+    <circle cx="822" cy="362" r="3"/>
+    <circle cx="978" cy="264" r="3"/>
+    <circle cx="982" cy="313" r="3"/>
+    <circle cx="978" cy="362" r="3"/>
+  </g>
+
+  <!-- input nodes (raw) -->
+  <g font-family="'JetBrains Mono', ui-monospace, monospace" font-size="16" font-weight="600">
+    <g>
+      <rect x="690" y="216" width="86" height="50" rx="14" fill="#1b1916" stroke="#FFFAF5" stroke-opacity="0.14"/>
+      <text x="733" y="247" text-anchor="middle" fill="#E8E3DA">.png</text>
+    </g>
+    <g>
+      <rect x="690" y="288" width="86" height="50" rx="14" fill="#1b1916" stroke="#FFFAF5" stroke-opacity="0.14"/>
+      <text x="733" y="319" text-anchor="middle" fill="#E8E3DA">.tiff</text>
+    </g>
+    <g>
+      <rect x="690" y="360" width="86" height="50" rx="14" fill="#1b1916" stroke="#FFFAF5" stroke-opacity="0.14"/>
+      <text x="733" y="391" text-anchor="middle" fill="#E8E3DA">.hdr</text>
+    </g>
+  </g>
+
+  <!-- center engine glow -->
+  <circle cx="900" cy="313" r="76" fill="#F2913A" opacity="0.13" filter="url(#softGlow)"/>
+  <rect x="854" y="267" width="92" height="92" rx="28" fill="#15110c" stroke="url(#accentWarm)" stroke-width="2"/>
+  <circle cx="900" cy="313" r="19" fill="#1f1813" stroke="#FFFAF5" stroke-opacity="0.14"/>
+  <circle cx="908" cy="306" r="3" fill="#FBF7F1"/>
+  <path d="M888 323L896 314.5L901 319L905 315L912 323" fill="none" stroke="#FBF7F1" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- output nodes (optimized) -->
+  <g font-family="'JetBrains Mono', ui-monospace, monospace" font-size="16" font-weight="600">
+    <g>
+      <rect x="1022" y="216" width="88" height="50" rx="14" fill="#1b1916" stroke="#E37726" stroke-opacity="0.32"/>
+      <text x="1066" y="247" text-anchor="middle" fill="#F6A24A">.webp</text>
+    </g>
+    <g>
+      <rect x="1022" y="288" width="88" height="50" rx="14" fill="#1b1916" stroke="#E37726" stroke-opacity="0.32"/>
+      <text x="1066" y="319" text-anchor="middle" fill="#F6A24A">.avif</text>
+    </g>
+    <g>
+      <rect x="1022" y="360" width="88" height="50" rx="14" fill="#1b1916" stroke="#E37726" stroke-opacity="0.32"/>
+      <text x="1066" y="391" text-anchor="middle" fill="#F6A24A">.jpg</text>
+    </g>
+  </g>
+
+  <!-- subtle panel footer -->
+  <line x1="690" y1="464" x2="1108" y2="464" stroke="#FFFAF5" stroke-opacity="0.08"/>
+  <circle cx="704" cy="490" r="4" fill="#6FEFC0"/>
+  <text x="717" y="495" fill="#A8A298" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="500">Native speed, WebAssembly portable</text>
+</svg>
