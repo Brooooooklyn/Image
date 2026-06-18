@@ -78,7 +78,11 @@ function RangeWithValue({
   onChange: (v: number) => void
 }) {
   return (
-    <div className="flex flex-1 items-center gap-2">
+    // min-w-0 on the wrapper and the range lets the flex items shrink below the
+    // input's intrinsic width — Firefox gives <input type=range> a default control
+    // width and (min-width:auto) won't shrink past it, so without this the slider
+    // overflows the panel and pushes the value out. shrink-0 pins the value.
+    <div className="flex min-w-0 flex-1 items-center gap-2">
       <input
         id={id}
         type="range"
@@ -86,9 +90,9 @@ function RangeWithValue({
         max={max}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="flex-1 accent-(--color-accent)"
+        className="min-w-0 flex-1 accent-(--color-accent)"
       />
-      <span className="w-8 text-right text-sm tabular-nums text-(--color-muted)">{value}</span>
+      <span className="w-8 shrink-0 text-right text-sm tabular-nums text-(--color-muted)">{value}</span>
     </div>
   )
 }
