@@ -10,6 +10,16 @@ const ROOT_DIR = join(fileURLToPath(import.meta.url), '..', '..', '..', '..')
 
 const PNG = await fs.readFile(join(ROOT_DIR, 'un-optimized.png'))
 const JPEG = await fs.readFile(join(ROOT_DIR, 'un-optimized.jpg'))
+const GAMA = await fs.readFile(join(ROOT_DIR, 'image-with-gama.png'))
+
+test('should be able to lossy optimize png image which has gama chunk', async (t) => {
+  if (process.env.NAPI_RS_FORCE_WASI) {
+    t.pass()
+    return
+  }
+  const dest = await pngQuantize(GAMA, { speed: 5, maxQuality: 1, minQuality: 1 })
+  t.true(dest.length < PNG.length)
+})
 
 test('should be able to lossless optimize png image', async (t) => {
   if (process.env.NAPI_RS_FORCE_WASI) {

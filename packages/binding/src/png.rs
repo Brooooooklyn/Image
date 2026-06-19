@@ -303,28 +303,11 @@ fn png_quantize_inner(input: &[u8], options: &PngQuantOptions) -> Result<Vec<u8>
 /// Detects the appropriate gamma value for quantization from PNG metadata
 ///
 /// Priority order:
-/// 1. If sRGB chunk is present, use sRGB gamma (reciprocal ~0.45)
-/// 2. If gAMA chunk is present, use reciprocal of gamma value
+/// 1. If sRGB chunk is present, use sRGB gamma (handled by gamma() method of png::Info)
+/// 2. If gAMA chunk is present, use reciprocal of gamma value (handled by gamma() method of png::Info)
 /// 3. Default fallback to 0.45 (sRGB)
 fn detect_gamma_from_png_info(info: &png::Info) -> f64 {
-  // sRGB color space implies gamma ~2.2, reciprocal ~0.45
-  if info.srgb.is_some() {
-    return 0.45;
-  }
-
-  // Check for gAMA chunk or source_gamma (same information, different representation)
-  if let Some(gamma) = info.source_gamma {
-    let gamma_value = gamma.into_value() as f64;
-    return 1.0 / gamma_value;
-  }
-
-  if let Some(gama) = info.gama_chunk {
-    let gamma_value = gama.into_value() as f64;
-    return 1.0 / gamma_value;
-  }
-
-  // Default fallback to sRGB
-  0.45
+  info.gamma().map(|g| g.into_value()).unwrap_or(0.45) as f64
 }
 
 pub struct PngQuantTask {
