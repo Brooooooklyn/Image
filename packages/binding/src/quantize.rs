@@ -688,20 +688,31 @@ fn median_cut(
 /// `palette_labs`, so the per-call cost is `O(palette · delta_e76_sq)` with no
 /// cube roots. Lower index wins ties (`<`), exactly like the old `dist2` `nearest`.
 #[inline]
-fn nearest_lab(palette_labs: &[Lab], palette_alphas: &[u8], query_lab: Lab, query_a: u8) -> usize {
-  // A VISIBLE query (`query_a > 0`) must never select the reserved fully-transparent
-  // palette slot (entry alpha == 0). The perceptual metric can rank a saturated color
-  // CLOSER to transparent-black than to any real color: `pdist`'s ΔE color term dwarfs
-  // the `da²·ALPHA_WEIGHT_LAB` alpha term, and the `wa/510` factor HALVES the color
-  // penalty for a transparent comparison (the slot has alpha 0). Without this guard a
-  // visible pixel could be mapped to the transparent slot and VANISH (e.g. opaque
-  // green ranks transparent at 207,749,788 < opaque blue at 669,160,034). RGB `dist2`
-  // never needed this — its color and alpha terms share one scale, so the alpha
-  // penalty always dominated. Source `a == 0` pixels are forced onto the transparent
-  // slot separately (the override in `quantize_pass`), so excluding `a == 0` here is
-  // exactly right. For opaque images no slot is reserved (no `a == 0` entry exists),
-  // so this is a no-op and output stays byte-identical.
-  let skip_transparent = query_a > 0;
+fn nearest_lab(
+  palette_labs: &[Lab],
+  palette_alphas: &[u8],
+  query_lab: Lab,
+  query_a: u8,
+  skip_transparent: bool,
+) -> usize {
+  // When `skip_transparent` is set, the reserved fully-transparent palette slot
+  // (entry alpha == 0) is excluded from selection. The perceptual metric can rank a
+  // saturated color CLOSER to transparent-black than to any real color: `pdist`'s ΔE
+  // color term dwarfs the `da²·ALPHA_WEIGHT_LAB` alpha term, and the `wa/510` factor
+  // HALVES the color penalty for a transparent comparison (the slot has alpha 0).
+  // Without the exclusion a visible pixel could be mapped to the transparent slot and
+  // VANISH (e.g. opaque green ranks transparent at 207,749,788 < opaque blue at
+  // 669,160,034). RGB `dist2` never needed this — its color and alpha terms share one
+  // scale, so the alpha penalty always dominated.
+  //
+  // `skip_transparent` is the SOURCE pixel's visibility, decided by the CALLER — it is
+  // NOT derived from `query_a`. In the dither path `query_a` is the dither-adjusted
+  // `want.a`, which can clamp to 0 for a SOURCE-VISIBLE pixel that accumulated negative
+  // alpha error; deriving the exclusion from `query_a` would then wrongly re-admit the
+  // transparent slot and the visible pixel would vanish. Source `a == 0` pixels are
+  // forced onto the transparent slot separately (the override in `quantize_pass`).
+  // For opaque images no slot is reserved (no `a == 0` entry exists), so this is a
+  // no-op and output stays byte-identical regardless of the flag.
   let mut best = usize::MAX;
   let mut best_d = i64::MAX;
   for (i, (&plab, &pa)) in palette_labs.iter().zip(palette_alphas.iter()).enumerate() {
@@ -745,7 +756,7 @@ fn nearest_lab(palette_labs: &[Lab], palette_alphas: &[u8], query_lab: Lab, quer
 fn nearest(palette: &[RGBA8], c: RGBA8) -> usize {
   let labs = palette_labs(palette);
   let alphas: Vec<u8> = palette.iter().map(|p| p.a).collect();
-  nearest_lab(&labs, &alphas, rgb_to_lab(c.r, c.g, c.b), c.a)
+  nearest_lab(&labs, &alphas, rgb_to_lab(c.r, c.g, c.b), c.a, c.a > 0)
 }
 
 /// Exact integer k-means objective for `palette` over `entries`, using the
@@ -773,7 +784,7 @@ fn kmeans_objective(palette: &[RGBA8], entries: &[ColorCount]) -> u128 {
   let mut obj: u128 = 0;
   for e in entries {
     let qlab = rgb_to_lab(e.color.r, e.color.g, e.color.b);
-    let idx = nearest_lab(&labs, &alphas, qlab, e.color.a);
+    let idx = nearest_lab(&labs, &alphas, qlab, e.color.a, e.color.a > 0);
     let d = pdist_lab(qlab, e.color.a, labs[idx], alphas[idx]).max(0) as u128;
     obj += e.count as u128 * d;
   }
@@ -839,7 +850,13 @@ fn kmeans_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) {
     let mut wn = vec![0u64; k];
 
     for (ei, e) in entries.iter().enumerate() {
-      let idx = nearest_lab(&pal_labs, &pal_alphas, entry_labs[ei], entry_alphas[ei]);
+      let idx = nearest_lab(
+        &pal_labs,
+        &pal_alphas,
+        entry_labs[ei],
+        entry_alphas[ei],
+        entry_alphas[ei] > 0,
+      );
       let c = e.count;
       sr[idx] += e.color.r as u64 * c;
       sg[idx] += e.color.g as u64 * c;
@@ -993,6 +1010,9 @@ fn remap_nearest(px: &[RGBA8], palette: &[RGBA8], bits: u8) -> Vec<u8> {
         &pal_alphas,
         rgb_to_lab(key.r, key.g, key.b),
         key.a,
+        // `key` IS the (posterized) source pixel here, so its alpha is the source
+        // visibility; a visible source key must not resolve to the transparent slot.
+        key.a > 0,
       ) as u8
     });
     indices.push(idx);
@@ -1259,12 +1279,22 @@ fn remap_dither(px: &[RGBA8], width: usize, height: usize, palette: &[RGBA8], bi
         b: clamp_u8(src.b as f32 + dither_clamp_err(e[2])),
         a: clamp_u8(src.a as f32 + dither_clamp_err(e[3])),
       };
-      // PERCEPTUAL index selection (cached palette Labs; one query `rgb_to_lab`).
+      // PERCEPTUAL index selection (cached palette Labs; one query `rgb_to_lab`). The
+      // exclusion of the transparent slot keys on the RAW SOURCE pixel's visibility
+      // (`px[base].a > 0`), NOT on the dither-adjusted `want.a`: a visible source pixel
+      // can accumulate negative alpha error so `want.a` clamps to 0, and keying on that
+      // would let the pixel vanish into the transparent slot. We key on the same raw
+      // source alpha the quantize_pass override uses (`p.a == 0`), so the two agree
+      // exactly. Transparent source pixels (`px[base].a == 0`) never reach here — they
+      // are `continue`d above — so this flag is always `true` in this call; passing it
+      // explicitly documents the invariant and removes any dependence on alpha never
+      // being posterized.
       let idx = nearest_lab(
         &pal_labs,
         &pal_alphas,
         rgb_to_lab(want.r, want.g, want.b),
         want.a,
+        px[base].a > 0,
       );
       indices[base] = idx as u8;
       let chosen = palette[idx];
@@ -3897,6 +3927,57 @@ mod tests {
     );
   }
 
+  #[test]
+  fn dithered_visible_pixel_never_vanishes_into_transparent_slot() {
+    // Regression (Codex round-2 HIGH): in the DITHER path the transparent-slot
+    // exclusion must key on the RAW SOURCE pixel's visibility, NOT the dither-adjusted
+    // `want.a`. A row of near-transparent (a=1) but VISIBLE green pixels maps to a
+    // palette whose only visible entry has higher alpha, so each pixel diffuses
+    // negative alpha error forward and within a few pixels `want.a` clamps to 0. If the
+    // exclusion keyed on `want.a` the reserved slot would be re-admitted and the
+    // perceptual metric (which can rank transparent-black CLOSER than the lone visible
+    // entry) would map these VISIBLE pixels onto the transparent slot — they would
+    // VANISH. This mirrors the maxQuality:1 / speed:5 end-to-end repro at the
+    // `quantize_rgba` boundary (the exact fn the JS path calls). Fails pre-fix.
+    let green = rgba(0, 255, 0, 1);
+    let red = rgba(255, 0, 0, 100);
+    let transparent = rgba(0, 0, 0, 0);
+    let px = vec![green, green, green, green, green, green, red, transparent];
+
+    // maxQuality:1 -> max_colors 2; speed:5 -> kmeans_iters 5, dither on; posterize 0.
+    let out = quantize_rgba(&px, 8, 1, &cfg(2, true, 5));
+
+    // Load-bearing setup invariant: the reserved transparent slot must actually exist
+    // (input has a fully-transparent pixel AND max_colors >= 2), else the regression is
+    // vacuous — there would be no transparent entry to vanish into.
+    assert!(
+      out.palette.iter().any(|c| c.a == 0),
+      "setup: a reserved transparent slot must exist for this regression to apply; \
+       palette = {:?}",
+      out.palette
+    );
+
+    // Every VISIBLE source pixel must map to a VISIBLE palette entry; only the
+    // fully-transparent source pixel may resolve to the transparent slot.
+    for (i, &p) in px.iter().enumerate() {
+      let entry = out.palette[out.indices[i] as usize];
+      if p.a > 0 {
+        assert!(
+          entry.a > 0,
+          "visible source px{i} (a={}) mapped to a transparent palette entry (a=0) — \
+           it would VANISH; entry = {entry:?}",
+          p.a
+        );
+      } else {
+        assert_eq!(
+          entry.a, 0,
+          "fully-transparent source px{i} must map to the transparent slot; entry = \
+           {entry:?}"
+        );
+      }
+    }
+  }
+
   // One UNGUARDED k-means pass: assign every entry to its perceptual-nearest palette
   // entry, then move each centroid to the count-weighted RGBA mean — identical math to
   // `kmeans_refine`'s pass body, minus the keep-best guard and the empty-cluster
@@ -3917,6 +3998,7 @@ mod tests {
         &pal_alphas,
         rgb_to_lab(e.color.r, e.color.g, e.color.b),
         e.color.a,
+        e.color.a > 0,
       );
       let c = e.count;
       sr[idx] += e.color.r as u64 * c;
