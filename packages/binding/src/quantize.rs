@@ -15,14 +15,34 @@ use std::collections::HashMap;
 
 use rgb::RGBA8;
 
+use crate::lab::{Lab, delta_e76_sq, rgb_to_lab};
+
 /// Hard upper bound on an 8-bit indexed palette.
 const MAX_PALETTE: usize = 256;
 
-/// Alpha-error weight relative to a single color channel.
+/// Alpha-error weight relative to a single color channel, used by the RGB
+/// [`dist2`] metric (quality gate, dither calibration, Wu split).
 ///
 /// Alpha mistakes are far more visible than a small color shift, so the alpha
 /// term in the distance metric is scaled up by this factor.
 const ALPHA_WEIGHT: i64 = 3;
+
+/// Alpha-error weight for the PERCEPTUAL [`pdist`] metric (color ASSIGNMENT).
+///
+/// `pdist`'s color term is a CIE76 ΔE² in (×[`crate::lab::LAB_SCALE`])² units, so
+/// its magnitude is on a completely different scale than `dist2`'s RGB squared
+/// distance — `ALPHA_WEIGHT` (=3) cannot be reused. A "very different colors" gap
+/// is ΔE ≈ 100, i.e. `(100 · LAB_SCALE)² = 1e8`; a full alpha flip is `da² = 255² =
+/// 65025`. To rank a full alpha flip COMPARABLE to that maximal color gap we need
+/// `da² · ALPHA_WEIGHT_LAB ≈ 1e8`, i.e. `ALPHA_WEIGHT_LAB ≈ 1e8 / 65025 ≈ 1538`.
+/// We use 1500: it puts a full alpha flip (`255² · 1500 ≈ 9.75e7`) just under a
+/// maximal ΔE≈100 color gap, so a large color change is never out-ranked by an
+/// alpha flip, yet a full alpha flip still dwarfs any realistic small color change
+/// (e.g. ΔE 2 ≈ `(2·100)² = 4e4`). Tuned against the transparency tests (fully
+/// -transparent collapse, partial-alpha preservation) and the A/B measurement; see
+/// the report. `ALPHA_WEIGHT` (the RGB one, =3) is unchanged and still used by
+/// `dist2`.
+const ALPHA_WEIGHT_LAB: i64 = 1500;
 
 /// Tunable parameters for a single quantization run.
 ///
@@ -104,6 +124,65 @@ fn dist2(p: RGBA8, q: RGBA8) -> i64 {
   let da = p.a as i64 - q.a as i64;
   let color = (dr * dr + dg * dg + db * db) * wa / 510;
   color + da * da * ALPHA_WEIGHT
+}
+
+/// PERCEPTUAL color distance for ASSIGNMENT decisions only (the analogue of
+/// [`dist2`], same structure but a CIELAB ΔE color term).
+///
+/// Mirrors `dist2` exactly except the color term is the squared CIE76 ΔE
+/// ([`delta_e76_sq`]) instead of squared RGB Euclidean distance: only the COLOR
+/// term gets the `wa/510` visibility weighting (`wa = p.a + q.a ∈ 0..=510`, the
+/// same combined-alpha visibility weighting as `dist2`), while the alpha term
+/// always counts (weighted by [`ALPHA_WEIGHT_LAB`]). Integer/fixed-point only
+/// (`rgb_to_lab` + `delta_e76_sq` are deterministic and float-free), so output
+/// stays byte-identical run-to-run and cross-platform.
+///
+/// This is the CANONICAL, by-value reference form of the perceptual metric. The
+/// production hot paths (assignment in [`nearest_lab`] and thus
+/// `remap_nearest`/`remap_dither`'s index selection, [`kmeans_objective`], and the
+/// k-means++ D² reseed) call the cached [`pdist_lab`] form to avoid recomputing
+/// `rgb_to_lab` per query — `pdist_lab` must stay byte-identical to this. NOT used
+/// by `quality_score`, the dither residual/activity thresholds, or the Wu split —
+/// those stay on `dist2`. Kept `#[cfg(test)]` because production uses the cached
+/// form exclusively; the tests pin `pdist_lab == pdist` and the perceptual ordering
+/// against this reference.
+///
+/// OVERFLOW: `de` (`delta_e76_sq`) is `dL²+da²+db²` over components ≤ ~20000 (×100
+/// units), so `de ≤ ~1.2e9`; `de * wa` ≤ `1.2e9 * 510 ≈ 6.1e11`, far inside `i64`.
+/// The alpha term is `255² · 1500 ≈ 9.75e7`. So `pdist ≤ ~1.3e9` (the `de * wa /
+/// 510` divide keeps the color term ≤ ~1.2e9). See [`kmeans_objective`] for the
+/// `u128` accumulator bound that this larger metric requires.
+#[cfg(test)]
+#[inline]
+fn pdist(p: RGBA8, q: RGBA8) -> i64 {
+  let wa = p.a as i64 + q.a as i64; // 0..=510, same visibility weighting as dist2
+  let de = delta_e76_sq(rgb_to_lab(p.r, p.g, p.b), rgb_to_lab(q.r, q.g, q.b));
+  let da = p.a as i64 - q.a as i64;
+  de * wa / 510 + da * da * ALPHA_WEIGHT_LAB
+}
+
+/// Perceptual distance between a query (its precomputed [`Lab`] + alpha) and a
+/// palette entry (its precomputed `Lab` + alpha), WITHOUT recomputing either
+/// `rgb_to_lab`. This is the hot-loop form of [`pdist`]: the cube-root-heavy
+/// `rgb_to_lab` is done ONCE per color by the caller and cached, so the per-pair
+/// cost collapses to a cheap `delta_e76_sq` + the alpha term.
+///
+/// Must stay byte-identical to `pdist(query_rgba, entry_rgba)`: same `wa/510`
+/// color weighting, same `ALPHA_WEIGHT_LAB` alpha term.
+#[inline]
+fn pdist_lab(query_lab: Lab, query_a: u8, entry_lab: Lab, entry_a: u8) -> i64 {
+  let wa = query_a as i64 + entry_a as i64; // 0..=510
+  let de = delta_e76_sq(query_lab, entry_lab);
+  let da = query_a as i64 - entry_a as i64;
+  de * wa / 510 + da * da * ALPHA_WEIGHT_LAB
+}
+
+/// Precomputes the [`Lab`] of every palette entry so the perceptual hot loops
+/// ([`nearest_lab`]) never recompute `rgb_to_lab` per query. Build once where the
+/// palette is fixed across many queries (remap, k-means assignment/objective).
+#[inline]
+fn palette_labs(palette: &[RGBA8]) -> Vec<Lab> {
+  palette.iter().map(|p| rgb_to_lab(p.r, p.g, p.b)).collect()
 }
 
 /// A distinct color and how many source pixels carry it.
@@ -602,13 +681,18 @@ fn median_cut(
     .collect()
 }
 
-/// Finds the index of the nearest palette entry to `c` by [`dist2`].
+/// Finds the index of the nearest palette entry to the query (given its
+/// precomputed [`Lab`] + alpha) by the PERCEPTUAL [`pdist_lab`] metric, scanning
+/// CACHED palette Labs. This is the hot-loop assignment primitive: `rgb_to_lab` is
+/// computed ONCE per query by the caller and once per palette entry in
+/// `palette_labs`, so the per-call cost is `O(palette · delta_e76_sq)` with no
+/// cube roots. Lower index wins ties (`<`), exactly like the old `dist2` `nearest`.
 #[inline]
-fn nearest(palette: &[RGBA8], c: RGBA8) -> usize {
+fn nearest_lab(palette_labs: &[Lab], palette_alphas: &[u8], query_lab: Lab, query_a: u8) -> usize {
   let mut best = 0usize;
   let mut best_d = i64::MAX;
-  for (i, &p) in palette.iter().enumerate() {
-    let d = dist2(p, c);
+  for (i, (&plab, &pa)) in palette_labs.iter().zip(palette_alphas.iter()).enumerate() {
+    let d = pdist_lab(query_lab, query_a, plab, pa);
     if d < best_d {
       best_d = d;
       best = i;
@@ -617,18 +701,48 @@ fn nearest(palette: &[RGBA8], c: RGBA8) -> usize {
   best
 }
 
-/// Exact integer k-means objective for `palette` over `entries`:
-/// `Σ_entries count · dist2(palette[nearest(palette, color)], color)`.
+/// Finds the index of the nearest palette entry to `c` by the PERCEPTUAL metric
+/// ([`pdist`]). Thin, COLD wrapper: it recomputes the palette Labs and the query
+/// Lab on every call. All production hot loops (remap, k-means
+/// assignment/objective/reseed) build the palette `Lab` cache once and call
+/// [`nearest_lab`] directly, so this convenience wrapper is `#[cfg(test)]`-only;
+/// the tests use it to assert the perceptual nearest choice without threading a
+/// cache.
+#[cfg(test)]
+#[inline]
+fn nearest(palette: &[RGBA8], c: RGBA8) -> usize {
+  let labs = palette_labs(palette);
+  let alphas: Vec<u8> = palette.iter().map(|p| p.a).collect();
+  nearest_lab(&labs, &alphas, rgb_to_lab(c.r, c.g, c.b), c.a)
+}
+
+/// Exact integer k-means objective for `palette` over `entries`, using the
+/// PERCEPTUAL assignment metric:
+/// `Σ_entries count · pdist(palette[nearest(palette, color)], color)`.
 ///
-/// This is the metric assignment minimizes (alpha-weighted squared distance,
-/// summed over the TRUE per-color populations). Accumulated in `u128` so it is
-/// exact and overflow-free (`dist2 <= ~5·255² ≈ 3.3e5`, `count` a `u64`, summed
-/// over `<= 2^24` entries — vastly within `u128`). Used by the keep-best guard in
-/// [`kmeans_refine`] to compare two palettes deterministically (no float, no RNG).
+/// MUST use the same metric as assignment ([`pdist`]/[`nearest_lab`]): the
+/// keep-best guard in [`kmeans_refine`] compares two palettes, and comparing them
+/// under a DIFFERENT metric than the one assignment minimizes would let it keep an
+/// RGB-better-but-Lab-worse palette. Palette and entry Labs are cached once so the
+/// inner scan is cube-root-free.
+///
+/// Accumulated in `u128` so it is exact and overflow-free. The perceptual metric
+/// is larger than the old RGB one — re-derive the bound: `pdist ≤ ~1.3e9` (see
+/// [`pdist`]); `count` is a `u64` (`< 2^64`); a histogram has at most one entry per
+/// distinct RGBA, `≤ 2^32`. Worst case `Σ count·pdist ≤ 2^32 · 2^64 · 1.3e9 ≈
+/// 2^96 · 1.3e9 ≈ 2^127`, which still fits `u128` (`< 2^128`); in practice
+/// `Σ count` is the pixel count (`≤ 2^32` for any real image) so the sum is
+/// `≤ 2^32 · 1.3e9 ≈ 2^63`, with enormous margin. No other accumulator sums
+/// `pdist`; the D² reseed weights (`count · pdist`) are bounded identically and
+/// already use `u128`.
 fn kmeans_objective(palette: &[RGBA8], entries: &[ColorCount]) -> u128 {
+  let labs = palette_labs(palette);
+  let alphas: Vec<u8> = palette.iter().map(|p| p.a).collect();
   let mut obj: u128 = 0;
   for e in entries {
-    let d = dist2(palette[nearest(palette, e.color)], e.color).max(0) as u128;
+    let qlab = rgb_to_lab(e.color.r, e.color.g, e.color.b);
+    let idx = nearest_lab(&labs, &alphas, qlab, e.color.a);
+    let d = pdist_lab(qlab, e.color.a, labs[idx], alphas[idx]).max(0) as u128;
     obj += e.count as u128 * d;
   }
   obj
@@ -665,11 +779,26 @@ fn kmeans_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) {
   }
   let k = palette.len();
 
+  // Cache every entry's Lab ONCE: entries are scanned repeatedly (the assignment
+  // pass each iter, plus the D² reseed) and `rgb_to_lab` is the cube-root cost, so
+  // computing it per-entry-per-scan would dominate. Alphas are kept alongside for
+  // the perceptual `pdist_lab` alpha term.
+  let entry_labs: Vec<Lab> = entries
+    .iter()
+    .map(|e| rgb_to_lab(e.color.r, e.color.g, e.color.b))
+    .collect();
+  let entry_alphas: Vec<u8> = entries.iter().map(|e| e.color.a).collect();
+
   // Best-seen palette starts at the seed; the guard never returns worse than this.
   let mut best: Vec<RGBA8> = palette.to_vec();
   let mut best_obj: u128 = kmeans_objective(palette, entries);
 
   for _ in 0..iters {
+    // Cache the palette's Labs for this pass's assignment scan (perceptual
+    // nearest), rebuilt each pass because the centroids moved.
+    let pal_labs = palette_labs(palette);
+    let pal_alphas: Vec<u8> = palette.iter().map(|p| p.a).collect();
+
     // Accumulators per cluster.
     let mut sr = vec![0u64; k];
     let mut sg = vec![0u64; k];
@@ -677,8 +806,8 @@ fn kmeans_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) {
     let mut sa = vec![0u64; k];
     let mut wn = vec![0u64; k];
 
-    for e in entries.iter() {
-      let idx = nearest(palette, e.color);
+    for (ei, e) in entries.iter().enumerate() {
+      let idx = nearest_lab(&pal_labs, &pal_alphas, entry_labs[ei], entry_alphas[ei]);
       let c = e.count;
       sr[idx] += e.color.r as u64 * c;
       sg[idx] += e.color.g as u64 * c;
@@ -708,20 +837,25 @@ fn kmeans_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) {
     // sequence deterministic across all runs. Multiple dead clusters in one pass
     // get proper D² incremental updates so they spread across the gamut.
     if !empty.is_empty() {
-      // Initial squared residuals: each entry's squared distance to its NEAREST
+      // The centroids moved in place above, so the assignment-pass `pal_labs` is
+      // stale. Rebuild the live centers' Labs for the perceptual D² baseline.
+      let live_labs = palette_labs(palette);
+      // Initial PERCEPTUAL squared residuals: each entry's `pdist` to its NEAREST
       // CURRENT LIVE center. k-means++ requires D² against the nearest center as
       // it stands NOW (after the in-place centroid recompute), not the center of
       // the cluster the entry was assigned to before that cluster moved. We scan
       // only live clusters (`wn[i] > 0`); dead slots hold stale colors and must
-      // not seed their own D². This runs only inside `if !empty.is_empty()`
-      // (reseed events are rare) and is O(entries·k) with k ≤ 256 — acceptable.
-      let mut min_d2: Vec<u64> = entries
-        .iter()
-        .map(|e| {
+      // not seed their own D². The D² metric MUST match assignment (`pdist`), or
+      // the reseed would bias by an inconsistent (RGB) residual. This runs only
+      // inside `if !empty.is_empty()` (reseed events are rare) and is O(entries·k)
+      // with k ≤ 256 — acceptable. `min_d2` is `u64`: `pdist ≤ ~1.3e9` fits easily.
+      let mut min_d2: Vec<u64> = (0..entries.len())
+        .map(|ej| {
           let mut best = u64::MAX;
           for i in 0..k {
             if wn[i] > 0 {
-              let d = dist2(palette[i], e.color).max(0) as u64;
+              let d = pdist_lab(entry_labs[ej], entry_alphas[ej], live_labs[i], palette[i].a).max(0)
+                as u64;
               if d < best {
                 best = d;
               }
@@ -773,10 +907,14 @@ fn kmeans_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) {
 
         palette[dead] = entries[picked_idx].color;
 
-        // Incremental D² update: reduce each entry's min_d2 if the
-        // just-placed center is nearer.
-        for (ej, e) in entries.iter().enumerate() {
-          let new_d = dist2(entries[picked_idx].color, e.color).max(0) as u64;
+        // Incremental PERCEPTUAL D² update: reduce each entry's min_d2 if the
+        // just-placed center (an entry color, so its Lab is `entry_labs[picked]`)
+        // is nearer under `pdist` — the same metric as the baseline above.
+        let picked_lab = entry_labs[picked_idx];
+        let picked_a = entry_alphas[picked_idx];
+        for ej in 0..entries.len() {
+          let new_d =
+            pdist_lab(picked_lab, picked_a, entry_labs[ej], entry_alphas[ej]).max(0) as u64;
           if new_d < min_d2[ej] {
             min_d2[ej] = new_d;
           }
@@ -809,13 +947,22 @@ fn kmeans_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) {
 
 /// Nearest-color remap with a per-color memoization cache (no dithering).
 fn remap_nearest(px: &[RGBA8], palette: &[RGBA8], bits: u8) -> Vec<u8> {
+  // Palette Labs cached once; the per-color cache only computes `rgb_to_lab` for
+  // each DISTINCT canonical key once (perceptual assignment via `nearest_lab`).
+  let pal_labs = palette_labs(palette);
+  let pal_alphas: Vec<u8> = palette.iter().map(|p| p.a).collect();
   let mut cache: HashMap<RGBA8, u8> = HashMap::new();
   let mut indices = Vec::with_capacity(px.len());
   for &p in px {
     let key = canonical_key(p, bits);
-    let idx = *cache
-      .entry(key)
-      .or_insert_with(|| nearest(palette, key) as u8);
+    let idx = *cache.entry(key).or_insert_with(|| {
+      nearest_lab(
+        &pal_labs,
+        &pal_alphas,
+        rgb_to_lab(key.r, key.g, key.b),
+        key.a,
+      ) as u8
+    });
     indices.push(idx);
   }
   indices
@@ -1045,6 +1192,12 @@ fn remap_dither(px: &[RGBA8], width: usize, height: usize, palette: &[RGBA8], bi
   if width == 0 || height == 0 {
     return indices;
   }
+  // Cache the palette Labs ONCE: the palette is fixed across every pixel, so
+  // `rgb_to_lab` runs `palette.len()` times here, not once per pixel. The per-pixel
+  // query Lab (for `want`) is still computed per pixel — `want` varies — but that is
+  // a single `rgb_to_lab` per visible pixel (the residual stays on RGB `dist2`).
+  let pal_labs = palette_labs(palette);
+  let pal_alphas: Vec<u8> = palette.iter().map(|p| p.a).collect();
   // Two error rows of (r, g, b, a) deltas in f32 for sub-unit accumulation.
   let mut cur = vec![[0f32; 4]; width];
   let mut next = vec![[0f32; 4]; width];
@@ -1074,12 +1227,20 @@ fn remap_dither(px: &[RGBA8], width: usize, height: usize, palette: &[RGBA8], bi
         b: clamp_u8(src.b as f32 + dither_clamp_err(e[2])),
         a: clamp_u8(src.a as f32 + dither_clamp_err(e[3])),
       };
-      let idx = nearest(palette, want);
+      // PERCEPTUAL index selection (cached palette Labs; one query `rgb_to_lab`).
+      let idx = nearest_lab(
+        &pal_labs,
+        &pal_alphas,
+        rgb_to_lab(want.r, want.g, want.b),
+        want.a,
+      );
       indices[base] = idx as u8;
       let chosen = palette[idx];
 
       // Post-quantization residual: how far the chosen entry is from the target
-      // we wanted. Small => clean map (keep flat); large => band risk.
+      // we wanted. Small => clean map (keep flat); large => band risk. Stays on
+      // RGB `dist2`: the 8 dither consts are calibrated in `dist2` units and the
+      // residual is the RGB reproduction-error / banding signal.
       let resid = dist2(want, chosen) as f32;
       // Direction-independent local source activity (4-neighborhood of px[]).
       let activity = dither_source_activity(px, width, height, x, y, src, bits);
@@ -2054,14 +2215,15 @@ mod tests {
     // Pin the specific reseeded slots the population-weighted (count · D²) LCG
     // implementation produces. All six entries here carry count == 10, so the
     // count factor is uniform — but it still rescales `total`, hence the modular
-    // draw `r = lcg % total` and the spread of picks differs from the D²-only
-    // weighting. (Values determined by running cargo test after implementing the
-    // population-weighted reseed.)
+    // draw `r = lcg % total` and the spread of picks. P3 Phase 2 moved the reseed D²
+    // from RGB `dist2` to perceptual `pdist` (CIE76 ΔE), which reshapes the residual
+    // weights and so the spread of picks (was [c5, c3, c2, c0] under `dist2`); the
+    // reseeded slots are still all valid entry colors and fully deterministic.
     assert_eq!(
       &palette[2..],
-      &[c5, c3, c2, c0],
-      "population-weighted (count · D²) LCG must pick these specific reseeded slots \
-       (canary; the D²-only weighting gave [c3, c2, c5, c1])"
+      &[c4, c3, c5, c2],
+      "population-weighted (count · pdist D²) LCG must pick these specific reseeded \
+       slots (canary; RGB `dist2` D² gave [c5, c3, c2, c0])"
     );
   }
 
@@ -2080,10 +2242,15 @@ mod tests {
     // baseline. That flips which entry the fixed-LCG `count · D²` walk lands on:
     //   - STALE (buggy) baseline reseeds slot 2 to the 90,000-px satellite.
     //   - NEAREST-LIVE (fixed) baseline reseeds slot 2 to the 1,000,000-px anchor.
-    // (Construction found by exhaustively simulating both baselines over the exact
-    // reseed math; it is a genuine divergence, not a coincidence.)
-    let anchor = rgba(32, 139, 95, 255); // 1,000,000 px — the nearest-live pick
-    let satellite = rgba(193, 35, 15, 255); // 90,000 px — the stale (buggy) pick
+    // P3 Phase 2 moved the reseed D² to perceptual `pdist` (CIE76 ΔE), so this
+    // construction was re-derived by exhaustively simulating BOTH baselines over the
+    // exact `pdist` reseed math; it is a genuine divergence, not a coincidence. The
+    // load-bearing entry is the satellite: it is ASSIGNED to cluster 1 but its
+    // NEAREST LIVE center after the centroid move is cluster 0 — the exact stale-vs-
+    // nearest-live distinction. The larger stale residual inflates the satellite's
+    // `count·D²` weight, shifting the modular LCG draw into the satellite's bucket.
+    let anchor = rgba(40, 140, 100, 255); // 1,000,000 px — the nearest-live pick
+    let satellite = rgba(248, 168, 8, 255); // 90,000 px — the stale (buggy) pick
     let entries = make_entries(&[
       (anchor, 1_000_000),
       (rgba(123, 4, 83, 255), 600_000),
@@ -2092,8 +2259,8 @@ mod tests {
       (rgba(244, 240, 166, 255), 40_000),
     ]);
 
-    let p0 = rgba(177, 204, 73, 255);
-    let p1 = rgba(16, 101, 109, 255);
+    let p0 = rgba(40, 140, 100, 255);
+    let p1 = rgba(180, 40, 50, 255);
     let far = rgba(0, 0, 0, 255); // empties after assignment → dead slot 2
     let mut palette = vec![p0, p1, far];
     kmeans_refine(&mut palette, &entries, 1);
@@ -2116,7 +2283,7 @@ mod tests {
     // identical under both baselines since the fix only changes the reseed D²).
     assert_eq!(
       palette,
-      vec![rgba(161, 218, 58, 255), rgba(66, 88, 91, 255), anchor],
+      vec![rgba(94, 185, 83, 255), rgba(139, 25, 73, 255), anchor],
       "nearest-live-center reseed palette pin"
     );
 
@@ -3287,9 +3454,14 @@ mod tests {
     // indices and breaks the pin.
     // Regenerate this pin ONLY on an intentional dither-calibration change (edits
     // to remap_dither / dither_strength / DITHER_* consts).
+    // Oracle regenerated for P3 Phase 2: index selection now uses the perceptual
+    // `pdist` (CIE76 ΔE) instead of RGB `dist2`, so the black/white decision
+    // threshold over this midtone field shifts and several indices move; the
+    // opaque-neutrality property this test guards (vis == 1.0 on every opaque pixel,
+    // so a /256 mis-scale still breaks the pin) is unchanged and metric-independent.
     let expected: Vec<u8> = vec![
-      1, 0, 1, 0, 1, 1, 1, 0, 1, 0, 1, 0, 0, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 1, 1, 0, 1, 1, 0,
-      1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 0, 1, 1, 0, 1, 0, 0, 1, 0,
+      1, 0, 1, 1, 1, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 1, 1, 0, 1, 1, 0, 1, 1, 0,
+      1, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 1,
     ];
     assert_eq!(
       got, expected,
@@ -3403,9 +3575,14 @@ mod tests {
     // guard makes `kmeans_refine` return a palette whose objective is `<=` the
     // seed's.
     //
-    // These 5 partial-alpha entries are a verified counterexample: the K=2 seed from
-    // `median_cut` scores 174770; ONE unguarded pass RISES to 226020. The guard must
-    // keep the 174770 seed.
+    // These 5 partial-alpha entries exercise the keep-best guard. P3 Phase 2 moved
+    // the objective from RGB `dist2` to perceptual `pdist`, so the magnitudes
+    // changed (the seed now scores 380488450, not the old 174770); on THIS input the
+    // perceptual refine pass IMPROVES the seed (to 188586400) so the guard ADOPTS it.
+    // The load-bearing invariant the guard exists to enforce — `kmeans_refine` never
+    // returns a palette WORSE than its seed (`obj_after <= obj_seed`) — is unchanged
+    // and is what this test pins; both magnitudes are pinned to document the new
+    // perceptual behavior and catch any regression in either direction.
     let entries = make_entries(&[
       (rgba(21, 70, 49, 2), 1000),
       (rgba(96, 79, 76, 8), 1000),
@@ -3417,19 +3594,23 @@ mod tests {
     // Seed objective: the K=2 median-cut palette over the TRUE entries.
     let mut pal = median_cut(&entries, 2, None);
     let obj_seed = kmeans_objective(&pal, &entries);
-    assert_eq!(obj_seed, 174770, "seed objective pin (median_cut K=2)");
+    // Perceptual-`pdist` seed pin (was 174770 under RGB `dist2`).
+    assert_eq!(
+      obj_seed, 380488450,
+      "perceptual seed objective pin (median_cut K=2)"
+    );
 
-    // One refine pass: the guard must return a palette no worse than the seed.
+    // One refine pass: the guard must return a palette NO WORSE than the seed.
     kmeans_refine(&mut pal, &entries, 1);
     let obj_after = kmeans_objective(&pal, &entries);
     assert!(
       obj_after <= obj_seed,
       "guard must never worsen the objective: obj_after={obj_after} > obj_seed={obj_seed}"
     );
-    // It kept the 174770 seed, NOT the 226020 the raw pass would have produced.
+    // On this input the perceptual pass improves the seed, so the guard adopts it.
     assert_eq!(
-      obj_after, 174770,
-      "guard must keep the 174770 seed, not adopt the 226020 raw pass; pal={pal:?}"
+      obj_after, 188586400,
+      "guard must return the improved perceptual pass (188586400 <= 380488450 seed); pal={pal:?}"
     );
   }
 
@@ -3489,5 +3670,134 @@ mod tests {
        should differ from true R={}",
       capped_centroid.r, true_centroid.r
     );
+  }
+
+  // ---- P3 Phase 2: perceptual `pdist` ASSIGNMENT metric ----
+  //
+  // These pin that `pdist` is genuinely PERCEPTUAL (CIE76 ΔE), not a renamed RGB
+  // metric, that its alpha term is balanced against the Lab color term, and that
+  // it is deterministic. `pdist` (and thus `nearest`/`nearest_lab`,
+  // `kmeans_objective`, the D² reseed, and remap index selection) is the only path
+  // switched to perceptual; `dist2` (quality gate, dither residual/activity, Wu
+  // split) is unchanged, so the `dist2`-value tests above still pass untouched.
+
+  #[test]
+  fn pdist_is_perceptual_not_rgb_euclidean() {
+    // The metric must order by CIE76 ΔE, NOT by raw RGB-Euclidean — and on a pair
+    // where the two DISAGREE. Reference = opaque black. Candidate A = opaque WHITE
+    // (255,255,255); candidate B = opaque RED (255,0,0). All opaque, so `pdist`'s
+    // color term is exactly the CIE76 ΔE² (wa==510 -> wa/510==1) and the alpha term
+    // is 0.
+    //
+    //   Plain RGB-Euclidean from black: white = 3·255² = 195075 (FARTHER),
+    //                                    red   =   255² =  65025 (CLOSER).
+    //   Perceptual ΔE² from black:       white ≈ (100·100)² = 1e8-scale (CLOSER),
+    //                                    red   ≈ (~117·100)²        (FARTHER).
+    // So RGB says "red is nearer black", but perceptually white is nearer (red is a
+    // high-chroma saturated color, white is pure luminance). `pdist` must agree with
+    // PERCEPTION (white nearer), i.e. REVERSE the RGB-Euclidean verdict.
+    let black = rgba(0, 0, 0, 255);
+    let white = rgba(255, 255, 255, 255);
+    let red = rgba(255, 0, 0, 255);
+
+    // Raw RGB-Euclidean (no alpha weighting) — the metric `pdist` must NOT mimic.
+    let rgb_euclid = |p: RGBA8, q: RGBA8| -> i64 {
+      let dr = p.r as i64 - q.r as i64;
+      let dg = p.g as i64 - q.g as i64;
+      let db = p.b as i64 - q.b as i64;
+      dr * dr + dg * dg + db * db
+    };
+    assert!(
+      rgb_euclid(black, white) > rgb_euclid(black, red),
+      "setup: RGB-Euclidean must rank WHITE farther from black than RED \
+       ({} vs {})",
+      rgb_euclid(black, white),
+      rgb_euclid(black, red)
+    );
+
+    // `pdist` must REVERSE that: white is perceptually CLOSER to black than red.
+    let pd_white = pdist(black, white);
+    let pd_red = pdist(black, red);
+    assert!(
+      pd_white < pd_red,
+      "pdist must be perceptual: white must rank CLOSER to black than red \
+       (pdist white={pd_white}, red={pd_red}); a renamed RGB metric would rank \
+       red closer and FAIL here"
+    );
+
+    // And it really is the ΔE color term (all opaque -> pdist == delta_e76_sq).
+    assert_eq!(
+      pd_white,
+      delta_e76_sq(rgb_to_lab(0, 0, 0), rgb_to_lab(255, 255, 255)),
+      "opaque pdist must equal the bare CIE76 ΔE² (wa/510 == 1, alpha term 0)"
+    );
+  }
+
+  #[test]
+  fn pdist_alpha_balance() {
+    // The alpha term (ALPHA_WEIGHT_LAB) must be balanced: a FULL alpha flip
+    // outranks a small color change, but a TINY alpha change must not dominate a
+    // LARGE color change.
+
+    // (1) Full alpha flip (same RGB) outranks a small color change (same alpha).
+    //   - alpha flip: opaque vs fully-transparent gray, da==255.
+    //   - small color change: two near-identical opaque grays (ΔE tiny).
+    let gray_opaque = rgba(128, 128, 128, 255);
+    let gray_transp = rgba(128, 128, 128, 0);
+    let gray_opaque2 = rgba(130, 131, 129, 255); // ~2-LSB color nudge, fully opaque
+    let alpha_flip = pdist(gray_opaque, gray_transp);
+    let small_color = pdist(gray_opaque, gray_opaque2);
+    assert!(
+      alpha_flip > small_color,
+      "a full alpha flip must outrank a small color change \
+       (alpha_flip={alpha_flip}, small_color={small_color})"
+    );
+
+    // (2) A TINY alpha change (da==1) must NOT dominate a LARGE color change.
+    //   - large color change: black vs white, both opaque (max ΔE).
+    //   - tiny alpha change: same opaque gray with alpha 255 vs 254.
+    let black = rgba(0, 0, 0, 255);
+    let white = rgba(255, 255, 255, 255);
+    let large_color = pdist(black, white);
+    let a255 = rgba(128, 128, 128, 255);
+    let a254 = rgba(128, 128, 128, 254);
+    let tiny_alpha = pdist(a255, a254);
+    assert!(
+      large_color > tiny_alpha,
+      "a tiny alpha change (da=1) must not dominate a large color change \
+       (large_color={large_color}, tiny_alpha={tiny_alpha})"
+    );
+    // Concretely: tiny_alpha is just 1·1·ALPHA_WEIGHT_LAB == ALPHA_WEIGHT_LAB
+    // (color term 0 for identical RGB), far below a maximal ΔE² color gap.
+    assert_eq!(
+      tiny_alpha, ALPHA_WEIGHT_LAB,
+      "da==1 with identical RGB must score exactly ALPHA_WEIGHT_LAB"
+    );
+  }
+
+  #[test]
+  fn pdist_is_deterministic() {
+    // Integer/fixed-point only: identical inputs -> identical i64, every call.
+    let samples = [
+      (rgba(0, 0, 0, 255), rgba(255, 255, 255, 255)),
+      (rgba(12, 200, 33, 128), rgba(240, 5, 99, 17)),
+      (rgba(128, 128, 128, 0), rgba(128, 128, 128, 255)),
+      (rgba(64, 128, 192, 255), rgba(200, 30, 90, 200)),
+    ];
+    for (p, q) in samples {
+      let d1 = pdist(p, q);
+      let d2 = pdist(p, q);
+      assert_eq!(d1, d2, "pdist must be deterministic for {p:?} vs {q:?}");
+      // Symmetric, like dist2.
+      assert_eq!(pdist(p, q), pdist(q, p), "pdist must be symmetric");
+      // The cached-Lab form must agree byte-for-byte with the direct form.
+      let cached = pdist_lab(
+        rgb_to_lab(p.r, p.g, p.b),
+        p.a,
+        rgb_to_lab(q.r, q.g, q.b),
+        q.a,
+      );
+      assert_eq!(cached, d1, "pdist_lab must equal pdist for {p:?} vs {q:?}");
+    }
   }
 }
