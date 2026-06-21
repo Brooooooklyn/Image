@@ -102,25 +102,43 @@ const F_LINEAR_INTERCEPT_Q16: i64 = 9039;
 
 /// Deterministic, floating-point-free integer cube root: returns `floor(n^(1/3))`.
 ///
-/// Classic restoring bit-by-bit algorithm processing three bits of `n` per step from the most
-/// significant group down. Pure integer arithmetic on `u128`, so the result is identical on every
-/// platform. `n` here is at most `~76_000 << 32 ≈ 2^48`, comfortably inside `u128`.
+/// Integer Newton's method from an upper-bound seed, followed by an exact floor correction.
+/// Pure integer arithmetic on `u128`, so the result is identical on every platform — and
+/// byte-identical to the previous restoring bit-by-bit implementation (the
+/// `icbrt_is_floor_cube_root` test pins both against a reference `floor(n^(1/3))` over a strided
+/// sweep). Newton converges in ~5-6 iterations versus the bit-by-bit method's 42, which matters
+/// because `f_q16` calls this once per cube-root, three per `rgb_to_lab`, once per dither pixel.
+///
+/// Overflow/range: production input is `f_q16`'s `(t << 32)` with `t <= ~76_000`, so `n <= ~2^48`
+/// and the root `x <= ~2^16`. The seed `1 << ceil(bitlen/3)` is a strict upper bound on the root;
+/// for any `n < 2^126` the root `x <= 2^42`, so `x*x <= 2^84` and `x*x*x <= 2^126` stay inside
+/// `u128` (the correction never overflows). The iteration keeps `x >= 1` (the `n < 8` cases return
+/// directly), so the `n / (x*x)` divisor is never zero.
 #[inline]
-fn icbrt_u128(mut n: u128) -> u128 {
-  let mut y: u128 = 0;
-  // 126 == 42 groups of 3 bits; covers all inputs up to 2^126.
-  let mut s: i32 = 126;
-  while s >= 0 {
-    y <<= 1;
-    // b = (y+1)^3 - y^3 = 3y² + 3y + 1
-    let b = 3 * y * y + 3 * y + 1;
-    if (n >> s) >= b {
-      n -= b << s;
-      y += 1;
-    }
-    s -= 3;
+fn icbrt_u128(n: u128) -> u128 {
+  if n < 8 {
+    // floor(0^(1/3)) == 0; floor(k^(1/3)) == 1 for k in 1..=7.
+    return (n > 0) as u128;
   }
-  y
+  let bits = 128 - n.leading_zeros();
+  // `1 << ceil(bits/3)` is a strict upper bound on `floor(n^(1/3))`, so Newton descends to the floor.
+  let mut x = 1u128 << bits.div_ceil(3);
+  loop {
+    let y = (2 * x + n / (x * x)) / 3;
+    if y >= x {
+      break;
+    }
+    x = y;
+  }
+  // Exact floor correction (0-1 steps in practice): guarantees `x^3 <= n < (x+1)^3` regardless of
+  // any Newton off-by-one, so the result is byte-identical to the reference `floor(n^(1/3))`.
+  while x * x * x > n {
+    x -= 1;
+  }
+  while (x + 1) * (x + 1) * (x + 1) <= n {
+    x += 1;
+  }
+  x
 }
 
 /// CIELAB nonlinearity `f(t)`, input and output both **Q16**.
