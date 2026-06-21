@@ -3607,42 +3607,64 @@ mod tests {
     // guard makes `kmeans_refine` return a palette whose objective is `<=` the
     // seed's.
     //
-    // These 5 partial-alpha entries exercise the keep-best guard. P3 Phase 2 moved
-    // the objective from RGB `dist2` to perceptual `pdist`, so the magnitudes
-    // changed (the seed now scores 380488450, not the old 174770); on THIS input the
-    // perceptual refine pass IMPROVES the seed (to 188586400) so the guard ADOPTS it.
-    // The load-bearing invariant the guard exists to enforce — `kmeans_refine` never
-    // returns a palette WORSE than its seed (`obj_after <= obj_seed`) — is unchanged
-    // and is what this test pins; both magnitudes are pinned to document the new
-    // perceptual behavior and catch any regression in either direction.
+    // These 7 partial-alpha entries are a verified counterexample under the perceptual
+    // `pdist` objective: the K=2 median-cut seed scores 10_622_975_578, and ONE raw
+    // (unguarded) refine pass RAISES it to 10_686_135_592. The guard must REJECT that
+    // pass and keep the seed. This exercises the guard's REJECTION path (not just
+    // adoption): we compute the unguarded pass HERE (not pin it from a comment), prove
+    // it worsens, and prove `kmeans_refine` returns the seed objective instead.
+    // (Found by `unguarded_kmeans_pass` + an exhaustive deterministic search over
+    // random low-alpha inputs; no cluster empties, so the pass needs no reseed.)
     let entries = make_entries(&[
-      (rgba(21, 70, 49, 2), 1000),
-      (rgba(96, 79, 76, 8), 1000),
-      (rgba(105, 133, 189, 8), 100),
-      (rgba(183, 56, 226, 1), 1000),
-      (rgba(212, 155, 20, 1), 5),
+      (rgba(10, 245, 33, 32), 524),
+      (rgba(68, 231, 156, 22), 1518),
+      (rgba(116, 106, 11, 27), 851),
+      (rgba(225, 232, 89, 20), 534),
+      (rgba(231, 158, 17, 14), 1635),
+      (rgba(231, 250, 145, 23), 1948),
+      (rgba(236, 35, 221, 15), 575),
     ]);
 
-    // Seed objective: the K=2 median-cut palette over the TRUE entries.
-    let mut pal = median_cut(&entries, 2, None);
-    let obj_seed = kmeans_objective(&pal, &entries);
-    // Perceptual-`pdist` seed pin (was 174770 under RGB `dist2`).
+    // Seed: the K=2 median-cut palette over the TRUE entries.
+    let seed = median_cut(&entries, 2, None);
+    let obj_seed = kmeans_objective(&seed, &entries);
     assert_eq!(
-      obj_seed, 380488450,
+      obj_seed, 10_622_975_578,
       "perceptual seed objective pin (median_cut K=2)"
     );
 
-    // One refine pass: the guard must return a palette NO WORSE than the seed.
-    kmeans_refine(&mut pal, &entries, 1);
-    let obj_after = kmeans_objective(&pal, &entries);
-    assert!(
-      obj_after <= obj_seed,
-      "guard must never worsen the objective: obj_after={obj_after} > obj_seed={obj_seed}"
-    );
-    // On this input the perceptual pass improves the seed, so the guard adopts it.
+    // What ONE UNGUARDED pass would produce — computed here, not pinned from a comment,
+    // so the rejection coverage is real. It WORSENS the seed (the non-monotone case the
+    // guard exists to catch: assignment minimizes `pdist`, but the count-weighted RGBA
+    // mean centroid is not that metric's minimizer when alpha varies).
+    let unguarded = unguarded_kmeans_pass(&seed, &entries).expect("no cluster empties here");
+    let obj_unguarded = kmeans_objective(&unguarded, &entries);
     assert_eq!(
-      obj_after, 188586400,
-      "guard must return the improved perceptual pass (188586400 <= 380488450 seed); pal={pal:?}"
+      obj_unguarded, 10_686_135_592,
+      "unguarded one-pass objective pin"
+    );
+    assert!(
+      obj_unguarded > obj_seed,
+      "setup: one raw pass must WORSEN the seed so this tests the guard's REJECTION \
+       path (obj_unguarded={obj_unguarded} <= obj_seed={obj_seed})"
+    );
+
+    // The guard must REJECT the worsening pass and return the seed objective.
+    let mut guarded = seed.clone();
+    kmeans_refine(&mut guarded, &entries, 1);
+    let obj_guarded = kmeans_objective(&guarded, &entries);
+    assert!(
+      obj_guarded <= obj_seed,
+      "guard must never worsen the objective: obj_guarded={obj_guarded} > obj_seed={obj_seed}"
+    );
+    assert_eq!(
+      obj_guarded, obj_seed,
+      "guard must REJECT the worsening pass and keep the seed objective (got \
+       {obj_guarded}, seed {obj_seed}, unguarded {obj_unguarded}); guarded={guarded:?}"
+    );
+    assert!(
+      obj_guarded < obj_unguarded,
+      "the guarded result must be strictly better than the unguarded pass it rejected"
     );
   }
 
@@ -3873,5 +3895,49 @@ mod tests {
       0,
       "a transparent query must still resolve to the exact transparent slot"
     );
+  }
+
+  // One UNGUARDED k-means pass: assign every entry to its perceptual-nearest palette
+  // entry, then move each centroid to the count-weighted RGBA mean — identical math to
+  // `kmeans_refine`'s pass body, minus the keep-best guard and the empty-cluster
+  // reseed. Returns `None` if any cluster empties (so callers can skip the reseed case).
+  #[cfg(test)]
+  fn unguarded_kmeans_pass(palette: &[RGBA8], entries: &[ColorCount]) -> Option<Vec<RGBA8>> {
+    let k = palette.len();
+    let pal_labs = palette_labs(palette);
+    let pal_alphas: Vec<u8> = palette.iter().map(|p| p.a).collect();
+    let mut sr = vec![0u64; k];
+    let mut sg = vec![0u64; k];
+    let mut sb = vec![0u64; k];
+    let mut sa = vec![0u64; k];
+    let mut wn = vec![0u64; k];
+    for e in entries {
+      let idx = nearest_lab(
+        &pal_labs,
+        &pal_alphas,
+        rgb_to_lab(e.color.r, e.color.g, e.color.b),
+        e.color.a,
+      );
+      let c = e.count;
+      sr[idx] += e.color.r as u64 * c;
+      sg[idx] += e.color.g as u64 * c;
+      sb[idx] += e.color.b as u64 * c;
+      sa[idx] += e.color.a as u64 * c;
+      wn[idx] += c;
+    }
+    let mut out = palette.to_vec();
+    for i in 0..k {
+      if wn[i] == 0 {
+        return None;
+      }
+      let n = wn[i];
+      out[i] = RGBA8 {
+        r: ((sr[i] + n / 2) / n) as u8,
+        g: ((sg[i] + n / 2) / n) as u8,
+        b: ((sb[i] + n / 2) / n) as u8,
+        a: ((sa[i] + n / 2) / n) as u8,
+      };
+    }
+    Some(out)
   }
 }
