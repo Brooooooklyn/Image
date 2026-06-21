@@ -10,7 +10,7 @@ Real numbers from a single 1.2 MB source image, so the trade-offs are concrete:
 | Operation                                                  | Result    |
 | ---------------------------------------------------------- | --------- |
 | `losslessCompressPng` (PNG → PNG)                          | 1.2M → 876K |
-| `pngQuantize({ maxQuality: 75 })` (PNG → PNG)              | 1.2M → 228K |
+| `pngQuantize({ maxQuality: 75 })` (PNG → PNG)              | 1.2M → 244K |
 | `webpLossless()` (PNG → WebP)                              | 1.2M → 676K |
 | `webp(75)` (PNG → WebP)                                    | 1.2M → 84K  |
 | `avif({ quality: 100 })` (PNG → AVIF)                      | 1.2M → 584K |
@@ -61,7 +61,7 @@ await new Transformer(png).avif({
 Two distinct tools:
 
 - **`losslessCompressPng`** (oxipng) — pixel-perfect, no quality loss. Strips redundancy, tries filters, recodes the IDAT. Best for graphics you must keep exact. Set `strip: true` to drop non-critical chunks (metadata) for extra savings.
-- **`pngQuantize`** (libimagequant) — *lossy* palette quantization. Dramatically smaller (`1.2M → 228K`) for images that tolerate a 256-color palette. Tune `minQuality`/`maxQuality`; lower `maxQuality` = smaller.
+- **`pngQuantize`** (built-in) — *lossy* palette quantization. Dramatically smaller (`1.2M → 244K`) for images that tolerate a 256-color palette. Tune `minQuality`/`maxQuality`; lower `maxQuality` = smaller.
 
 ```ts
 await losslessCompressPng(png, { strip: true })

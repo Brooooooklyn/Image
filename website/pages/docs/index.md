@@ -5,7 +5,7 @@ description: 'Fast, native image decoding, encoding, transforming and compressio
 
 # Getting Started
 
-`@napi-rs/image` is a fast image-processing library for **Node.js** and the **browser**. It wraps battle-tested Rust codecs — [mozjpeg](https://github.com/mozilla/mozjpeg), [oxipng](https://github.com/shssoichiro/oxipng), [libimagequant](https://github.com/ImageOptim/libimagequant), [libwebp](https://chromium.googlesource.com/webm/libwebp), [ravif/aom](https://github.com/kornelski/cavif-rs) and [resvg](https://github.com/RazrFalcon/resvg) — behind one small, ergonomic API.
+`@napi-rs/image` is a fast image-processing library for **Node.js** and the **browser**. It wraps battle-tested Rust codecs — [mozjpeg](https://github.com/mozilla/mozjpeg), [oxipng](https://github.com/shssoichiro/oxipng), [libwebp](https://chromium.googlesource.com/webm/libwebp), [ravif/aom](https://github.com/kornelski/cavif-rs) and [resvg](https://github.com/RazrFalcon/resvg) — behind one small, ergonomic API.
 
 On Node.js it loads a prebuilt native binary (no compiler, no `node-gyp`). Where a native binary is unavailable it falls back to a WebAssembly build, which is also what powers the in-browser [Playground](/playground).
 

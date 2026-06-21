@@ -11,7 +11,7 @@ description: 'The Rust crates and projects that @napi-rs/image is built on.'
 | ------- | --------- |
 | [image (image-rs)](https://github.com/image-rs/image) | Core decoding & encoding (PNG, JPEG, WebP, BMP, ICO, TIFF, PNM, TGA, Farbfeld) and the geometric/color transforms (`resize`, `crop`, `blur`, `grayscale`, …). |
 | [oxipng](https://github.com/shssoichiro/oxipng) | Lossless PNG optimization — `losslessCompressPng`. |
-| [imagequant (libimagequant)](https://github.com/ImageOptim/libimagequant) | Lossy PNG palette quantization — `pngQuantize`. |
+| pngQuantize (built-in) | Lossy PNG palette quantization — `pngQuantize`. In-house MIT implementation (median-cut + k-means + Floyd-Steinberg). |
 | [mozjpeg (mozjpeg-sys)](https://github.com/mozilla/mozjpeg) | JPEG encoding and re-compression — `compressJpeg`. |
 | [libwebp (libwebp-sys)](https://chromium.googlesource.com/webm/libwebp) | WebP encode & decode — `webp`, `webpLossless`. |
 | [libavif](https://github.com/AOMediaCodec/libavif) + [aom](https://aomedia.googlesource.com/aom/) | AVIF encode & decode — `avif`. |
