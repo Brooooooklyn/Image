@@ -689,6 +689,38 @@ fn median_cut(
 /// cube roots. Lower index wins ties (`<`), exactly like the old `dist2` `nearest`.
 #[inline]
 fn nearest_lab(palette_labs: &[Lab], palette_alphas: &[u8], query_lab: Lab, query_a: u8) -> usize {
+  // A VISIBLE query (`query_a > 0`) must never select the reserved fully-transparent
+  // palette slot (entry alpha == 0). The perceptual metric can rank a saturated color
+  // CLOSER to transparent-black than to any real color: `pdist`'s ΔE color term dwarfs
+  // the `da²·ALPHA_WEIGHT_LAB` alpha term, and the `wa/510` factor HALVES the color
+  // penalty for a transparent comparison (the slot has alpha 0). Without this guard a
+  // visible pixel could be mapped to the transparent slot and VANISH (e.g. opaque
+  // green ranks transparent at 207,749,788 < opaque blue at 669,160,034). RGB `dist2`
+  // never needed this — its color and alpha terms share one scale, so the alpha
+  // penalty always dominated. Source `a == 0` pixels are forced onto the transparent
+  // slot separately (the override in `quantize_pass`), so excluding `a == 0` here is
+  // exactly right. For opaque images no slot is reserved (no `a == 0` entry exists),
+  // so this is a no-op and output stays byte-identical.
+  let skip_transparent = query_a > 0;
+  let mut best = usize::MAX;
+  let mut best_d = i64::MAX;
+  for (i, (&plab, &pa)) in palette_labs.iter().zip(palette_alphas.iter()).enumerate() {
+    if skip_transparent && pa == 0 {
+      continue;
+    }
+    let d = pdist_lab(query_lab, query_a, plab, pa);
+    if d < best_d {
+      best_d = d;
+      best = i;
+    }
+  }
+  if best != usize::MAX {
+    return best;
+  }
+  // Unreachable in production: a visible query implies the image had visible pixels,
+  // which `quantize_pass` always clusters into at least one visible (`a > 0`) entry.
+  // Defensive fallback so the result is always defined — pick the perceptually-nearest
+  // entry without the exclusion (lower index wins ties, like the main loop).
   let mut best = 0usize;
   let mut best_d = i64::MAX;
   for (i, (&plab, &pa)) in palette_labs.iter().zip(palette_alphas.iter()).enumerate() {
@@ -3799,5 +3831,47 @@ mod tests {
       );
       assert_eq!(cached, d1, "pdist_lab must equal pdist for {p:?} vs {q:?}");
     }
+  }
+
+  #[test]
+  fn visible_pixel_never_maps_to_reserved_transparent_slot() {
+    // Regression: under `pdist` a VISIBLE saturated color can rank the reserved
+    // fully-transparent slot CLOSER than a far visible entry, so without the `a == 0`
+    // exclusion in `nearest_lab` a visible pixel would be mapped to transparent and
+    // VANISH. Palette = [transparent slot, blue]; query opaque green. The metric ranks
+    // transparent closer (green->transparent < green->blue), but assignment MUST pick
+    // the visible entry (blue, index 1).
+    let transparent = rgba(0, 0, 0, 0);
+    let blue = rgba(0, 0, 255, 255);
+    let green = rgba(0, 255, 0, 255);
+    let palette = vec![transparent, blue]; // index 0 = transparent slot, 1 = blue
+
+    // Load-bearing setup invariant (so this is NOT a vacuous test): the perceptual
+    // metric really does rank the transparent slot closer than the visible entry here,
+    // so it is the EXCLUSION — not the metric — that keeps the pixel visible. Without
+    // the exclusion `nearest` would return 0 (transparent) and the assert below fails.
+    assert!(
+      pdist(green, transparent) < pdist(green, blue),
+      "setup: pdist must rank transparent ({}) closer than blue ({}) for this regression \
+       to be meaningful",
+      pdist(green, transparent),
+      pdist(green, blue)
+    );
+
+    assert_eq!(
+      nearest(&palette, green),
+      1,
+      "a visible pixel must map to the visible entry, never the reserved transparent \
+       slot (pdist green->transparent={} < green->blue={})",
+      pdist(green, transparent),
+      pdist(green, blue)
+    );
+
+    // A fully-transparent query, by contrast, IS allowed to pick the transparent slot.
+    assert_eq!(
+      nearest(&palette, transparent),
+      0,
+      "a transparent query must still resolve to the exact transparent slot"
+    );
   }
 }
