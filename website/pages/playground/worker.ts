@@ -49,7 +49,7 @@ async function runConvert(mod: Mod, u8: Uint8Array, op: ConvertOp): Promise<Uint
 }
 
 async function runCompress(mod: Mod, u8: Uint8Array, op: CompressOp): Promise<Uint8Array> {
-  // Use the ASYNC variants. oxipng (`oxipng/parallel`) and imagequant fan out
+  // Use the ASYNC variants. oxipng (`oxipng/parallel`) fans out
   // via rayon, which spawns wasi pthreads. emnapi runs these async tasks on its
   // async-work worker pool, and emnapi >= 1.9.0 (@emnapi/wasi-threads >= 1.2.0)
   // routes `spawn-thread` requests from those async-work workers correctly, so

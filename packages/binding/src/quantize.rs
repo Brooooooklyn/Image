@@ -1,0 +1,3493 @@
+//! Clean-room PNG color quantizer.
+//!
+//! This module implements an 8-bit indexed-color quantizer from first
+//! principles using only published, patent-free algorithms:
+//!
+//! * **Median-cut** (Heckbert, 1982) for an initial palette,
+//! * **Lloyd / k-means** relaxation to refine the palette, and
+//! * **Floyd-Steinberg** error-diffusion dithering for the remap.
+//!
+//! It depends only on [`rgb::RGBA8`] (already a direct dependency) and the
+//! standard library. There are intentionally **no** `napi` types here so the
+//! algorithm stays pure, testable, and `wasm`-safe.
+
+use std::collections::HashMap;
+
+use rgb::RGBA8;
+
+/// Hard upper bound on an 8-bit indexed palette.
+const MAX_PALETTE: usize = 256;
+
+/// Alpha-error weight relative to a single color channel.
+///
+/// Alpha mistakes are far more visible than a small color shift, so the alpha
+/// term in the distance metric is scaled up by this factor.
+const ALPHA_WEIGHT: i64 = 3;
+
+/// Tunable parameters for a single quantization run.
+///
+/// Constructed from the public [`crate::png::PngQuantOptions`] via
+/// [`QuantizeConfig::from_options`].
+pub struct QuantizeConfig {
+  /// Target palette size, clamped to `2..=256`.
+  pub max_colors: u16,
+  /// Acceptance threshold in `0..=100`; the caller throws below it.
+  pub min_quality: u8,
+  /// Number of Lloyd/k-means refinement passes.
+  pub kmeans_iters: u8,
+  /// Whether to apply Floyd-Steinberg dithering on remap.
+  pub dither: bool,
+  /// Least-significant bits to drop per channel before histogramming.
+  pub posterization: u8,
+}
+
+impl QuantizeConfig {
+  /// Maps the public, JS-facing options onto internal tunables.
+  ///
+  /// See the module-level mapping table; defaults mirror the previous public
+  /// API defaults (min 70 / max 99 / speed 5).
+  pub fn from_options(o: &crate::png::PngQuantOptions) -> Self {
+    let max_quality = o.max_quality.unwrap_or(99).min(100) as f64;
+    // Quadratic ramp: biases toward larger palettes at high quality.
+    // 99 -> ~251, 75 -> ~145, 50 -> ~66, 1 -> 2.
+    let max_colors = (2.0 + (max_quality / 100.0).powi(2) * 254.0).round();
+    let max_colors = (max_colors as i64).clamp(2, MAX_PALETTE as i64) as u16;
+
+    let min_quality = o.min_quality.unwrap_or(70).min(100) as u8;
+
+    let speed = o.speed.unwrap_or(5).clamp(1, 10) as i32;
+    // Slower speeds spend more passes refining the palette.
+    let kmeans_iters = (10 - speed).max(0) as u8;
+    // Only the very fastest speed skips dithering entirely.
+    let dither = speed <= 9;
+
+    let posterization = o.posterization.unwrap_or(0).min(7) as u8;
+
+    QuantizeConfig {
+      max_colors,
+      min_quality,
+      kmeans_iters,
+      dither,
+      posterization,
+    }
+  }
+}
+
+/// Result of quantization: a palette, per-pixel indices into it, and an
+/// achieved quality score for the caller's `min_quality` gate.
+pub struct QuantizeOutput {
+  /// Palette colors, `len() <= max_colors`, sorted deterministically.
+  pub palette: Vec<RGBA8>,
+  /// One palette index per source pixel; `len() == width * height`.
+  pub indices: Vec<u8>,
+  /// Achieved quality in `0..=100` (100 only when the result is lossless).
+  pub quality: u8,
+}
+
+/// Alpha-weighted squared distance between two colors.
+///
+/// The color (R,G,B) term is scaled by the combined alpha of the two colors so
+/// near-transparent pixels do not consume palette slots they cannot show, while
+/// the alpha term always counts (weighted by [`ALPHA_WEIGHT`]). For fully-opaque
+/// pixels `wa == 510`, so the color term is plain squared-Euclidean distance and
+/// the k-means arithmetic-mean update is its exact minimizer. When alpha varies,
+/// the per-pair `wa` weighting makes this a perceptual relaxation rather than a
+/// strict Lloyd objective — assignment and the unweighted-mean update no longer
+/// share one objective, so k-means convergence is approximate (still bounded and
+/// deterministic). The same metric is used in median-cut, assignment, and remap.
+#[inline]
+fn dist2(p: RGBA8, q: RGBA8) -> i64 {
+  let wa = p.a as i64 + q.a as i64; // 0..=510
+  let dr = p.r as i64 - q.r as i64;
+  let dg = p.g as i64 - q.g as i64;
+  let db = p.b as i64 - q.b as i64;
+  let da = p.a as i64 - q.a as i64;
+  let color = (dr * dr + dg * dg + db * db) * wa / 510;
+  color + da * da * ALPHA_WEIGHT
+}
+
+/// A distinct color and how many source pixels carry it.
+///
+/// `count` is `u64` (not `u32`): a single color can cover the entire image, so
+/// its population can exceed `u32::MAX` (a >4.3-gigapixel single-color image).
+/// Widening here keeps the per-color population from overflowing before the
+/// population cap and the `split_reduction` overflow guard can run.
+#[derive(Clone, Copy)]
+struct ColorCount {
+  color: RGBA8,
+  count: u64,
+}
+
+/// Packs an `RGBA8` into a single `u32` for stable, total ordering.
+#[inline]
+fn packed(c: RGBA8) -> u32 {
+  (c.r as u32) << 24 | (c.g as u32) << 16 | (c.b as u32) << 8 | (c.a as u32)
+}
+
+/// Minimal LCG (linear congruential generator) for deterministic D²-weighted
+/// sampling inside `kmeans_refine`. Uses Knuth/NR constants; fixed seed gives
+/// identical sequences across runs.
+struct Lcg(u64);
+impl Lcg {
+  fn next_u64(&mut self) -> u64 {
+    self.0 = self
+      .0
+      .wrapping_mul(6364136223846793005)
+      .wrapping_add(1442695040888963407);
+    self.0
+  }
+}
+
+/// Total-ordering key for the *final* palette that places alpha in the most
+/// significant position, so all non-opaque entries cluster at the front of the
+/// palette. lodepng writes the `tRNS` chunk as a prefix up to the last
+/// non-opaque index, so front-loading transparency yields the shortest possible
+/// `tRNS` chunk. Still a total order, so output stays deterministic.
+#[inline]
+fn alpha_first_key(c: RGBA8) -> u32 {
+  (c.a as u32) << 24 | (c.r as u32) << 16 | (c.g as u32) << 8 | (c.b as u32)
+}
+
+/// Applies posterization by dropping the `bits` least-significant bits of a
+/// channel, exactly as the public API documents. This yields precisely
+/// `256 >> bits` evenly-spaced retained levels (e.g. `bits == 4` → 16 levels at
+/// 0,16,…,240; `bits == 7` → 2 levels at 0,128). A previous centered-rounding
+/// variant produced an off-by-one bucket count (an extra level clamped at 255).
+#[inline]
+fn posterize_channel(v: u8, bits: u8) -> u8 {
+  (v >> bits) << bits
+}
+
+#[inline]
+fn posterize(c: RGBA8, bits: u8) -> RGBA8 {
+  if bits == 0 {
+    return c;
+  }
+  RGBA8 {
+    r: posterize_channel(c.r, bits),
+    g: posterize_channel(c.g, bits),
+    b: posterize_channel(c.b, bits),
+    // Alpha is never posterized: doing so would turn fully-transparent (a==0)
+    // pixels into faintly-visible ones and break exact transparency.
+    a: c.a,
+  }
+}
+
+/// Canonical histogram/lookup key for a source pixel. Fully-transparent pixels
+/// (`a == 0`) collapse to one exact transparent color: their RGB is a
+/// "don't care" matte that must not pollute the palette or bleed into visible
+/// pixels. Everything else is posterized normally.
+#[inline]
+fn canonical_key(c: RGBA8, bits: u8) -> RGBA8 {
+  if c.a == 0 {
+    RGBA8 {
+      r: 0,
+      g: 0,
+      b: 0,
+      a: 0,
+    }
+  } else {
+    posterize(c, bits)
+  }
+}
+
+/// Builds the distinct-color histogram (post-posterization).
+///
+/// The per-color count is `u64`: a single color may cover every pixel, so its
+/// population can exceed `u32::MAX` (a >4.3-gigapixel single-color image would
+/// wrap a `u32` counter — silently in release, with a panic in debug — making
+/// the dominant color near-zero-weight before the cap/split guards can act).
+fn build_histogram(px: &[RGBA8], bits: u8) -> HashMap<RGBA8, u64> {
+  let mut hist: HashMap<RGBA8, u64> = HashMap::new();
+  for &p in px {
+    let key = canonical_key(p, bits);
+    *hist.entry(key).or_insert(0) += 1;
+  }
+  hist
+}
+
+/// Unsigned 128×128 → 256-bit product, returned as `(hi, lo)` limbs.
+///
+/// Schoolbook multiply over four `u64` half-limbs. Used only to compare two
+/// exact rationals without overflow (see [`cmp_ratio`]); the products can reach
+/// ~187 bits in the Wu split, which exceeds `i128`, so we widen to 256 bits.
+#[inline]
+fn widen_mul_u128(a: u128, b: u128) -> (u128, u128) {
+  let a_lo = a as u64 as u128;
+  let a_hi = a >> 64;
+  let b_lo = b as u64 as u128;
+  let b_hi = b >> 64;
+  let ll = a_lo * b_lo;
+  let lh = a_lo * b_hi;
+  let hl = a_hi * b_lo;
+  let hh = a_hi * b_hi;
+  let mid = lh.wrapping_add(hl);
+  let mid_carry = (lh > mid) as u128; // carry out of lh + hl
+  let (lo, c1) = ll.overflowing_add(mid << 64);
+  let hi = hh
+    .wrapping_add(mid >> 64)
+    .wrapping_add(mid_carry << 64)
+    .wrapping_add(c1 as u128);
+  (hi, lo)
+}
+
+/// Exact signed comparison of the rationals `a1/b1` and `a2/b2`.
+///
+/// Returns [`Ordering`] of `a1/b1` vs `a2/b2`. Denominators `b1`, `b2` must be
+/// strictly positive (they always are here: a box's weight is `>= 1`). The
+/// cross-products `a1*b2` and `a2*b1` are computed in 256 bits via
+/// [`widen_mul_u128`] so the comparison is exact and overflow-free — this is the
+/// determinism guarantee for the Wu split (integer-only, no float).
+#[inline]
+fn cmp_ratio(a1: i128, b1: i128, a2: i128, b2: i128) -> std::cmp::Ordering {
+  use std::cmp::Ordering;
+  let s1 = a1.signum();
+  let s2 = a2.signum();
+  if s1 != s2 {
+    return s1.cmp(&s2);
+  }
+  if s1 == 0 {
+    return Ordering::Equal; // both numerators zero
+  }
+  // Same sign: compare magnitudes |a1|*b2 vs |a2|*b1, then flip if both negative.
+  let (h1, l1) = widen_mul_u128(a1.unsigned_abs(), b2 as u128);
+  let (h2, l2) = widen_mul_u128(a2.unsigned_abs(), b1 as u128);
+  let mag = (h1, l1).cmp(&(h2, l2));
+  if s1 < 0 { mag.reverse() } else { mag }
+}
+
+/// Per-channel moment sums of a set of entries: weight `N`, first moments `S[x]`.
+///
+/// `N = Σ count`; the RGB first moments are PREMULTIPLIED by alpha
+/// (`S[x] = Σ count·x·A/255` for `x ∈ {R,G,B}`, Porter-Duff 1984) while the alpha
+/// moment is raw (`S[A] = Σ count·A`). Premultiplying the RGB moments down-weights
+/// near-transparent RGB in the Wu split so it APPROXIMATES `dist2`'s `wa/510`
+/// visibility weighting — it is NOT an exact match: the squared `term_num` weights
+/// equal-alpha RGB variance by ~`(a/255)²` (quadratic) while `dist2` weights it by
+/// `a/255` (linear), so the split is a visibility-aware APPROXIMATION, not a strict
+/// agreement. Empirically premul lands ~2.7× closer to the dist2-optimal split than
+/// raw (alpha-blind) moments, so it is the better merge despite the gap. Opaque
+/// pixels (`A == 255`) are unchanged (`x·255/255 == x`), so premul == raw there.
+/// The "Term" `A = Σ_x w_x·S[x]²` (with `w = [1,1,1,ALPHA_WEIGHT]`) is the single
+/// numerator of `Σ_x w_x·S[x]²/N`, used by the Wu variance-minimizing split. The
+/// alpha weight matches `dist2`'s alpha weight. All integer (`i128`) to keep the
+/// split decision exact and deterministic.
+// P3 (candidate C): exact dist2-consistency needs premultiplying dist2 itself
+// (and remap/quality); deferred — see plan.
+#[derive(Clone, Copy)]
+struct Moments {
+  n: i128,
+  s: [i128; 4],
+}
+
+impl Moments {
+  #[inline]
+  fn zero() -> Self {
+    Moments { n: 0, s: [0; 4] }
+  }
+
+  #[inline]
+  fn add(&mut self, e: &ColorCount) {
+    let w = e.count as i128;
+    self.n += w;
+    let a = e.color.a as i128;
+    // Premultiplied-alpha RGB first moments (Porter-Duff 1984): near-transparent
+    // RGB is down-weighted in the Wu split so the split APPROXIMATES dist2's wa/510
+    // visibility weighting — premul weights equal-alpha RGB variance by ~(a/255)²
+    // (quadratic) vs dist2's linear a/255, so this is a visibility-aware
+    // approximation, not an exact match (empirically ~2.7× closer to the
+    // dist2-optimal split than raw moments). OPAQUE-NEUTRAL: a==255 -> r*255/255 == r
+    // exactly, so opaque images split identically (q75 stays 262053). Premul values
+    // <= raw, so the i128 SSE moments are <= the old ones -> overflow strictly safer.
+    self.s[0] += w * (e.color.r as i128 * a / 255);
+    self.s[1] += w * (e.color.g as i128 * a / 255);
+    self.s[2] += w * (e.color.b as i128 * a / 255);
+    self.s[3] += w * a;
+  }
+
+  #[inline]
+  fn sub(&self, other: &Moments) -> Moments {
+    Moments {
+      n: self.n - other.n,
+      s: [
+        self.s[0] - other.s[0],
+        self.s[1] - other.s[1],
+        self.s[2] - other.s[2],
+        self.s[3] - other.s[3],
+      ],
+    }
+  }
+
+  /// `A = Σ_x w_x·S[x]²` (with `w = [1,1,1,ALPHA_WEIGHT]`), the single numerator
+  /// of this part's `Σ_x w_x·S[x]²/N` term.
+  #[inline]
+  fn term_num(&self) -> i128 {
+    // Wu within-box SSE reduction, alpha-weighted to match `dist2` (ALPHA_WEIGHT,
+    // line 25): the split objective must agree with the assignment/remap/quality
+    // metric on how much alpha error counts, or small partial-alpha palettes get an
+    // alpha-blind split. RGB weights stay 1; alpha is weighted ALPHA_WEIGHT (=3).
+    self.s[0] * self.s[0]
+      + self.s[1] * self.s[1]
+      + self.s[2] * self.s[2]
+      + ALPHA_WEIGHT as i128 * (self.s[3] * self.s[3])
+  }
+}
+
+/// The best variance-minimizing split found for a box: which axis to sort along,
+/// the split position (entries `[..pos]` | `[pos..]` in sorted order), and the
+/// SSE reduction expressed as the exact rational `red_num / red_den`
+/// (`red_den > 0`). `red_num <= 0` means no split reduces SSE.
+#[derive(Clone, Copy)]
+struct BestSplit {
+  axis: usize,
+  pos: usize,
+  red_num: i128,
+  red_den: i128,
+}
+
+/// SSE-reduction rational `red_num / red_den` for a candidate split, or `None`
+/// when the reduction is non-positive OR forming it in `i128` would overflow.
+///
+/// `red_num = merit_num·parent_n − parent_num·merit_den` can reach `~2^19·N^4`
+/// (`N` = total box weight). The population cap keeps `N` small for concentrated
+/// images, but cannot bound `N` when a pathological input has more distinct
+/// unit-count colors than the cap (`entries.len() > cap`, i.e. a >100M-pixel
+/// image with >67M distinct RGBA values): there `N = entries.len()` and `red_num`
+/// would exceed `i128::MAX`. Rather than wrap (release) or panic (debug), we
+/// report "no usable split" so the box stops subdividing. For every normal image
+/// the products fit `i128` with vast margin, so this is bit-for-bit identical to
+/// the previous unchecked formula — the size gate is unchanged.
+fn split_reduction(
+  merit_num: i128,
+  merit_den: i128,
+  parent_num: i128,
+  parent_n: i128,
+) -> Option<(i128, i128)> {
+  let red_num = merit_num
+    .checked_mul(parent_n)?
+    .checked_sub(parent_num.checked_mul(merit_den)?)?;
+  if red_num <= 0 {
+    return None; // no split reduces SSE (degenerate / single point per axis).
+  }
+  let red_den = merit_den.checked_mul(parent_n)?;
+  Some((red_num, red_den))
+}
+
+/// An axis-aligned box of histogram entries used by median-cut. Caches its best
+/// Wu split so the box-selection loop is `O(boxes)` per step instead of
+/// re-scanning every box.
+struct MCBox {
+  entries: Vec<ColorCount>,
+  /// Smallest `packed` color in the box; a deterministic, box-unique tie-break
+  /// for selecting which box to split next (boxes are disjoint entry sets).
+  pmin: u32,
+  /// Cached best split, or `None` if the box has `< 2` entries or no split
+  /// reduces SSE.
+  best: Option<BestSplit>,
+}
+
+impl MCBox {
+  /// Builds a box from entries, computing its `pmin` and best Wu split once.
+  fn new(entries: Vec<ColorCount>) -> Self {
+    let pmin = entries
+      .iter()
+      .map(|e| packed(e.color))
+      .min()
+      .unwrap_or(u32::MAX);
+    let best = Self::compute_best_split(&entries);
+    MCBox {
+      entries,
+      pmin,
+      best,
+    }
+  }
+
+  /// Finds the (axis, position) that most reduces total within-box SSE.
+  ///
+  /// For each axis the entries are stably sorted by `(channel, packed)` and swept
+  /// left→right; running left moments give the right side as `total − left`. The
+  /// split "merit" is `LeftTerm + RightTerm = A_L/N_L + A_R/N_R`, maximized; the
+  /// SSE reduction `merit − ParentTerm` is returned as an exact rational so boxes
+  /// can be compared. All comparisons are exact integer ([`cmp_ratio`]); ties
+  /// break by lower axis then lower position. Returns `None` when no split with a
+  /// positive reduction exists (`< 2` entries, or every candidate has `red <= 0`).
+  fn compute_best_split(entries: &[ColorCount]) -> Option<BestSplit> {
+    if entries.len() < 2 {
+      return None;
+    }
+    let mut total = Moments::zero();
+    for e in entries {
+      total.add(e);
+    }
+    let parent_num = total.term_num();
+    let parent_n = total.n;
+
+    // Best merit so far as the rational merit_num / merit_den (both > 0).
+    let mut best: Option<(usize, usize, i128, i128)> = None; // (axis, pos, num, den)
+    let mut sorted: Vec<ColorCount> = entries.to_vec();
+    for axis in 0..4 {
+      sorted.sort_by(|x, y| {
+        channel_of(x.color, axis)
+          .cmp(&channel_of(y.color, axis))
+          .then_with(|| packed(x.color).cmp(&packed(y.color)))
+      });
+      let mut left = Moments::zero();
+      for pos in 1..sorted.len() {
+        left.add(&sorted[pos - 1]);
+        let right = total.sub(&left);
+        if right.n <= 0 {
+          continue; // shouldn't happen with positive counts, but stay safe.
+        }
+        // merit = A_L/N_L + A_R/N_R = (A_L*N_R + A_R*N_L) / (N_L*N_R)
+        let a_l = left.term_num();
+        let a_r = right.term_num();
+        let merit_num = a_l * right.n + a_r * left.n;
+        let merit_den = left.n * right.n;
+        match best {
+          Some((_, _, bn, bd)) if cmp_ratio(merit_num, merit_den, bn, bd).is_le() => {}
+          _ => best = Some((axis, pos, merit_num, merit_den)),
+        }
+      }
+    }
+
+    let (axis, pos, merit_num, merit_den) = best?;
+    // reduction = merit − parent_num/parent_n, over common denom merit_den*parent_n.
+    // `split_reduction` forms `red_num`/`red_den` with checked i128 arithmetic and
+    // returns `None` on a non-positive reduction OR on overflow, so a pathological
+    // box that would overflow simply reports "no usable split" (median_cut skips
+    // it) instead of wrapping or panicking.
+    let (red_num, red_den) = split_reduction(merit_num, merit_den, parent_num, parent_n)?;
+    Some(BestSplit {
+      axis,
+      pos,
+      red_num,
+      red_den,
+    })
+  }
+
+  /// Population-weighted centroid color, rounded to `u8` per channel.
+  ///
+  /// `true_counts`, when `Some`, maps each member's `packed` color to its TRUE
+  /// (pre-cap) population. The Wu split decisions are computed from the capped
+  /// `split_entries` (precision/overflow safety), but the final centroid VALUE
+  /// must use the TRUE per-color counts under the SAME box membership — capping
+  /// is proportional but `cap_entry_weights`'s `.max(1)` floor over-represents a
+  /// swarm of rare colors, which can round the centroid to a different `u8`
+  /// (true R=51 vs capped R=52) on >67M-px images. Membership is NOT changed: we
+  /// only re-weight the members this box already owns (no nearest re-assignment),
+  /// so opaque output stays byte-identical. `None` (no cap bit) keeps the capped
+  /// counts, which then equal the true counts anyway.
+  fn centroid(&self, true_counts: Option<&HashMap<u32, u64>>) -> RGBA8 {
+    let mut sr = 0u64;
+    let mut sg = 0u64;
+    let mut sb = 0u64;
+    let mut sa = 0u64;
+    let mut n = 0u64;
+    for e in &self.entries {
+      let c = match true_counts {
+        Some(map) => *map.get(&packed(e.color)).unwrap_or(&e.count),
+        None => e.count,
+      };
+      sr += e.color.r as u64 * c;
+      sg += e.color.g as u64 * c;
+      sb += e.color.b as u64 * c;
+      sa += e.color.a as u64 * c;
+      n += c;
+    }
+    if n == 0 {
+      return RGBA8::default();
+    }
+    RGBA8 {
+      r: ((sr + n / 2) / n) as u8,
+      g: ((sg + n / 2) / n) as u8,
+      b: ((sb + n / 2) / n) as u8,
+      a: ((sa + n / 2) / n) as u8,
+    }
+  }
+}
+
+#[inline]
+fn channel_of(c: RGBA8, ch: usize) -> u8 {
+  match ch {
+    0 => c.r,
+    1 => c.g,
+    2 => c.b,
+    _ => c.a,
+  }
+}
+
+/// Wu variance-minimizing median-cut (Xiaolin Wu, *Graphics Gems II*, 1991).
+///
+/// Keeps the median-cut box-subdivision shape — start with one box of all visible
+/// colors, repeatedly split until `max_colors` boxes exist or nothing is
+/// splittable — but replaces the split RULE: instead of "widest channel, split at
+/// the population median", each box's split is the `(axis, position)` that most
+/// reduces total within-box weighted SSE, and the box chosen to split next is the
+/// one whose best split reduces SSE the most.
+///
+/// SSE reduction is evaluated from integer moment sums (`Σw`, `Σw·x`) so the whole
+/// decision is exact and deterministic (no float). For a part with weight `N` and
+/// first moments `S[x]`, the channel SSE is `Σw·x² − S[x]²/N`; since `Σw·x²` is
+/// split-invariant, the reduction depends only on the `S[x]²/N` "terms", compared
+/// as exact rationals via [`cmp_ratio`]. The RGB first moments are PREMULTIPLIED
+/// by alpha (Porter-Duff, see [`Moments::add`]) so the split's RGB term
+/// APPROXIMATES `dist2`'s visibility weighting (premul ≈ `(a/255)²` vs dist2's
+/// linear `a/255` — a visibility-aware approximation, ~2.7× closer to optimal than
+/// raw moments, not an exact match); opaque pixels (`A == 255`) split identically.
+/// Each box caches its best split, so the
+/// box-selection scan is `O(boxes)` and only the two new boxes recompute a split.
+/// Determinism: axis sort ties break on `packed`; box-selection ties break on the
+/// box's smallest `packed` entry; split ties break on lower axis then position.
+///
+/// `true_counts` (when `Some`) is threaded into [`MCBox::centroid`] so the final
+/// per-box centroid VALUE uses the TRUE (pre-cap) per-color populations instead of
+/// the capped split copy's counts, while every split DECISION still uses the
+/// passed-in (capped) `entries`. `None` when no cap bit, where capped == true.
+fn median_cut(
+  entries: &[ColorCount],
+  max_colors: usize,
+  true_counts: Option<&HashMap<u32, u64>>,
+) -> Vec<RGBA8> {
+  // `entries` are pre-collected and deterministically sorted by the caller, so
+  // the seed box order never depends on HashMap iteration order.
+  let mut boxes: Vec<MCBox> = vec![MCBox::new(entries.to_vec())];
+
+  while boxes.len() < max_colors {
+    // Pick the box whose best split reduces SSE the most (largest red_num/red_den).
+    // Tie-break on the box's smallest packed entry so the choice is deterministic;
+    // boxes are disjoint, so `pmin` is unique per box.
+    let mut target: Option<usize> = None;
+    let mut best: Option<BestSplit> = None;
+    let mut best_pmin = u32::MAX;
+    for (i, b) in boxes.iter().enumerate() {
+      let Some(split) = b.best else {
+        continue; // unsplittable: < 2 entries or no SSE-reducing split.
+      };
+      let take = match best {
+        None => true,
+        Some(cur) => match cmp_ratio(split.red_num, split.red_den, cur.red_num, cur.red_den) {
+          std::cmp::Ordering::Greater => true,
+          std::cmp::Ordering::Equal => b.pmin < best_pmin,
+          std::cmp::Ordering::Less => false,
+        },
+      };
+      if take {
+        best = Some(split);
+        best_pmin = b.pmin;
+        target = Some(i);
+      }
+    }
+    let (Some(idx), Some(split)) = (target, best) else {
+      break; // every box is unsplittable; nothing left to do.
+    };
+
+    let mut b = boxes.swap_remove(idx);
+    // Re-sort along the chosen axis (same order compute_best_split used) and cut
+    // at the chosen position, so [..pos] | [pos..] matches the scored split.
+    b.entries.sort_by(|x, y| {
+      channel_of(x.color, split.axis)
+        .cmp(&channel_of(y.color, split.axis))
+        .then_with(|| packed(x.color).cmp(&packed(y.color)))
+    });
+    let right = b.entries.split_off(split.pos);
+    let left = b.entries;
+    boxes.push(MCBox::new(left));
+    boxes.push(MCBox::new(right));
+  }
+
+  boxes
+    .iter()
+    .filter(|b| !b.entries.is_empty())
+    .map(|b| b.centroid(true_counts))
+    .collect()
+}
+
+/// Finds the index of the nearest palette entry to `c` by [`dist2`].
+#[inline]
+fn nearest(palette: &[RGBA8], c: RGBA8) -> usize {
+  let mut best = 0usize;
+  let mut best_d = i64::MAX;
+  for (i, &p) in palette.iter().enumerate() {
+    let d = dist2(p, c);
+    if d < best_d {
+      best_d = d;
+      best = i;
+    }
+  }
+  best
+}
+
+/// Exact integer k-means objective for `palette` over `entries`:
+/// `Σ_entries count · dist2(palette[nearest(palette, color)], color)`.
+///
+/// This is the metric assignment minimizes (alpha-weighted squared distance,
+/// summed over the TRUE per-color populations). Accumulated in `u128` so it is
+/// exact and overflow-free (`dist2 <= ~5·255² ≈ 3.3e5`, `count` a `u64`, summed
+/// over `<= 2^24` entries — vastly within `u128`). Used by the keep-best guard in
+/// [`kmeans_refine`] to compare two palettes deterministically (no float, no RNG).
+fn kmeans_objective(palette: &[RGBA8], entries: &[ColorCount]) -> u128 {
+  let mut obj: u128 = 0;
+  for e in entries {
+    let d = dist2(palette[nearest(palette, e.color)], e.color).max(0) as u128;
+    obj += e.count as u128 * d;
+  }
+  obj
+}
+
+/// Lloyd / k-means relaxation over the histogram cells.
+///
+/// Each pass assigns every distinct color to its nearest palette entry, then
+/// recomputes each entry as the population-weighted mean of its assigned cells.
+/// Empty clusters are re-seeded with population-weighted D² sampling (k-means++,
+/// Arthur & Vassilvitskii 2007): each dead slot is filled by sampling an entry
+/// with probability proportional to `count · D²` — its squared residual distance
+/// from the nearest current center, scaled by how many pixels carry that color —
+/// biasing new seeds toward underrepresented but well-populated gamut regions. A
+/// fixed-seed LCG makes the sequence fully deterministic across all runs.
+///
+/// KEEP-BEST GUARD: the assignment minimizes alpha-weighted `dist2`, but the
+/// centroid update is the plain count-weighted RGBA mean, which is NOT that
+/// metric's minimizer when alpha varies (the per-pair RGB weight `(a_i+a_c)/510`
+/// couples to the center's own alpha). So Lloyd is NOT monotone here: a pass can
+/// RAISE the [`kmeans_objective`]. To never return a palette worse than its seed,
+/// we snapshot the best palette+objective starting from the INPUT (seed), and
+/// after EACH pass (centroid update + any D² reseed) adopt the new palette whenever
+/// its objective is `<=` the best seen — DISCARDING only a pass that strictly
+/// RAISED the objective; on return `*palette` holds the best. OPAQUE-NEUTRAL: for
+/// `a==255` (`wa==510`) `dist2` is plain RGB SSE and the count-weighted mean IS its
+/// exact per-assignment minimizer, so every pass is monotone non-increasing and the
+/// unguarded code returns the LAST pass — adopting on ties (`<=`) reproduces that
+/// byte-for-byte (q75 stays 262053). The compare is exact integer (`u128`), so the
+/// decision is fully deterministic — no float, no RNG.
+fn kmeans_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) {
+  if palette.is_empty() || entries.is_empty() {
+    return;
+  }
+  let k = palette.len();
+
+  // Best-seen palette starts at the seed; the guard never returns worse than this.
+  let mut best: Vec<RGBA8> = palette.to_vec();
+  let mut best_obj: u128 = kmeans_objective(palette, entries);
+
+  for _ in 0..iters {
+    // Accumulators per cluster.
+    let mut sr = vec![0u64; k];
+    let mut sg = vec![0u64; k];
+    let mut sb = vec![0u64; k];
+    let mut sa = vec![0u64; k];
+    let mut wn = vec![0u64; k];
+
+    for e in entries.iter() {
+      let idx = nearest(palette, e.color);
+      let c = e.count;
+      sr[idx] += e.color.r as u64 * c;
+      sg[idx] += e.color.g as u64 * c;
+      sb[idx] += e.color.b as u64 * c;
+      sa[idx] += e.color.a as u64 * c;
+      wn[idx] += c;
+    }
+
+    // Recompute centroids; collect empty clusters for re-seeding.
+    let mut empty: Vec<usize> = Vec::new();
+    for i in 0..k {
+      if wn[i] == 0 {
+        empty.push(i);
+        continue;
+      }
+      let n = wn[i];
+      palette[i] = RGBA8 {
+        r: ((sr[i] + n / 2) / n) as u8,
+        g: ((sg[i] + n / 2) / n) as u8,
+        b: ((sb[i] + n / 2) / n) as u8,
+        a: ((sa[i] + n / 2) / n) as u8,
+      };
+    }
+
+    // Re-seed empty clusters with population-weighted D² sampling (count · D²;
+    // k-means++, Arthur & Vassilvitskii 2007). A fixed-seed LCG makes the
+    // sequence deterministic across all runs. Multiple dead clusters in one pass
+    // get proper D² incremental updates so they spread across the gamut.
+    if !empty.is_empty() {
+      // Initial squared residuals: each entry's squared distance to its NEAREST
+      // CURRENT LIVE center. k-means++ requires D² against the nearest center as
+      // it stands NOW (after the in-place centroid recompute), not the center of
+      // the cluster the entry was assigned to before that cluster moved. We scan
+      // only live clusters (`wn[i] > 0`); dead slots hold stale colors and must
+      // not seed their own D². This runs only inside `if !empty.is_empty()`
+      // (reseed events are rare) and is O(entries·k) with k ≤ 256 — acceptable.
+      let mut min_d2: Vec<u64> = entries
+        .iter()
+        .map(|e| {
+          let mut best = u64::MAX;
+          for i in 0..k {
+            if wn[i] > 0 {
+              let d = dist2(palette[i], e.color).max(0) as u64;
+              if d < best {
+                best = d;
+              }
+            }
+          }
+          // `entries` is non-empty here, so >= 1 cluster is live and `best` is
+          // set; the fallback keeps it defined if that ever changes.
+          if best == u64::MAX { 0 } else { best }
+        })
+        .collect();
+
+      let mut lcg = Lcg(0x9E3779B97F4A7C15);
+
+      for &dead in &empty {
+        // k-means++ weight is population-weighted (count · D²): each entry is a
+        // histogram cell of `count` pixels, so a 10000-pixel color must be far
+        // likelier to seed a dead cluster than a 1-pixel outlier at the same
+        // residual. Weighting by D² alone would spend empty clusters on rare
+        // colors and starve high-population gamut regions.
+        let total: u128 = min_d2
+          .iter()
+          .zip(entries.iter())
+          .map(|(&d, e)| e.count as u128 * d as u128)
+          .sum();
+
+        let picked_idx = if total == 0 {
+          // Every entry already coincides with a center (all D² == 0; counts
+          // are >= 1 so this triggers iff every residual is 0): deterministic
+          // fallback — pick the entry with the smallest packed color.
+          entries
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, e)| packed(e.color))
+            .map(|(i, _)| i)
+            .unwrap_or(0)
+        } else {
+          let r = lcg.next_u64() as u128 % total;
+          let mut cum = 0u128;
+          let mut s = 0usize;
+          for (i, &d) in min_d2.iter().enumerate() {
+            cum += entries[i].count as u128 * d as u128;
+            if cum > r {
+              s = i;
+              break;
+            }
+          }
+          s
+        };
+
+        palette[dead] = entries[picked_idx].color;
+
+        // Incremental D² update: reduce each entry's min_d2 if the
+        // just-placed center is nearer.
+        for (ej, e) in entries.iter().enumerate() {
+          let new_d = dist2(entries[picked_idx].color, e.color).max(0) as u64;
+          if new_d < min_d2[ej] {
+            min_d2[ej] = new_d;
+          }
+        }
+      }
+    }
+
+    // Keep-best: this pass mutated `palette` in place. Adopt it whenever its
+    // objective is <= the best seen; only DISCARD a pass that strictly RAISED the
+    // objective (the non-monotone case the guard exists to catch — alpha-varying
+    // assignment vs the count-weighted-mean update), keeping the prior best then.
+    // `<=` (adopt on ties, keeping the LATEST equal-objective palette) is what
+    // preserves OPAQUE-NEUTRALITY: for `a==255` every pass is monotone
+    // non-increasing, so the original (unguarded) code returns the LAST pass's
+    // palette — `<=` reproduces that byte-for-byte (a strict `<` would instead
+    // freeze on the FIRST palette to hit the minimum and could diverge whenever a
+    // tied-objective pass still reshapes the palette, e.g. an empty-slot reseed
+    // that lowers no objective but fills a dead slot). The compare is exact integer
+    // (`u128`), so `<=` stays fully deterministic — no float, no RNG in the decision.
+    let obj = kmeans_objective(palette, entries);
+    if obj <= best_obj {
+      best_obj = obj;
+      best.copy_from_slice(palette);
+    }
+  }
+
+  // Return the best-seen palette (never worse than the seed by construction).
+  palette.copy_from_slice(&best);
+}
+
+/// Nearest-color remap with a per-color memoization cache (no dithering).
+fn remap_nearest(px: &[RGBA8], palette: &[RGBA8], bits: u8) -> Vec<u8> {
+  let mut cache: HashMap<RGBA8, u8> = HashMap::new();
+  let mut indices = Vec::with_capacity(px.len());
+  for &p in px {
+    let key = canonical_key(p, bits);
+    let idx = *cache
+      .entry(key)
+      .or_insert_with(|| nearest(palette, key) as u8);
+    indices.push(idx);
+  }
+  indices
+}
+
+// ---------------------------------------------------------------------------
+// Selective error-diffusion dithering tunables.
+//
+// Strategy: diffuse error only where it earns its bytes. Two orthogonal,
+// per-pixel signals decide a strength in `[0, 1]`:
+//
+//   * RESIDUAL (primary, self-correcting): the post-quantization squared
+//     distance `dist2(want, chosen)` — how badly the palette reproduced the
+//     target we actually wanted. Small => clean map (a flat the palette
+//     covers) => diffuse nothing => long DEFLATE runs. Large => the palette is
+//     about to BAND a gradient => diffuse to smooth it. This is the banding
+//     signal itself, so it re-engages dither exactly on pixels that would band.
+//
+//   * SOURCE ACTIVITY (secondary, suppressor): a direction-independent local
+//     gradient of the ORIGINAL source over the symmetric 4-neighborhood. High
+//     activity = a hard EDGE or busy TEXTURE, where FS speckle is perceptually
+//     invisible but incompressible; we suppress dither there. Low activity =
+//     smooth, where banding is visible; we let the residual ramp govern.
+//
+// Thresholds are in `dist2` units (alpha-weighted squared distance). For a
+// fully-opaque pair the color term is plain squared-Euclidean RGB distance, so
+// an N-per-channel error on one channel is `N*N`; an even N across R,G,B is
+// `3*N*N`. NOTE: the default operating point posterizes with `bits == 0` (a
+// no-op), so source activity is driven by genuine photo signal, not by
+// posterizer steps — these defaults are sized for raw 8-bit gradients and MUST
+// be swept on the real image.
+// ---------------------------------------------------------------------------
+
+/// Residual `dist2` below which a pixel mapped cleanly: diffuse nothing, keep
+/// flats/edges byte-flat for DEFLATE. ~one 8-bit level on one channel == 64.
+/// Sweep: 24.0 ..= 256.0 (higher => flatter/smaller, more banding risk).
+const DITHER_RESID_LO: f32 = 0.0;
+
+/// Residual `dist2` at/above which dither runs at full configured strength
+/// (gradients the palette cannot follow). Between LO and HI strength ramps
+/// linearly. Must satisfy `DITHER_RESID_HI > DITHER_RESID_LO`.
+/// Sweep: 256.0 ..= 1200.0 (lower => gradients dither sooner => smoother/bigger).
+const DITHER_RESID_HI: f32 = 128.0;
+
+/// Global ceiling on dither strength in `[0, 1]`. Damps all dither energy
+/// without retuning the ramp. 1.0 == full FS at maximally-bad pixels.
+/// Sweep: 0.55 ..= 1.0 (lower => smaller, more banding risk).
+const DITHER_MAX_STRENGTH: f32 = 0.9;
+
+/// Source-activity `dist2` at/above which a pixel is treated as a hard EDGE /
+/// busy texture and dither is fully suppressed (strength -> ACT_FLOOR). Below
+/// it, the suppressor ramps from no suppression (at 0) to full (here). Measured
+/// as the MAX `dist2` over the 4-neighborhood of the posterized source, so a
+/// single strong edge fully activates the pixel. ~16-per-channel one-channel
+/// step == 256; a multi-channel photo edge is larger.
+/// Sweep: 256.0 ..= 4096.0 (lower => suppress dither on more texture => smaller;
+/// higher => dither into more textured regions => bigger/safer).
+const DITHER_EDGE_ACT: f32 = 2048.0;
+
+/// Strength multiplier retained in maximally-active (edge) regions, in `[0, 1]`.
+/// 0.0 == hard edge-stop, but that fully zeroes a smooth HIGH-residual pixel
+/// whenever a SINGLE neighbor is a hard edge (activity is the MAX 4-neighbor
+/// delta): such a pixel still consumes inbound error at index selection yet
+/// propagates none, leaving a 1-px nearest-mapped (solid) column hugging edges
+/// inside otherwise-smooth gradients (the "edge halo"). A small positive floor
+/// keeps `>= MAX*FLOOR` dither on edge-adjacent high-residual pixels so error
+/// feedback survives the transition and the halo never forms; 0.2 is the
+/// smallest swept value that breaks the halo while costing ~435 B vs 0.0
+/// (the edge gate itself still earns ~3.9 KB vs disabling it at FLOOR=1.0).
+/// Sweep: 0.0 ..= 0.5 (higher => more edge dither => bigger/safer).
+const DITHER_EDGE_FLOOR: f32 = 0.2;
+
+/// Per-channel HARD dead-zone (0..255 units) applied to residual BEFORE
+/// diffusion: magnitudes below this are dropped to exactly 0, magnitudes above
+/// pass through UNCHANGED (no soft shrink => no systematic energy loss / color
+/// drift). Kills sub-threshold jitter that random-walks into streaks across a
+/// nominally-flat run. 0.0 disables.
+/// Sweep: 0.0 ..= 6.0.
+const DITHER_ERR_DEADZONE: f32 = 2.0;
+
+/// Symmetric clamp (0..255 units) on the ACCUMULATED per-channel error pulled
+/// from the diffusion buffer, applied right before quantizing (Ulichney 1987
+/// streak guard). Bounds worst-case incompressible bursts and color drift on
+/// out-of-gamut patches without touching normal single-step gradient dither.
+/// 192 is the minimum near-inert value: it is >= ceil(255/2) = 128, so for ANY
+/// palette gap G <= 255 the inbound clamp can still push `want` clear across the
+/// decision threshold (dead-band width `max(0, ceil(G/2) - CLAMP)` is 0). Below
+/// 128 (e.g. the old 96) a flat near-endpoint tone gets pinned on one side of
+/// the threshold and the field COLLAPSES to a flat endpoint instead of
+/// dithering. So 192 never clips a single-step endpoint gradient yet still
+/// guards against pathological accumulation; 255 would disable the guard
+/// entirely (and pass values like 200 straight through).
+/// Sweep: 24.0 ..= 255.0 (255 effectively disables it).
+const DITHER_ERR_CLAMP: f32 = 192.0;
+
+/// Per-channel HARD dead-zone on residual: drop below threshold, pass through
+/// unchanged above. Deterministic pure-f32; identity when the const is 0.0.
+#[inline]
+fn dither_deadzone(v: f32) -> f32 {
+  if DITHER_ERR_DEADZONE <= 0.0 {
+    return v;
+  }
+  if v.abs() < DITHER_ERR_DEADZONE {
+    0.0
+  } else {
+    v
+  }
+}
+
+/// Symmetric clamp of an accumulated-error value to `[-DITHER_ERR_CLAMP, +..]`.
+/// Deterministic; NaN-free for finite inputs (all inputs are bounded f32 sums).
+#[inline]
+fn dither_clamp_err(v: f32) -> f32 {
+  v.clamp(-DITHER_ERR_CLAMP, DITHER_ERR_CLAMP)
+}
+
+/// Direction-independent local source activity at `(x, y)`: the MAX `dist2`
+/// between the posterized source pixel here and its 4-neighborhood (left, right,
+/// up, down) in the ORIGINAL source. Reads ONLY `px[]` (posterized on the fly),
+/// never the evolving error rows, so the value is identical for L2R and R2L scan
+/// and byte-identical across runs. A fully-transparent neighbor (`a == 0`) is
+/// treated as the canonical `(0, 0, 0, 0)`: its don't-care matte RGB is ignored,
+/// but the alpha discontinuity at a sprite/cutout silhouette is a real, VISIBLE
+/// hard edge — so it must register as one (driving activity high and suppressing
+/// dither toward `DITHER_EDGE_FLOOR` at the boundary), exactly like a spatial
+/// color edge. Visible neighbors (`a > 0`, including partial alpha) use their
+/// real posterized color, so soft anti-aliased edges still get proportional
+/// treatment. O(1) per pixel.
+#[inline]
+fn dither_source_activity(
+  px: &[RGBA8],
+  width: usize,
+  height: usize,
+  x: usize,
+  y: usize,
+  here: RGBA8,
+  bits: u8,
+) -> f32 {
+  let mut act: i64 = 0;
+  let consider = |nx: usize, ny: usize, act: &mut i64| {
+    let n = px[ny * width + nx];
+    // A fully-transparent neighbor marks an ALPHA EDGE (sprite/cutout
+    // silhouette), not a smooth interior. Treat it as canonical (0,0,0,0): its
+    // don't-care matte RGB is ignored, but the alpha discontinuity drives
+    // activity high so dither is suppressed toward DITHER_EDGE_FLOOR at the
+    // boundary (no speckled cutout edge). Visible neighbors use their
+    // posterized color.
+    let nc = if n.a == 0 {
+      RGBA8 {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 0,
+      }
+    } else {
+      posterize(n, bits)
+    };
+    let d = dist2(here, nc);
+    if d > *act {
+      *act = d;
+    }
+  };
+  if x > 0 {
+    consider(x - 1, y, &mut act);
+  }
+  if x + 1 < width {
+    consider(x + 1, y, &mut act);
+  }
+  if y > 0 {
+    consider(x, y - 1, &mut act);
+  }
+  if y + 1 < height {
+    consider(x, y + 1, &mut act);
+  }
+  act as f32
+}
+
+/// Maps a post-quantization residual `dist2` and a source-activity `dist2` to a
+/// dither strength in `[0, DITHER_MAX_STRENGTH]`.
+///
+/// `ramp`  : residual LO..HI -> 0..1 (the self-correcting banding signal).
+/// `edge`  : activity 0..EDGE_ACT -> 1..EDGE_FLOOR (edge/texture suppressor).
+/// strength = ramp * edge * MAX_STRENGTH.
+///
+/// Pure f32 over integer-derived `dist2` inputs; no RNG, no f64 in control flow,
+/// no map iteration. Identical inputs -> identical bits on every run/process.
+#[inline]
+fn dither_strength(resid: f32, activity: f32) -> f32 {
+  // Residual ramp: clean map -> 0, banding map -> 1.
+  let span = DITHER_RESID_HI - DITHER_RESID_LO;
+  let ramp = if span <= 0.0 {
+    if resid >= DITHER_RESID_HI { 1.0 } else { 0.0 }
+  } else {
+    ((resid - DITHER_RESID_LO) / span).clamp(0.0, 1.0)
+  };
+  // Edge suppressor: flat source -> 1.0, hard edge -> DITHER_EDGE_FLOOR.
+  let edge = if DITHER_EDGE_ACT <= 0.0 {
+    DITHER_EDGE_FLOOR
+  } else {
+    let t = (activity / DITHER_EDGE_ACT).clamp(0.0, 1.0);
+    1.0 - (1.0 - DITHER_EDGE_FLOOR) * t
+  };
+  (ramp * edge * DITHER_MAX_STRENGTH).clamp(0.0, 1.0)
+}
+
+/// Floyd-Steinberg error-diffusion remap with serpentine scanning and selective,
+/// residual-aware, edge-gated per-pixel dither strength.
+///
+/// Standard 7/3/5/1 kernel over `f32` RGBA error rows; alpha is dithered
+/// alongside color. Serpentine (boustrophedon) scanning alternates row direction
+/// to avoid directional artifacts. Nearest-entry selection uses [`dist2`] on the
+/// FULL accumulated inbound error (only the OUTBOUND diffused error is scaled by
+/// strength), so upstream gradient energy is always honored at index selection
+/// and no bright/dark seam forms where strength drops.
+///
+/// Selective dithering: pixels that map cleanly (small residual) diffuse little
+/// or nothing — keeping flats and edges byte-flat so DEFLATE sees long runs —
+/// while pixels with large residual in smooth source regions diffuse to smooth
+/// gradients that would otherwise band. Hard edges / busy texture are suppressed
+/// (their detail masks any +-1 noise). A hard per-channel dead-zone and a
+/// symmetric accumulated-error clamp prevent sub-threshold jitter and
+/// single-pixel streaks. Determinism is preserved: the strength signal is pure
+/// f32 over integer-`dist2` inputs, and source activity reads only the
+/// direction-independent posterized source.
+fn remap_dither(px: &[RGBA8], width: usize, height: usize, palette: &[RGBA8], bits: u8) -> Vec<u8> {
+  let mut indices = vec![0u8; px.len()];
+  if width == 0 || height == 0 {
+    return indices;
+  }
+  // Two error rows of (r, g, b, a) deltas in f32 for sub-unit accumulation.
+  let mut cur = vec![[0f32; 4]; width];
+  let mut next = vec![[0f32; 4]; width];
+
+  for y in 0..height {
+    for slot in next.iter_mut() {
+      *slot = [0.0; 4];
+    }
+    let l2r = y % 2 == 0;
+    for step in 0..width {
+      let x = if l2r { step } else { width - 1 - step };
+      let base = y * width + x;
+      // Fully-transparent pixels carry a "don't care" matte RGB. Skip them: the
+      // transparent-slot override in quantize_pass assigns their index, and
+      // diffusing their matte error would tint visible neighbors.
+      if px[base].a == 0 {
+        continue;
+      }
+      let src = posterize(px[base], bits);
+      // Apply accumulated inbound error, clamped per-channel (Ulichney streak
+      // guard) so a single bad pixel can't poison the rest of the run. Index
+      // selection always uses this FULL inbound error.
+      let e = cur[x];
+      let want = RGBA8 {
+        r: clamp_u8(src.r as f32 + dither_clamp_err(e[0])),
+        g: clamp_u8(src.g as f32 + dither_clamp_err(e[1])),
+        b: clamp_u8(src.b as f32 + dither_clamp_err(e[2])),
+        a: clamp_u8(src.a as f32 + dither_clamp_err(e[3])),
+      };
+      let idx = nearest(palette, want);
+      indices[base] = idx as u8;
+      let chosen = palette[idx];
+
+      // Post-quantization residual: how far the chosen entry is from the target
+      // we wanted. Small => clean map (keep flat); large => band risk.
+      let resid = dist2(want, chosen) as f32;
+      // Direction-independent local source activity (4-neighborhood of px[]).
+      let activity = dither_source_activity(px, width, height, x, y, src, bits);
+      let strength = dither_strength(resid, activity);
+
+      // Outbound error to diffuse: hard dead-zone, then scale by strength. The
+      // dead-zone drops sub-threshold jitter; the scale damps where the map is
+      // clean / on edges.
+      //
+      // The THREE color channels are additionally scaled by the source pixel's
+      // visibility `vis = src.a / 255` (premultiplied alpha, Porter-Duff 1984):
+      // a pixel's visible color contribution is color*alpha, so a near-transparent
+      // source must not inject its (invisible) matte RGB into neighbors — including
+      // fully-opaque ones. The ALPHA channel is visibility itself and stays
+      // UNSCALED. For opaque sources (`src.a == 255`) `vis == 1.0` exactly, so the
+      // outbound error — and thus every byte of output — is unchanged.
+      let vis = src.a as f32 / 255.0;
+      let err = [
+        dither_deadzone(want.r as f32 - chosen.r as f32) * strength * vis,
+        dither_deadzone(want.g as f32 - chosen.g as f32) * strength * vis,
+        dither_deadzone(want.b as f32 - chosen.b as f32) * strength * vis,
+        dither_deadzone(want.a as f32 - chosen.a as f32) * strength,
+      ];
+
+      // Skip diffusion entirely when nothing would propagate. Keeps both error
+      // rows at exactly 0.0 across flat runs (byte-clean flats, no float drift
+      // re-triggering near-threshold dither downstream).
+      if err[0] != 0.0 || err[1] != 0.0 || err[2] != 0.0 || err[3] != 0.0 {
+        // Serpentine neighbor offsets (forward = scan direction).
+        let fwd: isize = if l2r { 1 } else { -1 };
+        diffuse(&mut cur, x as isize + fwd, 7.0 / 16.0, &err);
+        diffuse(&mut next, x as isize - fwd, 3.0 / 16.0, &err);
+        diffuse(&mut next, x as isize, 5.0 / 16.0, &err);
+        diffuse(&mut next, x as isize + fwd, 1.0 / 16.0, &err);
+      }
+    }
+    std::mem::swap(&mut cur, &mut next);
+  }
+  indices
+}
+
+#[inline]
+fn clamp_u8(v: f32) -> u8 {
+  v.round().clamp(0.0, 255.0) as u8
+}
+
+#[inline]
+fn diffuse(row: &mut [[f32; 4]], x: isize, factor: f32, err: &[f32; 4]) {
+  if x < 0 || x as usize >= row.len() {
+    return;
+  }
+  let cell = &mut row[x as usize];
+  for k in 0..4 {
+    cell[k] += err[k] * factor;
+  }
+}
+
+/// Computes achieved quality in `0..=100` from the alpha-weighted RMSE between
+/// the quantizer's *input* pixels and their remapped palette colors.
+///
+/// Quality measures how faithfully the palette reproduces the image the
+/// quantizer was actually asked to represent — i.e. the **posterized** pixels.
+/// Posterization is an explicit, user-requested lossy reduction (a no-op when
+/// `bits == 0`), so its error is deliberately excluded from the gate: a result
+/// that exactly reproduces the posterized image scores 100, and any *further*
+/// quantization error drives the score below 100. The mapping is a
+/// monotonically-decreasing heuristic for the `min_quality` gate, not a match to
+/// any external metric.
+///
+/// Only *visible* (`a > 0`) pixels are scored. Fully-transparent pixels map to
+/// the exact transparent slot (zero error) but are arbitrarily numerous in a
+/// sprite/icon with a large transparent canvas; counting them in the denominator
+/// would dilute the visible-region error and let a badly-quantized icon pass the
+/// gate. An all-transparent image is lossless, so it scores 100.
+fn quality_score(px: &[RGBA8], bits: u8, palette: &[RGBA8], indices: &[u8]) -> u8 {
+  let mut sum_err = 0f64;
+  let mut n = 0u64;
+  // Exact-lossless flag: stays true only while every visible pixel's chosen
+  // palette color is BYTE-IDENTICAL to its reference. The accumulated `dist2`
+  // alone cannot decide losslessness because `dist2` truncates the
+  // alpha-weighted RGB term with integer division (`* wa / 510`): for a < 255 a
+  // 1-LSB near-opaque RGB difference floors to 0, so a genuinely lossy remap can
+  // accumulate zero error and would otherwise report 100. Equality here is exact
+  // (no float, no `dist2`), so the score==100 verdict means true byte-identity.
+  let mut lossless = true;
+  for (i, &p) in px.iter().enumerate() {
+    if p.a == 0 {
+      continue;
+    }
+    // Compare against the posterized reference, not the raw source, so the
+    // user's explicit posterization is never counted as quantizer error. With
+    // `bits == 0` (the default operating point) the reference IS the raw source,
+    // and the fast path returns 100 exactly when the output reproduces this same
+    // posterized reference byte-for-byte, so 100 keeps a single consistent
+    // meaning: "byte-identical to the (posterized) input on every visible pixel".
+    let reference = posterize(p, bits);
+    let q = palette[indices[i] as usize];
+    if q != reference {
+      lossless = false;
+    }
+    sum_err += dist2(reference, q) as f64;
+    n += 1;
+  }
+  if n == 0 {
+    return 100;
+  }
+  let mse = sum_err / n as f64;
+  // Only declare a perfect 100 when the output is byte-identical to the
+  // reference on every visible pixel. `mse <= 0.0` is necessary but NOT
+  // sufficient: `dist2`'s `* wa / 510` truncation can zero out a real
+  // near-opaque difference. The exact `lossless` flag closes that gap so the
+  // `min_quality == 100` lossless gate rejects any lossy visible remap.
+  if mse <= 0.0 && lossless {
+    return 100;
+  }
+  let rmse = mse.sqrt();
+  // Denominator calibrated empirically against the bundled photographic test
+  // image: an ordinary default 256-color reduction lands ~90 (comfortably above
+  // the default min_quality of 70), while heavier reductions fall off smoothly.
+  // The `.min(99.0)` below guarantees a lossy result can never report 100, so a
+  // `min_quality` of 100 always rejects any lossy output.
+  let score = 100.0 / (1.0 + rmse / 64.0);
+  let score = score.min(99.0);
+  score.round().clamp(0.0, 99.0) as u8
+}
+
+/// Sorts the palette by packed RGBA and rewrites indices to match, so output
+/// bytes are identical across runs regardless of `HashMap` iteration order.
+fn canonicalize(palette: Vec<RGBA8>, indices: &mut [u8]) -> Vec<RGBA8> {
+  let n = palette.len();
+  let mut order: Vec<usize> = (0..n).collect();
+  order.sort_by_key(|&i| alpha_first_key(palette[i]));
+  // old index -> new index
+  let mut remap = vec![0u8; n];
+  let mut sorted = Vec::with_capacity(n);
+  for (new_i, &old_i) in order.iter().enumerate() {
+    remap[old_i] = new_i as u8;
+    sorted.push(palette[old_i]);
+  }
+  for idx in indices.iter_mut() {
+    *idx = remap[*idx as usize];
+  }
+  sorted
+}
+
+/// Proportionally pre-scales the histogram entry weights down to roughly `cap`
+/// total, so Wu's exact-integer SSE moments stay precise on huge images.
+///
+/// `compute_best_split` forms the reduction numerator `red_num ~ 2^19 · N^4`
+/// (`N = Σ count`, the total weight) directly in `i128` — the i256 widening in
+/// [`cmp_ratio`] only protects the cross-products inside `cmp_ratio`, not these
+/// operands. This cap is NOT the overflow guarantee: it cannot bound `N` for a
+/// pathological input whose distinct-color count already exceeds `cap` (the
+/// `.max(1)` floor keeps every entry present, so the post-cap total is
+/// `max(cap, entries.len())`, not `~cap`). The HARD overflow guard lives in
+/// [`split_reduction`], whose checked arithmetic returns `None` on overflow and
+/// needs no entry-count assumption.
+///
+/// What the cap buys: for a huge but CONCENTRATED-weight image (few distinct
+/// colors, each carrying enormous counts) it scales `N` down proportionally so
+/// the split decision is computed in a precise integer regime instead of forcing
+/// every box's `red_num` into [`split_reduction`]'s no-split overflow fallback.
+/// Scaling is proportional, so the variance-minimizing decision is preserved up
+/// to integer rounding; it only triggers for >~67M-weight inputs, and for any
+/// normal image it is a no-op.
+fn cap_entry_weights(entries: &mut [ColorCount], cap: u128) {
+  let total: u128 = entries.iter().map(|e| e.count as u128).sum();
+  if total > cap {
+    for e in entries.iter_mut() {
+      // The `.max(1)` keeps every visible color present (weight >= 1); it can
+      // push the post-scaling total slightly above `cap` (by at most `len`),
+      // which the bound above already accounts for.
+      e.count = ((e.count as u128 * cap / total).max(1)) as u64;
+    }
+  }
+}
+
+/// Shared, pass-invariant inputs for [`quantize_pass`].
+struct PassInput<'a> {
+  px: &'a [RGBA8],
+  width: usize,
+  height: usize,
+  hist: &'a HashMap<RGBA8, u64>,
+  has_transparent: bool,
+  bits: u8,
+}
+
+/// Runs the full quantization pipeline for a fixed `max_colors`, returning the
+/// palette, indices, and achieved quality. Internal helper; the public entry
+/// point [`quantize_rgba`] wraps this with the retry policy.
+fn quantize_pass(
+  input: &PassInput,
+  max_colors: usize,
+  kmeans_iters: u8,
+  dither: bool,
+) -> QuantizeOutput {
+  let PassInput {
+    px,
+    width,
+    height,
+    hist,
+    has_transparent,
+    bits,
+  } = *input;
+  // Reserve one exact fully-transparent slot if needed so transparency stays
+  // lossless. We hand median-cut one fewer slot and prepend the slot after.
+  let transparent = RGBA8 {
+    r: 0,
+    g: 0,
+    b: 0,
+    a: 0,
+  };
+  let reserve = has_transparent && max_colors >= 2;
+  let cut_colors = if reserve { max_colors - 1 } else { max_colors };
+
+  // Cluster over VISIBLE colors only. Fully-transparent pixels all collapse to
+  // a single (0,0,0,0) "don't care" matte; feeding that (often huge) count into
+  // median-cut / k-means wastes palette budget on an invisible color and can
+  // round a shared cluster's centroid to a==0 with nonzero RGB — a spurious
+  // transparent entry that would displace the exact slot reserved below.
+  // Excluding a==0 here guarantees every centroid keeps a>=1.
+  let entries: Vec<ColorCount> = {
+    let mut v: Vec<ColorCount> = hist
+      .iter()
+      .filter(|(c, _)| c.a > 0)
+      .map(|(&color, &count)| ColorCount { color, count })
+      .collect();
+    v.sort_by_key(|e| packed(e.color));
+    v
+  };
+
+  // Proportionally pre-scale the total population weight so the Wu split's
+  // exact-integer SSE moments (`red_num ~ 2^19 · N^4`, formed in i128) stay
+  // precise on huge CONCENTRATED-weight images. This is a precision aid, not the
+  // overflow guard — `split_reduction`'s checked arithmetic is what makes
+  // overflow impossible regardless of entry count. A no-op for any normal image
+  // (the bundled test PNG is ~697k px, far below the cap).
+  //
+  // Cap only the COPY fed to the Wu split; k-means must see the TRUE populations
+  // so centroids and D² reseeding reflect the real image (the `.max(1)` cap floor
+  // would otherwise over-weight rare colors). A no-op for any image <= 2^26 px
+  // (e.g. the 697k photo), so q75 is unchanged.
+  let mut split_entries = entries.clone();
+  let cap: u128 = 1 << 26;
+  let true_total: u128 = entries.iter().map(|e| e.count as u128).sum();
+  cap_entry_weights(&mut split_entries, cap);
+
+  // When the cap bit, `cap_entry_weights` rewrote `.count` 1:1 by color, so each
+  // capped entry maps to a unique TRUE count. Build a packed-color -> true-count
+  // lookup so `median_cut`'s final centroids use the real populations (the Wu
+  // SPLIT still scores the capped copy). When the cap was a no-op (`split_entries
+  // == entries`, e.g. any image <= 2^26 px incl. the 697k photo) we pass `None`:
+  // capped == true for every color, so the centroid is identical either way and
+  // q75 stays 262053.
+  let true_counts: Option<HashMap<u32, u64>> = if true_total > cap {
+    Some(entries.iter().map(|e| (packed(e.color), e.count)).collect())
+  } else {
+    None
+  };
+
+  let mut palette = median_cut(&split_entries, cut_colors.max(1), true_counts.as_ref());
+  kmeans_refine(&mut palette, &entries, kmeans_iters);
+
+  if reserve {
+    // Clustering above only saw a>0 colors, so no centroid is transparent;
+    // insert the single exact (0,0,0,0) slot so transparency stays lossless.
+    if !palette.iter().any(|c| c.a == 0) {
+      if palette.len() >= MAX_PALETTE {
+        palette.pop();
+      }
+      palette.insert(0, transparent);
+    }
+  }
+
+  // Deduplicate palette entries that collapsed onto each other.
+  palette.sort_by_key(|c| packed(*c));
+  palette.dedup();
+  if palette.is_empty() {
+    palette.push(RGBA8::default());
+  }
+
+  let mut indices = if dither {
+    remap_dither(px, width, height, &palette, bits)
+  } else {
+    remap_nearest(px, &palette, bits)
+  };
+
+  // Force fully-transparent source pixels onto the exact transparent slot so
+  // dithering never bleeds color into transparent regions.
+  if reserve && let Some(tidx) = palette.iter().position(|c| c.a == 0) {
+    for (i, &p) in px.iter().enumerate() {
+      if p.a == 0 {
+        indices[i] = tidx as u8;
+      }
+    }
+  }
+
+  let palette = canonicalize(palette, &mut indices);
+  let quality = quality_score(px, bits, &palette, &indices);
+
+  QuantizeOutput {
+    palette,
+    indices,
+    quality,
+  }
+}
+
+/// Quantizes an RGBA image to an 8-bit indexed palette.
+///
+/// This function is infallible: it always returns a palette and a full index
+/// buffer; the caller decides whether the achieved `quality` is acceptable.
+///
+/// Fast path: if the image already has `<= max_colors` distinct colors the exact
+/// colors become the palette, the remap is a direct lookup, and `quality = 100`.
+///
+/// Retry policy: if the first pass scores below `min_quality` and `max_colors`
+/// was below 256, it retries once at 256 colors (with one extra k-means pass)
+/// and keeps whichever result scored higher.
+pub fn quantize_rgba(
+  px: &[RGBA8],
+  width: usize,
+  height: usize,
+  cfg: &QuantizeConfig,
+) -> QuantizeOutput {
+  let bits = cfg.posterization;
+  let hist = build_histogram(px, bits);
+  let max_colors = (cfg.max_colors as usize).clamp(1, MAX_PALETTE);
+
+  // ---- Fast path: already fits in the palette (lossless). ----
+  if hist.len() <= max_colors {
+    let mut palette: Vec<RGBA8> = hist.keys().copied().collect();
+    palette.sort_by_key(|c| alpha_first_key(*c));
+    // Direct exact lookup for every (posterized) pixel.
+    let mut lut: HashMap<RGBA8, u8> = HashMap::with_capacity(palette.len());
+    for (i, &c) in palette.iter().enumerate() {
+      lut.insert(c, i as u8);
+    }
+    let mut indices = Vec::with_capacity(px.len());
+    for &p in px {
+      let key = canonical_key(p, bits);
+      // Posterization is applied identically when building the histogram, so
+      // every key is guaranteed present.
+      indices.push(*lut.get(&key).unwrap_or(&0));
+    }
+    return QuantizeOutput {
+      palette,
+      indices,
+      quality: 100,
+    };
+  }
+
+  let has_transparent = hist.keys().any(|c| c.a == 0);
+  let input = PassInput {
+    px,
+    width,
+    height,
+    hist: &hist,
+    has_transparent,
+    bits,
+  };
+
+  // ---- First pass at the requested palette size. ----
+  let first = quantize_pass(&input, max_colors, cfg.kmeans_iters, cfg.dither);
+
+  // ---- Retry once at full 256 colors if we fell short. ----
+  if first.quality < cfg.min_quality && max_colors < MAX_PALETTE {
+    let retry = quantize_pass(
+      &input,
+      MAX_PALETTE,
+      cfg.kmeans_iters.saturating_add(1),
+      cfg.dither,
+    );
+    if retry.quality >= first.quality {
+      return retry;
+    }
+  }
+
+  first
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn cfg(max_colors: u16, dither: bool, kmeans: u8) -> QuantizeConfig {
+    QuantizeConfig {
+      max_colors,
+      min_quality: 0,
+      kmeans_iters: kmeans,
+      dither,
+      posterization: 0,
+    }
+  }
+
+  fn rgba(r: u8, g: u8, b: u8, a: u8) -> RGBA8 {
+    RGBA8 { r, g, b, a }
+  }
+
+  // A tiny deterministic PRNG so the fuzz-lite test needs no extra deps.
+  struct Lcg(u64);
+  impl Lcg {
+    fn next_u32(&mut self) -> u32 {
+      // Numerical Recipes LCG constants.
+      self.0 = self
+        .0
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
+      (self.0 >> 32) as u32
+    }
+    fn byte(&mut self) -> u8 {
+      (self.next_u32() & 0xff) as u8
+    }
+    /// Full 64-bit draw, composed from two 32-bit draws.
+    fn next_u64(&mut self) -> u64 {
+      ((self.next_u32() as u64) << 32) | (self.next_u32() as u64)
+    }
+  }
+
+  #[test]
+  fn fast_path_lossless_exact_palette() {
+    // 4 distinct colors, max_colors well above that -> lossless.
+    let px = vec![
+      rgba(10, 20, 30, 255),
+      rgba(200, 100, 50, 255),
+      rgba(0, 0, 0, 0),
+      rgba(255, 255, 255, 255),
+      rgba(10, 20, 30, 255),
+    ];
+    let c = cfg(64, true, 3);
+    let out = quantize_rgba(&px, 5, 1, &c);
+    assert_eq!(out.quality, 100, "fast path must be lossless");
+    assert_eq!(out.palette.len(), 4, "exactly the distinct colors");
+    assert_eq!(out.indices.len(), px.len());
+    // Every pixel maps to its exact color.
+    for (i, &p) in px.iter().enumerate() {
+      assert_eq!(out.palette[out.indices[i] as usize], p);
+    }
+  }
+
+  #[test]
+  fn single_color_image() {
+    let px = vec![rgba(123, 45, 67, 255); 16];
+    let c = cfg(16, true, 3);
+    let out = quantize_rgba(&px, 4, 4, &c);
+    assert_eq!(out.palette.len(), 1);
+    assert_eq!(out.quality, 100);
+    assert!(out.indices.iter().all(|&i| i == 0));
+  }
+
+  #[test]
+  fn determinism_same_input_same_output() {
+    // Build a >max_colors image so we exercise the full pipeline, not fast path.
+    let mut px = Vec::new();
+    let mut g = Lcg(0xDEADBEEF);
+    for _ in 0..1024 {
+      px.push(rgba(g.byte(), g.byte(), g.byte(), 255));
+    }
+    let c = cfg(16, true, 4);
+    let a = quantize_rgba(&px, 32, 32, &c);
+    let b = quantize_rgba(&px, 32, 32, &c);
+    assert_eq!(a.palette, b.palette, "palette must be deterministic");
+    assert_eq!(a.indices, b.indices, "indices must be deterministic");
+    assert_eq!(a.quality, b.quality);
+  }
+
+  #[test]
+  fn fuzz_lite_no_panic_invariants() {
+    let mut g = Lcg(0x1234_5678_9ABC_DEF0);
+    for trial in 0..40 {
+      let w = (1 + (g.next_u32() % 17)) as usize;
+      let h = (1 + (g.next_u32() % 17)) as usize;
+      let mut px = Vec::with_capacity(w * h);
+      for _ in 0..(w * h) {
+        px.push(rgba(g.byte(), g.byte(), g.byte(), g.byte()));
+      }
+      let max_colors = (2 + (g.next_u32() % 255)) as u16;
+      // min_quality is fixed at 0 here so the at-256 retry never fires; that
+      // keeps the `palette.len() <= max_colors` invariant meaningful. (The
+      // retry path can deliberately exceed the requested size, up to 256, to
+      // meet a high min_quality — that is exercised by the throwing JS test.)
+      let c = QuantizeConfig {
+        max_colors,
+        min_quality: 0,
+        kmeans_iters: (g.next_u32() % 6) as u8,
+        dither: g.byte() & 1 == 0,
+        posterization: (g.next_u32() % 8) as u8,
+      };
+      let out = quantize_rgba(&px, w, h, &c);
+      assert_eq!(out.indices.len(), w * h, "trial {trial}: index count");
+      assert!(
+        out.palette.len() <= max_colors as usize,
+        "trial {trial}: palette {} > max {}",
+        out.palette.len(),
+        max_colors
+      );
+      assert!(
+        out.palette.len() <= MAX_PALETTE,
+        "trial {trial}: palette exceeds 256"
+      );
+      assert!(!out.palette.is_empty(), "trial {trial}: empty palette");
+      for &idx in &out.indices {
+        assert!(
+          (idx as usize) < out.palette.len(),
+          "trial {trial}: index out of range"
+        );
+      }
+    }
+  }
+
+  #[test]
+  fn retry_can_exceed_requested_max_when_quality_demanded() {
+    // A noisy photo-like buffer with far more than `max_colors` colors and a
+    // strict min_quality forces the retry-at-256 path; the resulting palette
+    // may exceed the requested size but never the hard 256 cap.
+    let mut px = Vec::new();
+    let mut g = Lcg(0xFEED_FACE_CAFE_BEEF);
+    for _ in 0..4096 {
+      px.push(rgba(g.byte(), g.byte(), g.byte(), 255));
+    }
+    let c = QuantizeConfig {
+      max_colors: 16,
+      min_quality: 100,
+      kmeans_iters: 2,
+      dither: false,
+      posterization: 0,
+    };
+    let out = quantize_rgba(&px, 64, 64, &c);
+    assert!(out.palette.len() <= MAX_PALETTE, "never exceed 256");
+    assert!(
+      out.palette.len() > 16,
+      "retry should have expanded past the requested 16, got {}",
+      out.palette.len()
+    );
+    for &idx in &out.indices {
+      assert!((idx as usize) < out.palette.len());
+    }
+  }
+
+  #[test]
+  fn posterization_reduces_distinct_colors() {
+    // A smooth gradient with many near-neighbor colors.
+    let mut px = Vec::new();
+    for i in 0..256u32 {
+      px.push(rgba(i as u8, (255 - i) as u8, (i / 2) as u8, 255));
+    }
+    let distinct = |bits: u8| {
+      let h = build_histogram(&px, bits);
+      h.len()
+    };
+    let none = distinct(0);
+    let heavy = distinct(4);
+    assert!(
+      heavy < none,
+      "posterization must reduce distinct colors: {heavy} !< {none}"
+    );
+  }
+
+  #[test]
+  fn transparent_slot_is_exact() {
+    // Many opaque colors + some fully transparent pixels; small palette.
+    let mut px = Vec::new();
+    let mut g = Lcg(0xABCDEF01);
+    for _ in 0..500 {
+      px.push(rgba(g.byte(), g.byte(), g.byte(), 255));
+    }
+    for _ in 0..100 {
+      px.push(rgba(g.byte(), g.byte(), g.byte(), 0));
+    }
+    let c = cfg(16, false, 2);
+    let out = quantize_rgba(&px, 30, 20, &c);
+    // There must be an exact a==0 palette entry and every transparent source
+    // pixel must map to it.
+    assert!(
+      out.palette.iter().any(|p| p.a == 0),
+      "must reserve a transparent slot"
+    );
+    for (i, &p) in px.iter().enumerate() {
+      if p.a == 0 {
+        assert_eq!(out.palette[out.indices[i] as usize].a, 0);
+      }
+    }
+  }
+
+  #[test]
+  fn from_options_mapping() {
+    use crate::png::PngQuantOptions;
+    let o = PngQuantOptions {
+      min_quality: None,
+      max_quality: None,
+      speed: None,
+      posterization: None,
+    };
+    let c = QuantizeConfig::from_options(&o);
+    assert_eq!(c.min_quality, 70);
+    // max_quality default 99 -> ~251 colors.
+    assert!(
+      c.max_colors >= 248 && c.max_colors <= 254,
+      "got {}",
+      c.max_colors
+    );
+    // speed default 5 -> 5 kmeans iters, dither on.
+    assert_eq!(c.kmeans_iters, 5);
+    assert!(c.dither);
+
+    let o2 = PngQuantOptions {
+      min_quality: Some(80),
+      max_quality: Some(50),
+      speed: Some(10),
+      posterization: Some(9),
+    };
+    let c2 = QuantizeConfig::from_options(&o2);
+    // min and max are independent gates; min must NOT be clamped to max.
+    assert_eq!(c2.min_quality, 80);
+    assert_eq!(c2.kmeans_iters, 0); // speed 10
+    assert!(!c2.dither); // speed 10 skips dither
+    assert_eq!(c2.posterization, 7); // clamped 0..=7
+  }
+
+  #[test]
+  fn posterization_preserves_full_transparency() {
+    // Regression (Codex F1): posterizing the alpha channel turned a==0 into a
+    // nonzero midpoint, making fully-transparent pixels faintly visible. A
+    // transparent source pixel must stay fully transparent with posterization on.
+    let mut px = vec![rgba(255, 0, 0, 0)]; // transparent red matte
+    for i in 0..300u32 {
+      px.push(rgba(i as u8, (i / 2) as u8, (i / 3) as u8, 255));
+    }
+    let c = QuantizeConfig {
+      max_colors: 64,
+      min_quality: 0,
+      kmeans_iters: 2,
+      dither: true,
+      posterization: 4,
+    };
+    let out = quantize_rgba(&px, 7, 43, &c);
+    assert_eq!(
+      out.palette[out.indices[0] as usize].a, 0,
+      "transparent pixel must remain fully transparent under posterization"
+    );
+  }
+
+  #[test]
+  fn transparent_matte_does_not_bleed() {
+    // Regression (Codex F2): RGB hidden behind fully-transparent pixels must not
+    // affect the visible (opaque) output — neither via histogram pollution nor
+    // via dithering error diffusion. Two images that differ only in the matte
+    // color behind transparency must map every opaque pixel identically.
+    let mut base = Vec::new();
+    let mut g = Lcg(0x5151_5151_2323_2323);
+    for _ in 0..400 {
+      base.push(rgba(g.byte(), g.byte(), g.byte(), 255));
+    }
+    let mut a = base.clone();
+    let mut b = base.clone();
+    for i in (0..a.len()).step_by(5) {
+      a[i] = rgba(255, 0, 0, 0); // red matte, transparent
+      b[i] = rgba(0, 0, 255, 0); // blue matte, transparent
+    }
+    let c = QuantizeConfig {
+      max_colors: 32,
+      min_quality: 0,
+      kmeans_iters: 2,
+      dither: true,
+      posterization: 0,
+    };
+    let oa = quantize_rgba(&a, 20, 20, &c);
+    let ob = quantize_rgba(&b, 20, 20, &c);
+    for (i, px) in a.iter().enumerate() {
+      if px.a == 255 {
+        assert_eq!(
+          oa.palette[oa.indices[i] as usize], ob.palette[ob.indices[i] as usize],
+          "matte behind transparency must not change visible pixel {i}"
+        );
+      }
+    }
+  }
+
+  #[test]
+  fn transparency_excluded_from_palette_construction() {
+    // Regression (Codex F1, re-verified): fully-transparent pixels must NOT be
+    // counted in median-cut / k-means. A transparency-heavy image whose visible
+    // colors include a low-alpha one used to let the huge transparent population
+    // drag a shared cluster's centroid to a==0 with nonzero RGB (e.g. (2,0,0,0)).
+    // That spurious entry satisfied the "any a==0?" reserve check and displaced
+    // the exact transparent slot. We assert the only a==0 entry is exactly
+    // (0,0,0,0) and that every transparent source pixel maps to it. (We do NOT
+    // assert where the low-alpha visible pixel lands: under a tiny palette a
+    // near-transparent color may legitimately be nearest to (0,0,0,0).)
+    let mut px = Vec::new();
+    for _ in 0..5000 {
+      px.push(rgba(255, 0, 0, 0)); // transparent, non-black matte (RGB don't-care)
+    }
+    for _ in 0..30 {
+      px.push(rgba(255, 0, 0, 1)); // faintly-visible red, metric-near transparent
+    }
+    for k in 0..300u32 {
+      let v = (10 + (k % 6)) as u8;
+      px.push(rgba(v, v, 240, 255)); // opaque blue cluster
+    }
+    for k in 0..300u32 {
+      let v = (10 + (k % 6)) as u8;
+      px.push(rgba(240, v, v, 255)); // opaque red cluster
+    }
+    let c = QuantizeConfig {
+      max_colors: 4,
+      min_quality: 0,
+      kmeans_iters: 5,
+      dither: false,
+      posterization: 0,
+    };
+    let width = px.len();
+    let out = quantize_rgba(&px, width, 1, &c);
+    // The exact transparent slot is present...
+    assert!(
+      out.palette.contains(&rgba(0, 0, 0, 0)),
+      "exact (0,0,0,0) slot must be reserved, got {:?}",
+      out.palette
+    );
+    // ...and it is the ONLY a==0 entry (no spurious nonzero-RGB transparent).
+    assert!(
+      out
+        .palette
+        .iter()
+        .all(|c| c.a != 0 || (c.r == 0 && c.g == 0 && c.b == 0)),
+      "no a==0 entry may carry nonzero RGB, got {:?}",
+      out.palette
+    );
+    // ...and every fully-transparent source pixel maps to it exactly.
+    for (i, &p) in px.iter().enumerate() {
+      if p.a == 0 {
+        assert_eq!(out.palette[out.indices[i] as usize], rgba(0, 0, 0, 0));
+      }
+    }
+  }
+
+  #[test]
+  fn transparent_padding_does_not_inflate_quality() {
+    // Regression (Codex F2): quality is scored over visible pixels only. Two
+    // images with identical visible content must report the same quality score
+    // regardless of surrounding fully-transparent padding; otherwise a sprite
+    // with a large transparent canvas could pass min_quality while its visible
+    // pixels are badly quantized.
+    let mut visible = Vec::new();
+    let mut g = Lcg(0x00C0_FFEE_F00D_1234);
+    for _ in 0..400 {
+      visible.push(rgba(g.byte(), g.byte(), g.byte(), 255)); // fully opaque
+    }
+    // Image A: visible content only, K color slots.
+    let ca = cfg(16, false, 3);
+    let out_a = quantize_rgba(&visible, visible.len(), 1, &ca);
+
+    // Image B: same visible content + heavy transparent padding, K+1 slots so the
+    // reserved transparent entry leaves the same K slots for color — both cluster
+    // the identical visible colors into the identical K palette entries.
+    let mut padded = visible.clone();
+    for _ in 0..2000 {
+      padded.push(rgba(255, 0, 0, 0)); // transparent, arbitrary matte
+    }
+    let cb = cfg(17, false, 3);
+    let out_b = quantize_rgba(&padded, padded.len(), 1, &cb);
+
+    assert_eq!(
+      out_a.quality, out_b.quality,
+      "transparent padding must not change the visible-region quality score"
+    );
+  }
+
+  #[test]
+  fn posterize_channel_drops_exact_bits() {
+    // Regression (Codex F3): posterization drops the low `bits` and leaves exactly
+    // 256>>bits evenly-spaced levels (the documented LSB-drop), not an off-by-one
+    // bucket count from centered rounding (which yielded e.g. 17 levels at bits=4).
+    use std::collections::HashSet;
+    for bits in 1..=7u8 {
+      let levels: HashSet<u8> = (0..=255u8).map(|v| posterize_channel(v, bits)).collect();
+      assert_eq!(
+        levels.len(),
+        256usize >> bits,
+        "bits={bits}: expected {} levels, got {}",
+        256usize >> bits,
+        levels.len()
+      );
+    }
+    // bits == 0 is the identity (all 256 levels preserved).
+    let identity: HashSet<u8> = (0..=255u8).map(|v| posterize_channel(v, 0)).collect();
+    assert_eq!(identity.len(), 256);
+  }
+
+  // ---- D²-weighted reseed tests ----
+
+  /// Helper: build a sorted `Vec<ColorCount>` from a slice of (color, count) pairs.
+  fn make_entries(items: &[(RGBA8, u64)]) -> Vec<ColorCount> {
+    let mut v: Vec<ColorCount> = items
+      .iter()
+      .map(|&(color, count)| ColorCount { color, count })
+      .collect();
+    v.sort_by_key(|e| packed(e.color));
+    v
+  }
+
+  #[test]
+  fn reseed_weights_by_population() {
+    // Fix A canary: the empty-cluster reseed weight is `count · D²`, not `D²`
+    // alone. A HIGH-population color and a LOW-population color at (essentially)
+    // the same residual must NOT have equal reseed probability — the
+    // high-population color should dominate. With one live center and one dead
+    // slot there is exactly one weighted LCG draw, so the pick is a single
+    // deterministic decision that this test pins.
+    //
+    // `anchor` (1,000,000 px) pins palette slot 0's recomputed centroid to
+    // (60,130,128). `hi` and `lo` are two satellites of `anchor`, in different
+    // channels, with near-equal residuals against that centroid — but `hi`
+    // carries 100,000 px and `lo` just 1. Under the OLD D²-only weighting their
+    // masses were close and the fixed-LCG draw landed on `lo` (the 1-pixel
+    // outlier); the `count · D²` weighting gives `hi` ~100,000:1 odds, so the
+    // dead slot is reseeded to `hi` instead. (Config found by exhaustively
+    // simulating the reseed draw; it is a genuine divergence, not a coincidence.)
+    let anchor = rgba(60, 128, 128, 255); // pins slot-0 centroid to (60,130,128)
+    let hi = rgba(60, 148, 128, 255); // high population
+    let lo = rgba(60, 128, 148, 255); // 1-pixel outlier, near-equal residual
+    let entries = make_entries(&[(anchor, 1_000_000), (hi, 100_000), (lo, 1)]);
+
+    // 2-slot palette: slot 0 == `anchor` (a live cluster every entry is nearest
+    // to), slot 1 == a far corner that ends up empty after assignment, so
+    // exactly one dead slot (index 1) is reseeded.
+    let far = rgba(0, 0, 0, 255);
+    let mut palette = vec![anchor, far];
+    kmeans_refine(&mut palette, &entries, 1);
+
+    // The reseeded dead slot must be the HIGH-population color, never the
+    // 1-pixel outlier. The old D²-only weighting put `lo` here; population
+    // weighting deterministically picks `hi`.
+    assert_eq!(
+      palette[1], hi,
+      "population-weighted reseed must put the high-count color {hi:?} in the dead slot, \
+       not the 1-pixel outlier {lo:?}; palette={palette:?}"
+    );
+
+    // Deterministic across independent calls.
+    let mut palette2 = vec![anchor, far];
+    kmeans_refine(&mut palette2, &entries, 1);
+    assert_eq!(
+      palette, palette2,
+      "population-weighted reseed must be deterministic"
+    );
+  }
+
+  #[test]
+  fn reseed_is_deterministic_with_empty_clusters() {
+    // 4 distinct visible colors as entries.
+    let red = rgba(255, 0, 0, 255);
+    let green = rgba(0, 255, 0, 255);
+    let blue = rgba(0, 0, 255, 255);
+    let yellow = rgba(255, 255, 0, 255);
+
+    let entries = make_entries(&[(red, 10), (green, 10), (blue, 10), (yellow, 10)]);
+
+    // 8-slot palette: 4 real colors + 4 garbage (zeros). The 4 garbage slots
+    // will be empty clusters and must be reseeded deterministically.
+    let garbage = rgba(0, 0, 0, 0);
+    let init_palette = vec![red, green, blue, yellow, garbage, garbage, garbage, garbage];
+
+    let mut palette_a = init_palette.clone();
+    let mut palette_b = init_palette.clone();
+
+    // Use 3 iters so multiple reseed rounds run.
+    kmeans_refine(&mut palette_a, &entries, 3);
+    kmeans_refine(&mut palette_b, &entries, 3);
+
+    assert_eq!(
+      palette_a, palette_b,
+      "reseed must produce identical palettes across two independent calls"
+    );
+
+    // No slot should still be the initial garbage color after reseeding
+    // (the 4 real entries will fill the 4 dead slots).
+    for &slot in &palette_a {
+      assert!(
+        slot != garbage || entries.iter().any(|e| e.color == garbage),
+        "dead slot was not reseeded: {:?}",
+        slot
+      );
+    }
+  }
+
+  #[test]
+  fn reseed_handles_zero_residual() {
+    // All entries have the SAME color; total D² == 0 → fallback path must not panic.
+    let red = rgba(255, 0, 0, 255);
+    let entries = make_entries(&[(red, 100)]);
+
+    // 4-slot palette, all initialized to red — 3 slots will be empty after first assign.
+    let mut palette_a = vec![red, red, red, red];
+    let mut palette_b = vec![red, red, red, red];
+
+    // Must not panic.
+    kmeans_refine(&mut palette_a, &entries, 3);
+    kmeans_refine(&mut palette_b, &entries, 3);
+
+    assert_eq!(
+      palette_a, palette_b,
+      "zero-residual reseed must still be deterministic"
+    );
+  }
+
+  #[test]
+  fn reseed_picks_high_residual_outlier() {
+    // Canary: pins the D²-weighted-LCG behavior.
+    // OLD argmax reseed produced a different pick; this test fails before the change.
+    //
+    // Use 6 entries and a 2-slot palette: all entries are forced into just 2
+    // clusters, so 4 of the (hypothetical extra) entries have large residuals.
+    // We directly call kmeans_refine with a palette that has 6 slots, only 2 of
+    // which will be non-empty after the first assign step, exercising reseed.
+    //
+    // Entries spread across the RGB gamut (sorted by packed for determinism):
+    let c0 = rgba(0, 0, 50, 255); // deep blue
+    let c1 = rgba(0, 0, 200, 255); // bright blue
+    let c2 = rgba(0, 200, 0, 255); // bright green
+    let c3 = rgba(200, 0, 0, 255); // bright red
+    let c4 = rgba(200, 200, 0, 255); // yellow
+    let c5 = rgba(255, 255, 255, 255); // white
+
+    let entries = make_entries(&[(c0, 10), (c1, 10), (c2, 10), (c3, 10), (c4, 10), (c5, 10)]);
+
+    // 6-slot palette seeded with only 2 real centroids (blue cluster, red
+    // cluster) and 4 copies of the first centroid as dead placeholders.
+    let blue_center = rgba(100, 0, 100, 255);
+    let red_center = rgba(200, 100, 0, 255);
+    let mut palette = vec![
+      blue_center,
+      red_center,
+      blue_center,
+      blue_center,
+      blue_center,
+      blue_center,
+    ];
+
+    // 1 iter so we see exactly one reseed round for the 4 dead slots.
+    kmeans_refine(&mut palette, &entries, 1);
+
+    // Slots 0 and 1 will become centroids (not original entry colors) after k-means
+    // updates their means; slots 2-5 are the dead slots reseeded from entry colors.
+    let known: std::collections::HashSet<u32> = [c0, c1, c2, c3, c4, c5]
+      .iter()
+      .map(|&c| packed(c))
+      .collect();
+    // Only the reseeded slots (2-5) must contain entry colors.
+    for p in &palette[2..] {
+      assert!(
+        known.contains(&packed(*p)),
+        "reseeded slot {:?} is not one of the 6 entry colors",
+        p
+      );
+    }
+
+    // The result must be deterministic (two calls on identical inputs agree).
+    let mut palette2 = vec![
+      blue_center,
+      red_center,
+      blue_center,
+      blue_center,
+      blue_center,
+      blue_center,
+    ];
+    kmeans_refine(&mut palette2, &entries, 1);
+    assert_eq!(
+      palette, palette2,
+      "D²-weighted reseed must be deterministic"
+    );
+
+    // Pin the specific reseeded slots the population-weighted (count · D²) LCG
+    // implementation produces. All six entries here carry count == 10, so the
+    // count factor is uniform — but it still rescales `total`, hence the modular
+    // draw `r = lcg % total` and the spread of picks differs from the D²-only
+    // weighting. (Values determined by running cargo test after implementing the
+    // population-weighted reseed.)
+    assert_eq!(
+      &palette[2..],
+      &[c5, c3, c2, c0],
+      "population-weighted (count · D²) LCG must pick these specific reseeded slots \
+       (canary; the D²-only weighting gave [c3, c2, c5, c1])"
+    );
+  }
+
+  #[test]
+  fn reseed_uses_nearest_live_center_d2() {
+    // Fix A canary: the empty-cluster D² baseline must be each entry's squared
+    // distance to its NEAREST CURRENT LIVE center, NOT the (now-moved) center of
+    // the cluster it was assigned to at the START of the iteration.
+    //
+    // Construction (entries are sorted by `packed`, so the reseed walk order is
+    // fixed). Two live seeds `p0`/`p1` plus one `far` slot that empties after the
+    // assignment pass, giving exactly one dead slot (index 2). After the in-place
+    // centroid recompute, at least one entry's nearest LIVE center is a different
+    // cluster than the one it was assigned to (its old center moved away), so the
+    // stale baseline assigns that entry a different residual than the nearest-live
+    // baseline. That flips which entry the fixed-LCG `count · D²` walk lands on:
+    //   - STALE (buggy) baseline reseeds slot 2 to the 90,000-px satellite.
+    //   - NEAREST-LIVE (fixed) baseline reseeds slot 2 to the 1,000,000-px anchor.
+    // (Construction found by exhaustively simulating both baselines over the exact
+    // reseed math; it is a genuine divergence, not a coincidence.)
+    let anchor = rgba(32, 139, 95, 255); // 1,000,000 px — the nearest-live pick
+    let satellite = rgba(193, 35, 15, 255); // 90,000 px — the stale (buggy) pick
+    let entries = make_entries(&[
+      (anchor, 1_000_000),
+      (rgba(123, 4, 83, 255), 600_000),
+      (rgba(153, 238, 58, 255), 800_000),
+      (satellite, 90_000),
+      (rgba(244, 240, 166, 255), 40_000),
+    ]);
+
+    let p0 = rgba(177, 204, 73, 255);
+    let p1 = rgba(16, 101, 109, 255);
+    let far = rgba(0, 0, 0, 255); // empties after assignment → dead slot 2
+    let mut palette = vec![p0, p1, far];
+    kmeans_refine(&mut palette, &entries, 1);
+
+    // The dead slot must be reseeded from the NEAREST-LIVE-center D² baseline,
+    // i.e. the high-population anchor — NOT the lower-population satellite the
+    // stale (moved old-assigned center) baseline would pick.
+    assert_eq!(
+      palette[2], anchor,
+      "nearest-live-center D² reseed must pick the high-population anchor {anchor:?}, \
+       not the satellite {satellite:?} the stale moved-assigned-center baseline picks; \
+       palette={palette:?}"
+    );
+    assert_ne!(
+      palette[2], satellite,
+      "stale moved-assigned-center baseline pick {satellite:?} must NOT win"
+    );
+
+    // The full reseeded palette is pinned (slots 0/1 are recomputed centroids,
+    // identical under both baselines since the fix only changes the reseed D²).
+    assert_eq!(
+      palette,
+      vec![rgba(161, 218, 58, 255), rgba(66, 88, 91, 255), anchor],
+      "nearest-live-center reseed palette pin"
+    );
+
+    // Deterministic across independent calls.
+    let mut palette2 = vec![p0, p1, far];
+    kmeans_refine(&mut palette2, &entries, 1);
+    assert_eq!(
+      palette, palette2,
+      "nearest-live reseed must be deterministic"
+    );
+  }
+
+  // ---- Wu variance-minimizing median-cut split tests ----
+
+  #[test]
+  fn wu_split_is_deterministic() {
+    // A crafted multi-cluster image, run the FULL quantize_rgba twice; palette and
+    // indices must be byte-identical. Exercises the integer-only Wu split decision
+    // (no f32/f64 in the split) across many splits.
+    let mut px = Vec::new();
+    // Four tight, well-separated clusters at the corners of the RGB cube, plus a
+    // few mid-gamut stragglers so several boxes compete for the next split.
+    let centers = [
+      (20u8, 20u8, 20u8),
+      (230, 30, 30),
+      (30, 230, 40),
+      (40, 50, 230),
+    ];
+    for &(cr, cg, cb) in &centers {
+      for dx in 0..6u8 {
+        for dy in 0..6u8 {
+          px.push(rgba(
+            cr.saturating_add(dx),
+            cg.saturating_add(dy),
+            cb.saturating_add(dx ^ dy),
+            255,
+          ));
+        }
+      }
+    }
+    px.push(rgba(128, 64, 200, 255));
+    px.push(rgba(200, 128, 64, 255));
+    px.push(rgba(64, 200, 128, 255));
+
+    let c = cfg(8, true, 4);
+    let a = quantize_rgba(&px, px.len(), 1, &c);
+    let b = quantize_rgba(&px, px.len(), 1, &c);
+    assert_eq!(
+      a.palette, b.palette,
+      "Wu split palette must be deterministic"
+    );
+    assert_eq!(
+      a.indices, b.indices,
+      "Wu split indices must be deterministic"
+    );
+    assert_eq!(a.quality, b.quality);
+  }
+
+  /// Total within-box weighted SSE of an assignment, summed over R,G,B,A using the
+  /// same integer moment definition the Wu split minimizes. Used only by tests to
+  /// compare partitions; lower is better.
+  fn total_sse(groups: &[Vec<ColorCount>]) -> f64 {
+    let mut sse = 0.0f64;
+    for g in groups {
+      let mut n = 0.0f64;
+      let mut s = [0.0f64; 4];
+      let mut q = [0.0f64; 4];
+      for e in g {
+        let w = e.count as f64;
+        let ch = [e.color.r, e.color.g, e.color.b, e.color.a];
+        n += w;
+        for k in 0..4 {
+          let x = ch[k] as f64;
+          s[k] += w * x;
+          q[k] += w * x * x;
+        }
+      }
+      if n > 0.0 {
+        for k in 0..4 {
+          sse += q[k] - s[k] * s[k] / n;
+        }
+      }
+    }
+    sse
+  }
+
+  #[test]
+  fn wu_split_separates_distinct_clusters() {
+    // K well-separated tight clusters with max_colors == K: variance-minimization
+    // must place one palette entry at (essentially) each cluster centroid, giving a
+    // far lower total SSE than a deliberately-bad partition that splits one cluster
+    // and merges two others.
+    let clusters = [
+      rgba(40, 40, 40, 255),
+      rgba(220, 40, 40, 255),
+      rgba(40, 220, 40, 255),
+    ];
+    let mut entries: Vec<ColorCount> = Vec::new();
+    for &c in &clusters {
+      // three tight members per cluster (±2 on R) so each is a real >=2 box.
+      for &dr in &[-2i16, 0, 2] {
+        entries.push(ColorCount {
+          color: rgba((c.r as i16 + dr) as u8, c.g, c.b, c.a),
+          count: 4,
+        });
+      }
+    }
+    entries.sort_by_key(|e| packed(e.color));
+
+    let palette = median_cut(&entries, clusters.len(), None);
+    assert_eq!(palette.len(), clusters.len(), "one box per cluster");
+
+    // Every cluster centroid has a palette entry within a couple LSBs.
+    for &c in &clusters {
+      let near = palette.iter().any(|p| {
+        (p.r as i32 - c.r as i32).abs() <= 3
+          && (p.g as i32 - c.g as i32).abs() <= 3
+          && (p.b as i32 - c.b as i32).abs() <= 3
+      });
+      assert!(
+        near,
+        "no palette entry near cluster {c:?}; palette={palette:?}"
+      );
+    }
+
+    // The Wu partition (group entries by nearest palette color) must beat a
+    // deliberately-bad partition that lumps the two red-ish clusters together and
+    // splits the dark cluster.
+    let mut wu_groups: Vec<Vec<ColorCount>> = vec![Vec::new(); palette.len()];
+    for &e in &entries {
+      wu_groups[nearest(&palette, e.color)].push(e);
+    }
+    // Bad partition: {first dark member} | {rest of dark + all of cluster1} | {cluster2}
+    let bad = vec![
+      vec![entries[0]],
+      entries[1..6].to_vec(),
+      entries[6..].to_vec(),
+    ];
+    assert!(
+      total_sse(&wu_groups) < total_sse(&bad),
+      "Wu SSE {} must beat bad-split SSE {}",
+      total_sse(&wu_groups),
+      total_sse(&bad)
+    );
+  }
+
+  #[test]
+  fn wu_split_picks_max_variance_axis() {
+    // Prove-fails canary. A tiny box where the variance-minimizing split chooses a
+    // DIFFERENT axis/boundary than the OLD widest-channel/population-median split.
+    //
+    // Input (5 entries): two G-separated pairs at low/high R, plus one mid straggler.
+    //   OLD split: widest channel is G (span 250) so it sorts by G and splits at the
+    //              population median, producing palette [(15,0,0,255),(23,238,0,255)].
+    //   NEW (Wu): the variance-min split still uses axis G but at a DIFFERENT
+    //              boundary (the straggler joins the low-G side), giving palette
+    //              [(15,250,0,255),(23,11,0,255)].
+    // So this exact-pin FAILS against the old population-median split.
+    let entries = make_entries(&[
+      (rgba(0, 0, 0, 255), 5),
+      (rgba(30, 0, 0, 255), 5),
+      (rgba(0, 250, 0, 255), 5),
+      (rgba(30, 250, 0, 255), 5),
+      (rgba(100, 120, 0, 255), 1),
+    ]);
+    let mut palette = median_cut(&entries, 2, None);
+    palette.sort_by_key(|c| packed(*c));
+    assert_eq!(
+      palette,
+      vec![rgba(15, 250, 0, 255), rgba(23, 11, 0, 255)],
+      "Wu split must pin this variance-min palette (old population-median gave \
+       [(15,0,0,255),(23,238,0,255)]; canary fails pre-change)"
+    );
+  }
+
+  #[test]
+  fn wu_split_separates_alpha_not_color_on_equal_counts() {
+    // The Wu split objective must weight alpha like `dist2` (ALPHA_WEIGHT=3), or a
+    // small partial-alpha palette gets an alpha-blind split. Four equal-count
+    // entries form a 2x2 grid: red varies on one axis (0 vs 255), alpha on the
+    // other (1 vs 255). The RGB span (255) equals the alpha span (254), but alpha
+    // error counts 3x in the real metric, so the variance-min split must cut on
+    // ALPHA, collapsing the two reds together while preserving the two alphas.
+    let a = rgba(0, 0, 0, 1);
+    let b = rgba(0, 0, 0, 255);
+    let c = rgba(255, 0, 0, 1);
+    let d = rgba(255, 0, 0, 255);
+    let entries = make_entries(&[(a, 1), (b, 1), (c, 1), (d, 1)]);
+
+    // (1) PRIMARY: the best split is on the ALPHA axis (3), not a color axis.
+    // Pre-fix (unweighted) this is axis 0 (red).
+    let split = MCBox::compute_best_split(&entries).unwrap();
+    assert_eq!(
+      split.axis, 3,
+      "Wu split must cut on alpha (axis 3), not color; got axis {} \
+       (pre-fix the unweighted objective picks axis 0 = red)",
+      split.axis
+    );
+
+    // (2) median_cut to 2 colors must PRESERVE both alphas, not collapse them to
+    // two ~128 averages. Exact and robust to RGB 127/128 rounding.
+    let palette = median_cut(&entries, 2, None);
+    assert_eq!(palette.len(), 2, "expected a 2-color palette");
+    let mut alphas: Vec<u8> = palette.iter().map(|p| p.a).collect();
+    alphas.sort_unstable();
+    assert_eq!(
+      alphas,
+      vec![1, 255],
+      "alpha must be preserved (alpha-only split); pre-fix the alpha-blind \
+       split averages alpha to [128, 128]; palette={palette:?}"
+    );
+    // The split is alpha-only: both entries share the same (averaged) RGB.
+    assert_eq!(
+      (palette[0].r, palette[0].g, palette[0].b),
+      (palette[1].r, palette[1].g, palette[1].b),
+      "an alpha-only split leaves both palette entries with equal RGB; palette={palette:?}"
+    );
+
+    // (3) The alpha-preserving palette must score the optimal total `dist2`.
+    // Each of A..D maps to its nearest palette entry; the alpha-preserving
+    // optimum is <= 32640, while the pre-fix alpha-blind palette scores 193548.
+    let total: i64 = [a, b, c, d]
+      .iter()
+      .map(|&color| dist2(palette[nearest(&palette, color)], color))
+      .sum();
+    assert!(
+      total <= 32640,
+      "alpha-preserving palette must minimize total dist2 (got {total}); \
+       pre-fix the alpha-blind palette scores 193548"
+    );
+  }
+
+  #[test]
+  fn min_quality_100_rejects_lossy_near_opaque() {
+    // Regression (Codex round-7 [high]): the `min_quality == 100` lossless gate
+    // must reject ANY lossy visible remap. `dist2` truncates the alpha-weighted
+    // RGB term with integer division (`* wa / 510`), so for a < 255 a 1-LSB RGB
+    // difference floors to 0 (e.g. dist2((100,0,0,254),(101,0,0,254)) == 0). On a
+    // partial-alpha image with > 256 distinct near-opaque colors, the chosen
+    // palette is NOT byte-identical to the source, yet the accumulated truncating
+    // `dist2` is 0 -> pre-fix `quality_score` returned 100 and the gate ACCEPTED
+    // visibly-lossy output. The exact `lossless` flag closes that gap.
+
+    // dist2 truncation is real at a=254 for a 1-LSB neighbor (the root cause).
+    // A single-channel +-1 RGB difference (dr^2+dg^2+db^2 == 1) floors to 0 once
+    // multiplied by `wa/510` (508/510 < 1), so the metric cannot see it.
+    assert_eq!(dist2(rgba(100, 0, 0, 254), rgba(101, 0, 0, 254)), 0);
+    assert_eq!(dist2(rgba(128, 128, 5, 254), rgba(128, 128, 6, 254)), 0);
+
+    // A tight near-opaque cluster of 257 distinct colors at a=254: a 256-long
+    // blue ramp (128,128,b) plus one extra (128,129,0). max_colors=256 forces the
+    // quantizer to drop one slot; every dropped pixel remaps to a neighbor that
+    // differs by exactly 1 LSB in one channel, so EVERY visible pixel's `dist2`
+    // truncates to 0 -> the accumulated error is exactly 0 even though hundreds of
+    // pixels are NOT byte-identical. This is the precise pre-fix 100-verdict trap.
+    let mut px = Vec::new();
+    for b in 0..=255u8 {
+      px.push(rgba(128, 128, b, 254));
+    }
+    px.push(rgba(128, 129, 0, 254));
+    let distinct: std::collections::HashSet<u32> = px.iter().map(|c| packed(*c)).collect();
+    assert_eq!(
+      distinct.len(),
+      257,
+      "construction must yield 257 distinct colors"
+    );
+    assert!(
+      distinct.len() > 256,
+      "must exceed max_colors to force quantization"
+    );
+
+    // Public slow path: max_colors=256, min_quality=100, dither OFF, kmeans off.
+    let lossy_cfg = QuantizeConfig {
+      max_colors: 256,
+      min_quality: 100,
+      kmeans_iters: 0,
+      dither: false,
+      posterization: 0,
+    };
+    let lossy = quantize_rgba(&px, px.len(), 1, &lossy_cfg);
+
+    // The remap IS lossy: hundreds of visible pixels map to a non-identical
+    // palette color (257 distinct colors cannot fit in <=256 slots).
+    let remapped = px
+      .iter()
+      .enumerate()
+      .filter(|(i, p)| lossy.palette[lossy.indices[*i] as usize] != **p)
+      .count();
+    assert!(
+      remapped > 0,
+      "257 distinct colors in <=256 slots must remap at least one pixel"
+    );
+
+    // CRITICAL: the accumulated truncating `dist2` over all visible pixels is
+    // EXACTLY 0 (every remap is a 1-LSB single-channel neighbor). This is what
+    // drove `quality_score`'s `mse <= 0.0` branch to return 100 pre-fix; the
+    // exact `lossless` flag is the only thing that can distinguish this lossy
+    // case from a truly byte-identical one.
+    let sum_dist2: i64 = px
+      .iter()
+      .enumerate()
+      .map(|(i, &p)| dist2(p, lossy.palette[lossy.indices[i] as usize]))
+      .sum();
+    assert_eq!(
+      sum_dist2, 0,
+      "the truncating dist2 must accumulate 0 here (the bug trigger); \
+       without that, this test would not exercise the 100-verdict trap"
+    );
+
+    // The gate verdict: a lossy visible remap must score BELOW 100 so the
+    // `min_quality == 100` gate (png.rs: `if out.quality < min_quality {{ throw }}`)
+    // rejects it. Pre-fix (no `lossless` flag) `mse == 0` returns exactly 100 (the
+    // prove-fail value); the exact byte-identity flag forces it to 99.
+    assert!(
+      lossy.quality < 100,
+      "lossy near-opaque remap must score < 100 (got {}); pre-fix the truncating \
+       dist2 accumulates 0 and quality_score returns 100, so the lossless gate \
+       wrongly ACCEPTS {remapped} remapped pixels",
+      lossy.quality
+    );
+
+    // Conversely, a genuinely lossless case (<=256 exact distinct colors) must
+    // STILL score 100, so the fix never lowers a truly-lossless verdict.
+    let mut exact = Vec::new();
+    for r in 0..=200u8 {
+      exact.push(rgba(r, 0, 0, 254));
+    }
+    let exact_distinct: std::collections::HashSet<u32> = exact.iter().map(|c| packed(*c)).collect();
+    assert_eq!(exact_distinct.len(), 201);
+    assert!(exact_distinct.len() <= 256);
+    let lossless = quantize_rgba(&exact, exact.len(), 1, &lossy_cfg);
+    assert_eq!(
+      lossless.quality, 100,
+      "<=256 exact near-opaque colors are losslessly representable and must score 100"
+    );
+    // And every pixel is byte-identical, confirming true losslessness.
+    for (i, &p) in exact.iter().enumerate() {
+      assert_eq!(
+        lossless.palette[lossless.indices[i] as usize], p,
+        "lossless case must reproduce every visible pixel byte-for-byte"
+      );
+    }
+  }
+
+  #[test]
+  fn cap_entry_weights_bounds_total() {
+    // Fix B unit test: the population-weight cap keeps the Wu split's i128 SSE
+    // moments from overflowing on very large images. It must bound the total,
+    // keep every entry present (>= 1), and preserve proportions/order so the
+    // variance-min decision is unchanged up to rounding.
+    let cap: u128 = 1 << 26;
+
+    // Four entries whose counts sum to far above the cap (4 · 2^25 == 2^27).
+    let big = 1u64 << 25;
+    let mut v = vec![
+      ColorCount {
+        color: rgba(10, 20, 30, 255),
+        count: big,
+      },
+      ColorCount {
+        color: rgba(40, 50, 60, 255),
+        count: big / 2,
+      },
+      ColorCount {
+        color: rgba(70, 80, 90, 255),
+        count: big * 2, // the originally-largest
+      },
+      ColorCount {
+        color: rgba(100, 110, 120, 255),
+        count: 1, // a 1-pixel outlier that must survive (>= 1)
+      },
+    ];
+    let largest_color = v[2].color;
+    cap_entry_weights(&mut v, cap);
+
+    let total_after: u128 = v.iter().map(|e| e.count as u128).sum();
+    assert!(
+      total_after <= cap + v.len() as u128,
+      "capped total {total_after} must be <= cap + len ({})",
+      cap + v.len() as u128
+    );
+    for e in &v {
+      assert!(
+        e.count >= 1,
+        "every entry must keep weight >= 1 after capping"
+      );
+    }
+    // The originally-largest entry is still the largest (proportions preserved).
+    let max_entry = v.iter().max_by_key(|e| e.count).unwrap();
+    assert_eq!(
+      max_entry.color, largest_color,
+      "capping must preserve which entry is largest"
+    );
+
+    // No-op when the total already fits under the cap.
+    let mut small = vec![
+      ColorCount {
+        color: rgba(1, 2, 3, 255),
+        count: 1000,
+      },
+      ColorCount {
+        color: rgba(4, 5, 6, 255),
+        count: 2000,
+      },
+    ];
+    let before = small.clone();
+    cap_entry_weights(&mut small, cap);
+    assert_eq!(
+      small.iter().map(|e| e.count).collect::<Vec<_>>(),
+      before.iter().map(|e| e.count).collect::<Vec<_>>(),
+      "cap must be a no-op when total <= cap"
+    );
+  }
+
+  #[test]
+  fn population_count_beyond_u32_is_honored() {
+    // Regression (Codex round-9): the per-color population count is `u64`, so a
+    // single color whose population exceeds `u32::MAX` (a >4.3-gigapixel
+    // single-color image) keeps its full weight in the population-weighted math.
+    //
+    // A `u32` counter would WRAP: `(u32::MAX as u64) + 1_000_000` truncates to
+    // `999_999`, collapsing the dominant color's weight far below the rare
+    // color's 2,000,000 pixels — so the single-box centroid would be dragged
+    // toward the rare color instead of staying at the dominant one. With `u64`
+    // the dominant weight (~4.295e9) dwarfs the rare 2e6 and the centroid stays
+    // essentially the dominant color. The dominant count is built directly as a
+    // `u64` here; if it ever truncated through `u32` this test would fail.
+    let dominant = rgba(200, 50, 100, 255);
+    let rare = rgba(10, 220, 30, 255);
+
+    // >u32::MAX pixels of the dominant color. A `u32` count cannot hold this.
+    let dominant_count: u64 = (u32::MAX as u64) + 1_000_000; // 4_295_967_295
+    assert!(
+      dominant_count > u32::MAX as u64,
+      "dominant population must exceed u32::MAX to exercise the widening"
+    );
+    // The rare color carries 2,000,000 px: tiny (0.05%) next to the >4.3e9
+    // dominant population, but FAR above the 999,999 a wrapped `u32` would show.
+    let rare_count: u64 = 2_000_000;
+
+    let entries = make_entries(&[(dominant, dominant_count), (rare, rare_count)]);
+
+    // Single box -> the population-weighted centroid of all entries.
+    let palette = median_cut(&entries, 1, None);
+    assert_eq!(palette.len(), 1, "max_colors == 1 yields a single centroid");
+    let centroid = palette[0];
+
+    // The centroid must sit on the DOMINANT color (within rounding), not be
+    // pulled toward the rare color. Each channel must be within a couple LSBs of
+    // the dominant color; a wrapped-u32 count would shift G from ~50 to ~163.
+    for (got, want, name) in [
+      (centroid.r, dominant.r, "r"),
+      (centroid.g, dominant.g, "g"),
+      (centroid.b, dominant.b, "b"),
+      (centroid.a, dominant.a, "a"),
+    ] {
+      assert!(
+        (got as i32 - want as i32).abs() <= 3,
+        "centroid {name} channel = {got}, expected ~{want} (dominant color); a \
+         u32-wrapped population would pull it toward the rare color {rare:?}; \
+         centroid={centroid:?}"
+      );
+    }
+    // And it must NOT have collapsed onto the rare color's distinctive channels.
+    assert!(
+      (centroid.g as i32 - rare.g as i32).abs() > 100,
+      "centroid must not be dragged to the rare color's green ({}); centroid={centroid:?}",
+      rare.g
+    );
+  }
+
+  #[test]
+  fn split_reduction_rejects_overflow() {
+    // Fix B unit test: the SSE-reduction `red_num / red_den` is formed in i128.
+    // For every physically realizable image the products fit i128 with vast
+    // margin, but a pathological input with more distinct unit-count colors than
+    // the population cap leaves `N = entries.len()` unbounded, so `red_num ~
+    // 2^19·N^4` can exceed i128::MAX. `split_reduction` must then report "no
+    // usable split" (None) instead of wrapping (release) or panicking (debug).
+
+    // Normal operands reproduce the old unchecked formula exactly:
+    //   red_num = merit_num*parent_n - parent_num*merit_den = 100*5 - 30*7 = 290
+    //   red_den = merit_den*parent_n                        = 7*5         = 35
+    assert_eq!(
+      split_reduction(100, 7, 30, 5),
+      Some((290, 35)),
+      "normal operands must match merit_num*parent_n - parent_num*merit_den \
+       over merit_den*parent_n"
+    );
+
+    // A non-positive reduction (no split reduces SSE) returns None:
+    //   red_num = 10*2 - 20*5 = -80  <= 0
+    assert_eq!(
+      split_reduction(10, 5, 20, 2),
+      None,
+      "red_num <= 0 must return None (no SSE-reducing split)"
+    );
+
+    // Overflow in the FIRST product (merit_num * parent_n) returns None.
+    assert_eq!(
+      split_reduction(i128::MAX, 1, 0, 2),
+      None,
+      "merit_num*parent_n overflow must return None"
+    );
+
+    // Overflow in the inner product (parent_num * merit_den) inside checked_sub
+    // returns None.
+    assert_eq!(
+      split_reduction(0, i128::MAX, 2, 1),
+      None,
+      "parent_num*merit_den overflow must return None"
+    );
+
+    // Overflow in the DENOMINATOR product (merit_den * parent_n) returns None,
+    // even when red_num itself fits (here red_num = 1*MAX - 0 = MAX > 0, but
+    // red_den = 2*MAX overflows).
+    assert_eq!(
+      split_reduction(1, 2, 0, i128::MAX),
+      None,
+      "merit_den*parent_n overflow must return None even when red_num fits"
+    );
+  }
+
+  // ---- i256 primitive guards: widen_mul_u128 + cmp_ratio ----
+  //
+  // These are the load-bearing helpers behind the Wu split's exact,
+  // overflow-free rational comparison. The Wu tests above only feed small
+  // inputs whose cross-products fit `i128`; the regime these primitives exist
+  // for (products up to ~187 bits, plus signed numerators) is guarded here.
+
+  #[test]
+  fn widen_mul_u128_matches_u64_product_common_path() {
+    // For any a,b drawn from the u64 range, (a as u128)*(b as u128) < 2^128, so
+    // the 256-bit product must have hi == 0 and lo == the exact 128-bit product.
+    // This pins the common path (the only path the Wu split takes for typical
+    // image sizes) exactly, over many deterministic draws.
+    let mut g = Lcg(0x5DEE_CE66_D000_0001);
+    for _ in 0..2000 {
+      let a = g.next_u64() as u128;
+      let b = g.next_u64() as u128;
+      let (hi, lo) = widen_mul_u128(a, b);
+      assert_eq!(hi, 0, "u64*u64 product cannot reach the high limb");
+      assert_eq!(lo, a * b, "low limb must equal the exact 128-bit product");
+    }
+    // Include the u64 extremes explicitly so the corners are not left to chance.
+    for &(a, b) in &[
+      (0u128, u64::MAX as u128),
+      (u64::MAX as u128, 0u128),
+      (u64::MAX as u128, u64::MAX as u128),
+      (1u128, u64::MAX as u128),
+    ] {
+      let (hi, lo) = widen_mul_u128(a, b);
+      assert_eq!(hi, 0);
+      assert_eq!(lo, a * b);
+    }
+  }
+
+  #[test]
+  fn widen_mul_u128_hand_verified_256bit_identities() {
+    // Hand-computed full-width products (no oracle): each (hi, lo) is derived by
+    // reasoning about the 256-bit result directly.
+
+    // 2^64 * 2^64 = 2^128  ->  hi = 1, lo = 0.
+    assert_eq!(widen_mul_u128(1u128 << 64, 1u128 << 64), (1, 0));
+
+    // 2^127 * 2 = 2^128  ->  hi = 1, lo = 0.
+    assert_eq!(widen_mul_u128(1u128 << 127, 2), (1, 0));
+
+    // u128::MAX * u128::MAX = (2^128 - 1)^2 = 2^256 - 2^129 + 1
+    //   = (2^128 - 2)*2^128 + 1  ->  hi = u128::MAX - 1, lo = 1.
+    assert_eq!(
+      widen_mul_u128(u128::MAX, u128::MAX),
+      (u128::MAX - 1, 1),
+      "carry from the high cross-products must propagate exactly"
+    );
+
+    // u128::MAX * 1  ->  hi = 0, lo = u128::MAX.
+    assert_eq!(widen_mul_u128(u128::MAX, 1), (0, u128::MAX));
+
+    // 0 * anything  ->  (0, 0), and multiplication is commutative.
+    assert_eq!(widen_mul_u128(0, u128::MAX), (0, 0));
+    assert_eq!(widen_mul_u128(u128::MAX, 0), (0, 0));
+  }
+
+  #[test]
+  fn cmp_ratio_matches_i128_oracle_when_cross_products_fit() {
+    use std::cmp::Ordering;
+    // Draw a1,a2 in [-2^40, 2^40) and b1,b2 in (0, 2^40). Then a1*b2 and a2*b1
+    // each fit in i128 (< ~2^81), so the direct cross-multiply is an exact
+    // oracle. cmp_ratio must agree, across every numerator sign combination.
+    let mut g = Lcg(0x1357_9BDF_2468_ACE0);
+    let mut seen_neg_neg = false;
+    let mut seen_neg_pos = false;
+    let mut seen_zero = false;
+    let mut seen_pos_pos = false;
+    for i in 0..5000u32 {
+      // |a| < 2^40 (signed), 0 < b < 2^40.
+      let mut a1 = (g.next_u64() % (1 << 41)) as i128 - (1 << 40);
+      let mut a2 = (g.next_u64() % (1 << 41)) as i128 - (1 << 40);
+      let b1 = 1 + (g.next_u64() % ((1 << 40) - 1)) as i128;
+      let b2 = 1 + (g.next_u64() % ((1 << 40) - 1)) as i128;
+      // Deterministically inject zero numerators on a small subset so the
+      // zero-sign branch is genuinely exercised (uniform draws never hit it).
+      match i % 64 {
+        0 => a1 = 0,
+        1 => a2 = 0,
+        2 => {
+          a1 = 0;
+          a2 = 0;
+        }
+        _ => {}
+      }
+
+      let oracle = (a1 * b2).cmp(&(a2 * b1));
+      assert_eq!(
+        cmp_ratio(a1, b1, a2, b2),
+        oracle,
+        "cmp_ratio disagreed with i128 oracle: a1={a1} b1={b1} a2={a2} b2={b2}"
+      );
+
+      match (a1.signum(), a2.signum()) {
+        (-1, -1) => seen_neg_neg = true,
+        (s1, s2) if s1 <= 0 && s2 >= 0 && (s1 < 0 || s2 > 0) => seen_neg_pos = true,
+        _ => {}
+      }
+      if a1 == 0 || a2 == 0 {
+        seen_zero = true;
+      }
+      if a1 > 0 && a2 > 0 {
+        seen_pos_pos = true;
+      }
+    }
+    // The numerator sign space is actually exercised, not just asserted in the
+    // abstract.
+    assert!(
+      seen_neg_neg,
+      "expected some negative/negative numerator pairs"
+    );
+    assert!(seen_neg_pos, "expected some mixed-sign numerator pairs");
+    assert!(
+      seen_pos_pos,
+      "expected some positive/positive numerator pairs"
+    );
+    assert!(seen_zero, "expected some zero numerator(s)");
+
+    // Pin the pure-sign shortcuts explicitly (these never touch widen_mul_u128).
+    assert_eq!(cmp_ratio(0, 7, 0, 3), Ordering::Equal, "0/b == 0/b");
+    assert_eq!(cmp_ratio(0, 7, 5, 3), Ordering::Less, "0 < positive");
+    assert_eq!(cmp_ratio(5, 7, 0, 3), Ordering::Greater, "positive > 0");
+    assert_eq!(cmp_ratio(-1, 7, 0, 3), Ordering::Less, "negative < 0");
+    assert_eq!(cmp_ratio(0, 7, -1, 3), Ordering::Greater, "0 > negative");
+    assert_eq!(
+      cmp_ratio(-1, 7, 5, 3),
+      Ordering::Less,
+      "negative < positive"
+    );
+  }
+
+  #[test]
+  fn cmp_ratio_hand_verified_beyond_i128_cross_products() {
+    use std::cmp::Ordering;
+    // These compare rationals whose cross-products a1*b2 / a2*b1 reach ~158 bits
+    // (well past i128's 127-bit signed range) yet whose operands each stay below
+    // 2^127. A naive i128 cross-multiply would overflow; the i256 path must give
+    // the answer derived here by hand. Reference denominators b2 = 3*2^36,
+    // b1 = 3*2^60.
+    let b1 = 3 * (1i128 << 60);
+    let b2 = 3 * (1i128 << 36);
+
+    // Equal: 2^120/(3*2^60) = 2^60/3 = 2^96/(3*2^36). Cross-products are both
+    // 2^120*3*2^36 = 3*2^156 (~158 bits) and identical -> Equal.
+    assert_eq!(
+      cmp_ratio(1i128 << 120, b1, 1i128 << 96, b2),
+      Ordering::Equal,
+      "equal ratios whose cross-products overflow i128 must compare Equal"
+    );
+
+    // Strictly greater: bump the first numerator to 2^121 -> 2^61/3 > 2^60/3.
+    assert_eq!(
+      cmp_ratio(1i128 << 121, b1, 1i128 << 96, b2),
+      Ordering::Greater,
+      "larger ratio must compare Greater despite i128-overflowing cross-products"
+    );
+    // ...and the reverse orientation is symmetric.
+    assert_eq!(cmp_ratio(1i128 << 96, b2, 1i128 << 121, b1), Ordering::Less,);
+
+    // Large negative numerator vs positive -> Less (sign shortcut also covers
+    // this, but pin it with operands in the overflow regime regardless).
+    assert_eq!(
+      cmp_ratio(-(1i128 << 121), b1, 1i128 << 96, b2),
+      Ordering::Less,
+      "negative numerator must always be less than a positive one"
+    );
+    // Both negative: -2^121/(3*2^60) < -2^120/(3*2^60) since magnitudes flip.
+    assert_eq!(
+      cmp_ratio(-(1i128 << 121), b1, -(1i128 << 120), b1),
+      Ordering::Less,
+      "more-negative ratio is Less; magnitude comparison must be reversed"
+    );
+  }
+
+  // ---- Selective Floyd-Steinberg dither regression tests (P2.1) ----
+  //
+  // These lock the shipped behavior of the residual-aware, edge-gated selective
+  // dither: its pure-function strength/dead-zone/clamp helpers, that a cleanly
+  // covered flat region diffuses nothing, that a smooth high-residual field
+  // (which a flat remap would BAND) re-engages dither, and that the whole path
+  // stays deterministic. They assert the shipped consts directly (no revert).
+
+  /// Count of distinct index values in a remap output buffer.
+  fn distinct_indices(idx: &[u8]) -> usize {
+    let mut set: std::collections::HashSet<u8> = std::collections::HashSet::new();
+    for &i in idx {
+      set.insert(i);
+    }
+    set.len()
+  }
+
+  #[test]
+  fn dither_strength_clean_pixel_is_zero() {
+    // A cleanly-mapped pixel (residual at/below LO) diffuses nothing, regardless
+    // of activity. The ramp is 0 there, so strength is exactly 0.0.
+    assert_eq!(
+      dither_strength(0.0, 0.0),
+      0.0,
+      "zero residual, zero activity must produce exactly zero strength"
+    );
+    assert_eq!(
+      dither_strength(DITHER_RESID_LO, 0.0),
+      0.0,
+      "residual == LO must produce exactly zero strength"
+    );
+    // Any residual at/below LO is clamped to the bottom of the ramp -> 0.0, even
+    // on a perfectly flat (zero-activity) region where the edge term is 1.0.
+    assert_eq!(
+      dither_strength(DITHER_RESID_LO - 10.0, 0.0),
+      0.0,
+      "residual below LO must still produce exactly zero strength"
+    );
+  }
+
+  #[test]
+  fn dither_strength_high_residual_smooth_engages() {
+    // On a smooth (zero-activity) region a maximally-bad residual runs at the
+    // full configured strength: ramp == 1, edge == 1, so strength == MAX_STRENGTH.
+    let s = dither_strength(DITHER_RESID_HI, 0.0);
+    assert!(
+      (s - DITHER_MAX_STRENGTH).abs() <= 1e-6,
+      "resid==HI, activity==0 must equal DITHER_MAX_STRENGTH ({DITHER_MAX_STRENGTH}), got {s}"
+    );
+    // Well past HI clamps to the same full strength (the ramp saturates at 1).
+    let s2 = dither_strength(DITHER_RESID_HI * 4.0, 0.0);
+    assert!(
+      (s2 - DITHER_MAX_STRENGTH).abs() <= 1e-6,
+      "resid well above HI must still equal DITHER_MAX_STRENGTH, got {s2}"
+    );
+  }
+
+  #[test]
+  fn dither_strength_edge_is_suppressed() {
+    // A hard edge / busy texture (activity at/above EDGE_ACT) suppresses dither
+    // to the edge floor (MAX_STRENGTH * EDGE_FLOOR) even at a maximally-bad
+    // residual: ramp == 1, edge == EDGE_FLOOR, so strength == MAX * FLOOR. A
+    // NONZERO floor deliberately keeps a trace of dither across edges so a
+    // smooth high-residual pixel hugging an edge still propagates error (no
+    // 1-px solid halo column) — see selective_dither_no_nearest_halo_beside_edge.
+    let floor_strength = DITHER_MAX_STRENGTH * DITHER_EDGE_FLOOR;
+    let edge = dither_strength(DITHER_RESID_HI, DITHER_EDGE_ACT);
+    assert!(
+      (edge - floor_strength).abs() <= 1e-6,
+      "resid==HI but activity>=EDGE_ACT must suppress to MAX*EDGE_FLOOR \
+       ({floor_strength}), got {edge}"
+    );
+    let edge_hi = dither_strength(DITHER_RESID_HI, DITHER_EDGE_ACT * 2.0);
+    assert!(
+      (edge_hi - floor_strength).abs() <= 1e-6,
+      "activity well above EDGE_ACT must stay suppressed to MAX*EDGE_FLOOR \
+       ({floor_strength}), got {edge_hi}"
+    );
+    // Monotonic suppression: for the same high residual, a flat region must
+    // dither strictly more than a hard edge.
+    let flat = dither_strength(DITHER_RESID_HI, 0.0);
+    assert!(
+      flat > edge,
+      "flat-region strength {flat} must be strictly greater than edge strength {edge}"
+    );
+  }
+
+  #[test]
+  fn dither_deadzone_drops_subthreshold() {
+    // HARD dead-zone: magnitudes strictly below the threshold drop to exactly 0,
+    // magnitudes at/above pass through UNCHANGED (no soft shrink -> no energy
+    // loss / color drift above threshold).
+    assert_eq!(dither_deadzone(1.5), 0.0, "|1.5| < DEADZONE must drop to 0");
+    assert_eq!(
+      dither_deadzone(-1.0),
+      0.0,
+      "|-1.0| < DEADZONE must drop to 0"
+    );
+    assert_eq!(
+      dither_deadzone(DITHER_ERR_DEADZONE - 0.001),
+      0.0,
+      "just below DEADZONE must drop to 0"
+    );
+    // At/above threshold: passed through with no change (proves HARD, not soft).
+    assert_eq!(
+      dither_deadzone(3.0),
+      3.0,
+      "|3.0| >= DEADZONE must pass unchanged"
+    );
+    assert_eq!(
+      dither_deadzone(-10.0),
+      -10.0,
+      "|-10.0| >= DEADZONE must pass unchanged"
+    );
+    assert_eq!(
+      dither_deadzone(DITHER_ERR_DEADZONE),
+      DITHER_ERR_DEADZONE,
+      "exactly DEADZONE must pass unchanged (boundary is inclusive above)"
+    );
+  }
+
+  #[test]
+  fn dither_clamp_err_bounds_accumulated_error() {
+    // Symmetric clamp to [-DITHER_ERR_CLAMP, DITHER_ERR_CLAMP]; values inside the
+    // band pass through untouched.
+    assert_eq!(
+      dither_clamp_err(200.0),
+      DITHER_ERR_CLAMP,
+      "200 must clamp down to +DITHER_ERR_CLAMP"
+    );
+    assert_eq!(
+      dither_clamp_err(-200.0),
+      -DITHER_ERR_CLAMP,
+      "-200 must clamp up to -DITHER_ERR_CLAMP"
+    );
+    assert_eq!(
+      dither_clamp_err(50.0),
+      50.0,
+      "50 is within the band and must pass through unchanged"
+    );
+    assert_eq!(
+      dither_clamp_err(DITHER_ERR_CLAMP),
+      DITHER_ERR_CLAMP,
+      "exactly +CLAMP stays put"
+    );
+    assert_eq!(
+      dither_clamp_err(-DITHER_ERR_CLAMP),
+      -DITHER_ERR_CLAMP,
+      "exactly -CLAMP stays put"
+    );
+  }
+
+  #[test]
+  fn selective_dither_keeps_clean_flat_region_flat() {
+    // A flat region the palette covers EXACTLY must stay a single index: zero
+    // residual -> zero strength -> no diffusion churn (the DEFLATE win). Build a
+    // palette containing the exact field color C and a couple of decoys, then
+    // remap an all-C buffer.
+    let c = rgba(100, 150, 200, 255);
+    let palette = vec![
+      rgba(0, 0, 0, 255),
+      c,
+      rgba(255, 255, 255, 255),
+      rgba(30, 60, 90, 255),
+    ];
+    let c_idx = nearest(&palette, c) as u8;
+    let (w, h) = (8usize, 5usize);
+    let px = vec![c; w * h];
+
+    let dith = remap_dither(&px, w, h, &palette, 0);
+    assert_eq!(dith.len(), w * h);
+    assert!(
+      dith.iter().all(|&i| i == c_idx),
+      "clean flat region must stay the single exact-color index {c_idx}; got {dith:?}"
+    );
+    assert_eq!(
+      distinct_indices(&dith),
+      1,
+      "a cleanly-covered flat must yield exactly ONE distinct index"
+    );
+
+    // Nearest gives the same uniform result here (no contrast on a clean flat).
+    let near = remap_nearest(&px, &palette, 0);
+    assert!(
+      near.iter().all(|&i| i == c_idx),
+      "nearest remap of a clean flat must also be the single exact index"
+    );
+  }
+
+  #[test]
+  fn selective_dither_smooths_what_nearest_would_band() {
+    // Banding-protection regression. Palette = two far-apart colors; pixel buffer
+    // = a uniform MID-GRAY field (smooth, zero source activity) whose residual to
+    // either palette entry is large. A flat nearest remap maps every pixel to the
+    // single closest entry (posterizes -> bands); selective dither re-engages on
+    // this smooth high-residual region and mixes BOTH indices.
+    let palette = vec![rgba(0, 0, 0, 255), rgba(255, 255, 255, 255)];
+    let (w, h) = (8usize, 6usize);
+    let px = vec![rgba(128, 128, 128, 255); w * h];
+
+    let near = remap_nearest(&px, &palette, 0);
+    let dith = remap_dither(&px, w, h, &palette, 0);
+
+    let near_distinct = distinct_indices(&near);
+    let dith_distinct = distinct_indices(&dith);
+
+    assert_eq!(
+      near_distinct, 1,
+      "nearest must BAND the mid-gray field to a single index, got {near_distinct} distinct"
+    );
+    assert_eq!(
+      dith_distinct, 2,
+      "selective dither must mix BOTH palette indices on the smooth high-residual \
+       field, got {dith_distinct} distinct"
+    );
+  }
+
+  #[test]
+  fn selective_dither_endpoint_tone_still_dithers() {
+    // Endpoint dead-band regression (Codex finding). With palette {black, white}
+    // and a flat near-endpoint tone, the inbound DITHER_ERR_CLAMP must be large
+    // enough to push `want` across the 128 decision threshold so the field
+    // DITHERS rather than collapsing to a flat endpoint. At the shipped 192 the
+    // dead-band width `max(0, ceil(255/2) - CLAMP)` is 0, so both the bright
+    // (T=224) and dark (T=31) near-endpoint fields mix in the opposite color.
+    // The midpoint-only `selective_dither_smooths_what_nearest_would_band`
+    // (T=128) never exercised the endpoints, where the old clamp=96 was inert.
+    let palette = vec![rgba(0, 0, 0, 255), rgba(255, 255, 255, 255)];
+    let (w, h) = (16usize, 16usize);
+
+    // Bright near-white endpoint: must mix in BLACK, not collapse to flat white.
+    let top = vec![rgba(224, 224, 224, 255); w * h];
+    let top_dith = remap_dither(&top, w, h, &palette, 0);
+    assert!(
+      distinct_indices(&top_dith) >= 2,
+      "flat T=224 field must DITHER (mix in black), not collapse to flat white; \
+       got {} distinct",
+      distinct_indices(&top_dith)
+    );
+
+    // Dark near-black endpoint (symmetric): must mix in WHITE, not flat black.
+    let bot = vec![rgba(31, 31, 31, 255); w * h];
+    let bot_dith = remap_dither(&bot, w, h, &palette, 0);
+    assert!(
+      distinct_indices(&bot_dith) >= 2,
+      "flat T=31 field must DITHER (mix in white), not collapse to flat black; \
+       got {} distinct",
+      distinct_indices(&bot_dith)
+    );
+  }
+
+  #[test]
+  fn selective_dither_no_nearest_halo_beside_edge() {
+    // Edge-halo regression (Codex finding). A SMOOTH, HIGH-residual field placed
+    // immediately beside a HARD edge column must still dither in the column that
+    // hugs the edge — it must NOT collapse to a single nearest-mapped (solid)
+    // index. The bug: source activity is the MAX 4-neighbor delta, so the
+    // edge-adjacent column sees the full edge step and the edge multiplier ramps
+    // it to DITHER_EDGE_FLOOR. With a zero floor (the old value) strength there
+    // is exactly 0, so that column propagates NO outbound error even though it
+    // still consumes inbound error at index selection — every pixel maps to the
+    // single nearest entry => a 1-px solid column hugging the edge inside an
+    // otherwise-dithered gradient (the halo). A small nonzero floor restores
+    // >= MAX*FLOOR dither on that column.
+    //
+    // Construction: column 0 is a hard BLACK edge; columns 1.. are a uniform
+    // mid-gray field. Palette = {black, white} contains NO gray, so the gray
+    // residual is large and the INTERIOR (zero-activity) gray columns all
+    // dither. The smooth column at x==1 is adjacent to the black edge, so its
+    // activity is the full black-vs-gray step => it is the pixel the edge gate
+    // can zero. Verified empirically: at FLOOR=0.0 column 1 is solid
+    // ([1,1,1,...], distinct==1, the halo); at the shipped FLOOR=0.2 it dithers
+    // ([1,0,1,0,...], distinct==2). This test FAILS at EDGE_FLOOR=0.0.
+    let palette = vec![rgba(0, 0, 0, 255), rgba(255, 255, 255, 255)];
+    let (w, h) = (10usize, 16usize);
+    let mut px = vec![rgba(128, 128, 128, 255); w * h];
+    for y in 0..h {
+      px[y * w] = rgba(0, 0, 0, 255); // column 0 = hard black edge
+    }
+
+    let dith = remap_dither(&px, w, h, &palette, 0);
+
+    // The smooth column IMMEDIATELY beside the edge (x == 1) must dither, not be
+    // a single solid nearest-mapped index. (At EDGE_FLOOR=0.0 this is the halo:
+    // it would be a single distinct index.)
+    let col1: Vec<u8> = (0..h).map(|y| dith[y * w + 1]).collect();
+    assert!(
+      distinct_indices(&col1) >= 2,
+      "the smooth high-residual column hugging the hard edge must still dither \
+       (>= 2 distinct indices), not collapse to a solid nearest-mapped column; \
+       got {col1:?} -- this is the edge halo and means EDGE_FLOOR is zero"
+    );
+
+    // And it must dither comparably to a smooth INTERIOR column far from the edge
+    // (x == w/2), whose activity is zero: the edge-adjacent column must not be
+    // suppressed below the interior's behavior.
+    let interior: Vec<u8> = (0..h).map(|y| dith[y * w + w / 2]).collect();
+    assert!(
+      distinct_indices(&col1) >= distinct_indices(&interior),
+      "edge-adjacent column {col1:?} must dither at least as richly as the \
+       interior column {interior:?} (no halo suppression beside the edge)"
+    );
+  }
+
+  #[test]
+  fn dither_source_activity_treats_alpha_edge_as_edge() {
+    // Alpha-edge regression (Codex finding). A VISIBLE pixel whose only
+    // differing 4-neighbor is FULLY TRANSPARENT sits on a sprite/cutout
+    // silhouette — a real, visible hard edge. The activity gate must classify
+    // it as an edge (>= DITHER_EDGE_ACT) so dither is suppressed there, exactly
+    // like a spatial color edge.
+    //
+    // PROVE-FAILS: under the OLD `if n.a == 0 { return; }` skip the transparent
+    // neighbor was ignored and the only remaining neighbor is the SAME visible
+    // color, so a color-only activity is 0 (< DITHER_EDGE_ACT) and this assert
+    // would fail. The fix treats the transparent neighbor as canonical
+    // (0,0,0,0): dist2(opaque, (0,0,0,0)) includes da*da*ALPHA_WEIGHT
+    // (255*255*3 = 195075) plus the alpha-scaled color term, far above
+    // DITHER_EDGE_ACT (2048).
+    //
+    // Grid (3x1): [visible | visible | transparent]. The center visible pixel
+    // (x==1) has a same-color visible neighbor on the left and a fully
+    // transparent neighbor on the right.
+    let here = rgba(200, 120, 60, 255);
+    let px = vec![here, here, rgba(0, 0, 0, 0)];
+    let act = dither_source_activity(&px, 3, 1, 1, 0, here, 0);
+    assert!(
+      act >= DITHER_EDGE_ACT,
+      "a visible pixel beside a fully-transparent neighbor must register as an \
+       edge (activity {act} >= DITHER_EDGE_ACT {DITHER_EDGE_ACT}); the alpha \
+       discontinuity is a real silhouette edge -- under the old a==0 skip this \
+       would be 0 (identical visible neighbor only)"
+    );
+
+    // The same visible color with NO transparent (or differing) neighbor stays
+    // a smooth interior: activity 0. This anchors that the edge above comes
+    // from the alpha boundary, not the pixel's brightness.
+    let interior = vec![here, here, here];
+    let act_interior = dither_source_activity(&interior, 3, 1, 1, 0, here, 0);
+    assert_eq!(
+      act_interior, 0.0,
+      "a visible pixel surrounded by the same visible color is a smooth \
+       interior (activity 0); got {act_interior}"
+    );
+  }
+
+  #[test]
+  fn selective_dither_is_deterministic() {
+    // The f32 strength path is pure over integer-dist2 inputs (no RNG, no map
+    // iteration in control flow), so the same input yields byte-identical indices
+    // on every run. Use a multi-color, multi-row input that genuinely diffuses.
+    let palette = vec![
+      rgba(0, 0, 0, 255),
+      rgba(255, 255, 255, 255),
+      rgba(200, 30, 30, 255),
+      rgba(30, 30, 200, 255),
+    ];
+    let (w, h) = (12usize, 9usize);
+    let mut px = Vec::with_capacity(w * h);
+    let mut g = Lcg(0x0DDF_00D5_1234_5678);
+    for _ in 0..(w * h) {
+      px.push(rgba(g.byte(), g.byte(), g.byte(), 255));
+    }
+
+    let a = remap_dither(&px, w, h, &palette, 0);
+    let b = remap_dither(&px, w, h, &palette, 0);
+    assert_eq!(
+      a, b,
+      "remap_dither must produce byte-identical index buffers on identical input"
+    );
+  }
+
+  #[test]
+  fn dither_matte_rgb_does_not_leak_into_opaque_neighbor() {
+    // Partial-alpha matte-leak regression (Codex finding, premul-visibility fix).
+    // A near-transparent FRINGE pixel (a == 1) carries an INVISIBLE matte RGB.
+    // Because dist2's alpha term dominates SELECTION, that fringe maps to a
+    // low-alpha palette entry whose color residual is large — so without
+    // visibility weighting its FULL straight-alpha matte RGB (up to ~255) is
+    // diffused into NEIGHBORS, including fully-opaque ones, flipping their index
+    // purely on color the fringe can never show. The fix scales the diffused
+    // COLOR error by `vis = src.a / 255`, so the opaque neighbor's output must be
+    // INVARIANT to the fringe's matte RGB.
+    //
+    // FIXED palette deliberately excludes the fringe color (no white/black low-
+    // alpha slot), forcing a nonzero color residual at the fringe:
+    let palette = vec![
+      rgba(0, 0, 0, 0),         // 0: fully transparent
+      rgba(0, 0, 0, 255),       // 1: opaque black
+      rgba(255, 255, 255, 255), // 2: opaque white
+    ];
+    // 5x1 serpentine row (l2r): three a==1 fringe pixels, then an OPAQUE mid-gray
+    // (124) DOWNSTREAM of the fringe (receives the fringe's forward-diffused
+    // error), then a fully-transparent tail. The two variants differ ONLY in the
+    // fringe's invisible matte RGB: BRIGHT = white matte, DARK = black matte.
+    let bright = vec![
+      rgba(255, 255, 255, 1),
+      rgba(255, 255, 255, 1),
+      rgba(255, 255, 255, 1),
+      rgba(124, 124, 124, 255), // opaque neighbor under test (index 3)
+      rgba(0, 0, 0, 0),
+    ];
+    let dark = vec![
+      rgba(0, 0, 0, 1),
+      rgba(0, 0, 0, 1),
+      rgba(0, 0, 0, 1),
+      rgba(124, 124, 124, 255), // opaque neighbor under test (index 3)
+      rgba(0, 0, 0, 0),
+    ];
+    let rb = remap_dither(&bright, 5, 1, &palette, 0);
+    let rd = remap_dither(&dark, 5, 1, &palette, 0);
+
+    assert_eq!(
+      rb[3], rd[3],
+      "the OPAQUE mid-gray neighbor's index must NOT depend on the invisible \
+       matte RGB of the near-transparent (a==1) fringe; bright-matte buffer \
+       {rb:?} vs dark-matte buffer {rd:?}. PROVE-FAILS without `* vis`: the \
+       opaque index flips (2 for the white matte vs 1 for the black matte) as \
+       the fringe diffuses its full invisible RGB into the opaque pixel."
+    );
+  }
+
+  #[test]
+  fn dither_visibility_scale_is_opaque_neutral() {
+    // Opaque-neutrality invariant. The premul `vis = src.a / 255` scale must be a
+    // strict no-op on an ALL-OPAQUE buffer: every src.a == 255 -> vis == 1.0
+    // exactly in f32 (255.0/255.0 == 1.0), so the diffused color error — and thus
+    // every output index — is byte-identical to the unscaled path. We pin this by
+    // forcing a NONZERO residual (palette = {black, white} has no gray) over a
+    // multi-tone, multi-row opaque buffer that genuinely diffuses, then asserting
+    // the result equals a PINNED INDEPENDENT ORACLE captured from a real run under
+    // the correct /255 scale. A wrong `src.a / 256.0` scale would change BOTH the
+    // got and any `again` recompute identically (so the old got==again check was
+    // vacuous — it only proved determinism), but it CANNOT match this pin: under
+    // /256 several diffused indices shift off the pinned values.
+    // All-opaque midtone buffer (tones 96..=159, clustered right around the 128
+    // black/white decision threshold) over a multi-row 10x6 field. Sitting on the
+    // rounding edge is what makes the pin SENSITIVE: a 0.39% (255 vs 256) opaque
+    // vis scale nudges the accumulated diffusion error across the threshold on
+    // EIGHT pixels, shifting those indices off the pin. A smooth gradient or
+    // wide-range noise washes that signal out; midtone clustering preserves it.
+    // The deterministic LCG seed was selected (offline) to maximize that shift.
+    let palette = vec![rgba(0, 0, 0, 255), rgba(255, 255, 255, 255)];
+    let (w, h) = (10usize, 6usize);
+    let mut px = Vec::with_capacity(w * h);
+    let mut g = Lcg(0x1000_0000_0000_0001u64.wrapping_mul(169));
+    for _ in 0..(w * h) {
+      let t = 96 + (g.byte() % 64); // 96..=159, all opaque
+      px.push(rgba(t, t, t, 255));
+    }
+
+    let got = remap_dither(&px, w, h, &palette, 0);
+
+    // The opaque path must genuinely dither (both indices present), otherwise this
+    // guard would be vacuous (a flat result is trivially scale-invariant).
+    assert!(
+      distinct_indices(&got) >= 2,
+      "test setup must produce a genuinely dithered (multi-index) opaque buffer; \
+       got {} distinct",
+      distinct_indices(&got)
+    );
+
+    // Pinned independent oracle: the EXACT index buffer produced by the final
+    // build (correct vis = src.a / 255, DITHER_ERR_CLAMP = 192) on the all-opaque
+    // input above. Because vis == 1.0 on every opaque pixel, this is also the
+    // unscaled-outbound-error result; an off-by-one 255/256 scale shifts eight
+    // indices and breaks the pin.
+    // Regenerate this pin ONLY on an intentional dither-calibration change (edits
+    // to remap_dither / dither_strength / DITHER_* consts).
+    let expected: Vec<u8> = vec![
+      1, 0, 1, 0, 1, 1, 1, 0, 1, 0, 1, 0, 0, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 1, 1, 0, 1, 1, 0,
+      1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 0, 1, 1, 0, 1, 0, 0, 1, 0,
+    ];
+    assert_eq!(
+      got, expected,
+      "opaque dithered output must match the pinned /255 oracle; a 255/256 (or any \
+       != 1.0) opaque vis scale shifts diffused indices off this pin"
+    );
+  }
+
+  #[test]
+  fn wu_split_premultiplied_respects_alpha_visibility() {
+    // FIX A canary: the Wu split's RGB first moments are PREMULTIPLIED by alpha
+    // (`Moments::add`) so near-INVISIBLE RGB cannot dominate the split. These four
+    // colors (count 1 each) are a Codex K=2 counterexample: the two near-opaque
+    // colors carry the visible signal, the two near-transparent ones (a==64, a==8)
+    // carry large but barely-visible RGB. With raw-RGB moments the Wu split groups
+    // by raw RGB and total nearest-`dist2` is 4459; premultiplying the RGB moments
+    // makes the split respect `dist2`'s `wa/510` visibility weighting, dropping the
+    // total to the visibility optimum (654). PROVE-FAILS on raw-RGB moments
+    // (revert FIX A -> total 4459 >> 654).
+    let colors = [
+      rgba(192, 32, 224, 1),
+      rgba(32, 64, 96, 1),
+      rgba(16, 0, 0, 64),
+      rgba(0, 160, 255, 8),
+    ];
+    let entries = make_entries(&colors.map(|c| (c, 1u64)));
+    let pal = median_cut(&entries, 2, None);
+    let total: i64 = colors
+      .iter()
+      .map(|&c| dist2(pal[nearest(&pal, c)], c))
+      .sum();
+    assert!(
+      total <= 654,
+      "premultiplied Wu split must respect dist2 visibility weighting: total \
+       nearest-dist2 over the 4 colors must be <= 654 (the visibility optimum), \
+       got {total} (raw-RGB moments score 4459); palette={pal:?}"
+    );
+  }
+
+  #[test]
+  fn kmeans_uses_true_population_not_capped_weights() {
+    // FIX B canary: `cap_entry_weights` caps only the COPY fed to the Wu split;
+    // k-means must see the TRUE populations. The cap's `.max(1)` floor is the
+    // distortion vector: when one color's count vastly exceeds the cap it is scaled
+    // DOWN toward the floor, while a swarm of rare colors each stay floored at 1 —
+    // so the capped histogram massively over-represents the rare swarm.
+    //
+    // Construction: a dominant color (R=40) with count cap*100, plus 327,680
+    // DISTINCT rare colors clustered at R=240 (R in 238..=242 over every G,B),
+    // count 1 each. True population: the dominant is ~20,000:1, so the lone
+    // centroid's R rounds to 40. Capped population: dominant -> ~cap, each rare ->
+    // 1, total ~2*cap, so the rare swarm pulls the centroid's R up to 41.
+    let cap: u64 = 1 << 26;
+    let dominant = rgba(40, 80, 120, 255);
+    let mut items: Vec<(RGBA8, u64)> = Vec::with_capacity(327_681);
+    items.push((dominant, cap * 100));
+    for r in 238u16..=242 {
+      for g in 0u16..256 {
+        for b in 0u16..256 {
+          items.push((rgba(r as u8, g as u8, b as u8, 255), 1));
+        }
+      }
+    }
+    let entries = make_entries(&items);
+
+    // Sanity: the population genuinely trips the cap (the split copy IS scaled),
+    // and the cap's `.max(1)` floor keeps every rare color at weight 1.
+    let mut split_copy = entries.clone();
+    cap_entry_weights(&mut split_copy, cap as u128);
+    let true_total: u128 = entries.iter().map(|e| e.count as u128).sum();
+    let cap_total: u128 = split_copy.iter().map(|e| e.count as u128).sum();
+    assert!(
+      true_total > cap as u128 && cap_total <= cap as u128 + entries.len() as u128,
+      "cap must bite: true_total={true_total} cap_total={cap_total}"
+    );
+
+    // True-population path: one slot, one k-means pass over the TRUE entries. Every
+    // entry assigns to the lone slot, so the centroid is the true weighted mean;
+    // R rounds to the dominant's 40.
+    let mut palette = vec![rgba(128, 128, 128, 255)];
+    kmeans_refine(&mut palette, &entries, 1);
+    assert_eq!(
+      palette[0].r, 40,
+      "k-means must use TRUE populations: the dominant R=40 color (count cap*100) \
+       must pull the lone centroid's R to 40, got {:?}",
+      palette[0]
+    );
+
+    // PROVE-FAIL guard: feeding the CAPPED copy to the SAME path distorts the
+    // centroid — the over-weighted rare swarm drags R off 40 (to 41). This pins
+    // that the cap genuinely changes k-means output, so passing the true entries
+    // is load-bearing, not vacuous.
+    let mut capped_palette = vec![rgba(128, 128, 128, 255)];
+    kmeans_refine(&mut capped_palette, &split_copy, 1);
+    assert_ne!(
+      capped_palette[0].r, palette[0].r,
+      "the capped copy MUST distort the centroid (proving FIX B matters): capped \
+       R={} should differ from true R={}",
+      capped_palette[0].r, palette[0].r
+    );
+  }
+
+  #[test]
+  fn kmeans_guard_never_worsens_objective() {
+    // FIX #2 canary: k-means here is NOT monotone. The assignment minimizes the
+    // alpha-weighted `dist2`, but the centroid update is the plain count-weighted
+    // RGBA mean, which is not that metric's minimizer when alpha varies (the
+    // per-pair RGB weight `(a_i+a_c)/510` couples to the center's own alpha). So a
+    // pass can RAISE the objective — and the unguarded code kept it unconditionally,
+    // which could trip `min_quality` and force the 256-color retry. The keep-best
+    // guard makes `kmeans_refine` return a palette whose objective is `<=` the
+    // seed's.
+    //
+    // These 5 partial-alpha entries are a verified counterexample: the K=2 seed from
+    // `median_cut` scores 174770; ONE unguarded pass RISES to 226020. The guard must
+    // keep the 174770 seed.
+    let entries = make_entries(&[
+      (rgba(21, 70, 49, 2), 1000),
+      (rgba(96, 79, 76, 8), 1000),
+      (rgba(105, 133, 189, 8), 100),
+      (rgba(183, 56, 226, 1), 1000),
+      (rgba(212, 155, 20, 1), 5),
+    ]);
+
+    // Seed objective: the K=2 median-cut palette over the TRUE entries.
+    let mut pal = median_cut(&entries, 2, None);
+    let obj_seed = kmeans_objective(&pal, &entries);
+    assert_eq!(obj_seed, 174770, "seed objective pin (median_cut K=2)");
+
+    // One refine pass: the guard must return a palette no worse than the seed.
+    kmeans_refine(&mut pal, &entries, 1);
+    let obj_after = kmeans_objective(&pal, &entries);
+    assert!(
+      obj_after <= obj_seed,
+      "guard must never worsen the objective: obj_after={obj_after} > obj_seed={obj_seed}"
+    );
+    // It kept the 174770 seed, NOT the 226020 the raw pass would have produced.
+    assert_eq!(
+      obj_after, 174770,
+      "guard must keep the 174770 seed, not adopt the 226020 raw pass; pal={pal:?}"
+    );
+  }
+
+  #[test]
+  fn median_cut_centroid_uses_true_population_at_cap() {
+    // FIX #3 canary (median_cut analogue of `kmeans_uses_true_population_not_capped
+    // _weights`): the Wu split DECISIONS run on the capped `split_entries`, but each
+    // box's FINAL centroid VALUE must use the TRUE per-color populations — under the
+    // SAME box membership, with NO nearest re-assignment. `cap_entry_weights`'s
+    // `.max(1)` floor over-represents a swarm of rare colors, which can round the
+    // centroid to a different `u8`.
+    //
+    // Construction: a dominant color (R=40, count cap*100) plus 327,680 DISTINCT rare
+    // colors at R in 238..=242 (count 1 each). One box (`max_colors==1`) holds them
+    // all. TRUE population: dominant is ~20,000:1, so the centroid R rounds to 40.
+    // CAPPED population: dominant -> ~cap, each rare -> 1 (floored), so the rare swarm
+    // pulls the centroid R up to 41.
+    let cap: u64 = 1 << 26;
+    let dominant = rgba(40, 80, 120, 255);
+    let mut items: Vec<(RGBA8, u64)> = Vec::with_capacity(327_681);
+    items.push((dominant, cap * 100));
+    for r in 238u16..=242 {
+      for g in 0u16..256 {
+        for b in 0u16..256 {
+          items.push((rgba(r as u8, g as u8, b as u8, 255), 1));
+        }
+      }
+    }
+    let entries = make_entries(&items);
+
+    // The split copy fed to median_cut is capped; the true-count map is built from
+    // the ORIGINAL entries (packed color -> true count), as quantize_pass does.
+    let mut split = entries.clone();
+    cap_entry_weights(&mut split, cap as u128);
+    let true_map: HashMap<u32, u64> = entries.iter().map(|e| (packed(e.color), e.count)).collect();
+
+    // Sanity: the cap genuinely bit (the split copy IS scaled).
+    let true_total: u128 = entries.iter().map(|e| e.count as u128).sum();
+    assert!(
+      true_total > cap as u128,
+      "cap must bite: true_total={true_total}"
+    );
+
+    // True-population centroid: the dominant R=40 pulls the lone box's centroid to 40.
+    let true_centroid = median_cut(&split, 1, Some(&true_map))[0];
+    assert_eq!(
+      true_centroid.r, 40,
+      "median_cut must value the centroid with TRUE populations: R must be 40, got {true_centroid:?}"
+    );
+
+    // PROVE-FAIL guard: taking the centroid from the CAPPED copy (pass `None`) shifts
+    // R to 41 — proving the true-count path is load-bearing, not vacuous.
+    let capped_centroid = median_cut(&split, 1, None)[0];
+    assert_ne!(
+      capped_centroid.r, true_centroid.r,
+      "the capped copy MUST shift the centroid (proving FIX #3 matters): capped R={} \
+       should differ from true R={}",
+      capped_centroid.r, true_centroid.r
+    );
+  }
+}
