@@ -15,7 +15,7 @@ use std::collections::HashMap;
 
 use rgb::RGBA8;
 
-use crate::lab::{Lab, delta_e76_sq, rgb_to_lab};
+use crate::lab::{Lab, MAX_DELTA_E76_SQ, delta_e76_sq, rgb_to_lab};
 
 /// Hard upper bound on an 8-bit indexed palette.
 const MAX_PALETTE: usize = 256;
@@ -78,6 +78,100 @@ fn dim_penalty(src_a: u8, entry_a: u8) -> i64 {
   if src_a > 0 && entry_a < src_a {
     let d = src_a as i64 - entry_a as i64; // 1..=255
     DIM_WEIGHT * d * d
+  } else {
+    0
+  }
+}
+
+/// Weight of the smooth anti-vanish penalty [`vanish_penalty`]. CUBIC, so it is highly SELECTIVE:
+/// huge at the LARGE drop of a genuine vanish, negligible at the small drop of a translucent remap.
+///
+/// Sized on PRINCIPLE, not calibrated against one fixture: it must keep an ESSENTIALLY-SOLID source
+/// off a clearly-invisible same-hue entry even against the WORST-case hue gap. The worst visible
+/// competitor is a full-alpha entry at the gamut's ΔE² diameter [`MAX_DELTA_E76_SQ`] (= 669_160_034,
+/// blue↔green), whose `pdist_lab` is at most that value (`wa/510 ≤ 1`, alpha term 0). A same-hue entry
+/// at alpha `e` scores `1500·(query_a−e)²` (`pdist` alpha term; colour term 0) `+ 3000·(S−e)²`
+/// (`dim_penalty`) `+ W·(S−e)³` (`vanish_penalty`), where `S` is the raw source alpha. The guarantee
+/// covers the box `S ≥ 224` (≈88 % — "essentially solid", [`VANISH_GUARD_MIN_SRC`]) and
+/// `e ≤ 50` (≤ ~20 % — an unambiguous vanish, [`VANISH_GUARD_MAX_ENTRY`]) for ANY `query_a` (so it
+/// survives dither raising `want.a`). The score is linear in `query_a` and minimised at the dither
+/// maximum `query_a = 255`, and falls with rising `e` and falling `S`, so the hardest corner is
+/// `(S=224, e=50, query_a=255)`: `1500·205² + 3000·174² + W·174³ > 669_160_034` needs `W > 97.8`.
+/// `W = 100` clears it (`6.807e8 > 6.692e8`, ~11.5e6 margin), GUARANTEEING (compile-checked just
+/// below) that no source ≥88 % opaque lands on a ≤20 %-opacity same-hue entry, whatever the
+/// alternative hue, even under dither. Outside that box the smooth penalty still biases toward
+/// visibility but the winner is the plain argmin (a soft crossover, not a guarantee). The cube stays
+/// tiny for a genuinely TRANSLUCENT remap (drop ~62 scores `100·62³ ≈ 2.4e7`, far below a hue gap), so
+/// `pdist_lab` keeps translucent edges on-hue; the closest-hue (red) crossover sits near source alpha
+/// ~157, well above the translucent band, so round-7 (`a=100` keeps its hue) holds with margin.
+const VANISH_WEIGHT: i64 = 100;
+
+/// Source-alpha FLOOR of the anti-vanish guarantee (≈88 % opacity, "essentially solid"). NOT a code
+/// branch — [`nearest_lab`] has no threshold — only the documented, compile-checked SCOPE within which
+/// [`VANISH_WEIGHT`] provably keeps a source off a clearly-invisible same-hue entry. Below it the
+/// penalty still biases toward visibility, but the winner is the plain argmin and no guarantee is
+/// claimed (translucent sources prefer to keep their hue at a lower alpha anyway — see [`vanish_penalty`]).
+const VANISH_GUARD_MIN_SRC: i64 = 224;
+/// Entry-alpha CEILING of the anti-vanish guarantee (≈20 % opacity): an entry this faint is a clear
+/// vanish for an essentially-solid source. Above it the remap is a soft argmin crossover, not a guarantee.
+const VANISH_GUARD_MAX_ENTRY: i64 = 50;
+
+/// Compile-time proof that [`VANISH_WEIGHT`] meets the anti-vanish guarantee across its whole scope.
+/// WORST CASE (derived): a source at the floor [`VANISH_GUARD_MIN_SRC`] onto a same-hue entry at the
+/// ceiling [`VANISH_GUARD_MAX_ENTRY`], with the dither-raised `query_a` at a full 255 (the score is
+/// linear in `query_a` and minimised there). Its score `1500·(255−e)² + 3000·(S−e)² + W·(S−e)³` must
+/// exceed the worst-hue visible competitor's, whose `pdist_lab` is at most the gamut diameter
+/// [`MAX_DELTA_E76_SQ`]. If the weight, the envelope, or the diameter changes so the guarantee fails,
+/// the build fails here instead of silently regressing.
+const _: () = {
+  let s = VANISH_GUARD_MIN_SRC;
+  let e = VANISH_GUARD_MAX_ENTRY;
+  let dim_score = 1500 * (255 - e).pow(2) + 3000 * (s - e).pow(2) + VANISH_WEIGHT * (s - e).pow(3);
+  assert!(dim_score > MAX_DELTA_E76_SQ);
+};
+
+/// Smooth final-remap ANTI-VANISH penalty: how strongly to avoid assigning a visible SOURCE pixel to
+/// a much-DIMMER entry, as `VANISH_WEIGHT · (src_a − entry_a)³` when the entry is dimmer, else `0`.
+///
+/// It REPLACES an earlier HARD "visibility floor" exclusion. Every threshold form of that floor
+/// (`src_a == 255`; a proportional `2·entry_a < src_a`; a `src_a >= 224` band) created a forced-exclusion
+/// CLIFF: a visible source one step below the threshold fell through to a near-invisible entry, or —
+/// proportionally — a translucent source was force-flipped onto a brighter WRONG-hue entry. Being a
+/// CONTINUOUS score term keyed on the raw SOURCE alpha (`guard_src_alpha`), this has NO hard exclusion
+/// threshold: the chosen entry is always the global argmin of `pdist_lab + dim_penalty + vanish_penalty`.
+/// (`nearest_lab` is still a discrete argmin, so as source alpha rises the winner can change at a
+/// crossover — but at that crossover the two entries are near-equal in SCORE, exactly like an ordinary
+/// nearest-neighbour quantizer flipping a pixel that sits between two palette colors; there is no
+/// "forbidden better-scoring entry", which is what made the hard floor's cliff a defect rather than
+/// just a quantization boundary.)
+///
+/// WHY it is needed on top of [`dim_penalty`]: an opaque (or near-opaque) pixel that resolves to a
+/// near-invisible same-hue entry visually VANISHES, and the gentle quadratic `dim_penalty` cannot
+/// always prevent it — in the dither path Floyd–Steinberg can push `want` toward a saturated hue
+/// whose colour gap to the only visible alternative out-ranks the quadratic penalty (e.g. a forced
+/// 2-colour palette `[green@29, red@255]`: pre-penalty an opaque green maps to `green@29` and
+/// disappears). And the gap to overcome depends on the alternative's HUE: a far hue (e.g. only
+/// `blue@255` visible, ΔE² up to the [`MAX_DELTA_E76_SQ`] diameter) needs far more push than a near
+/// one (`red`). The CUBIC growth, weighted to dominate that worst-case diameter (see
+/// [`VANISH_WEIGHT`]), makes this term win wherever the drop is large (the genuine vanish), so the
+/// opaque pixel lands on the visible entry whatever its hue — accepting a hue change as the price of
+/// staying visible, which for an essentially-solid pixel beats vanishing.
+///
+/// WHY it does NOT recolour translucent edges: for a genuinely TRANSLUCENT source the drop to a dim
+/// same-hue entry is small, so `(src_a − entry_a)³` stays tiny and `pdist_lab` (hue) still decides —
+/// the translucent pixel keeps its colour at a lower alpha rather than flipping to a brighter wrong
+/// hue. The cube's selectivity is what separates the two regimes without any threshold.
+///
+/// Keyed on the SOURCE alpha (`guard_src_alpha`), so clustering callers (`guard_src_alpha == 0`)
+/// disable it (`0 > entry_a` is false → `0`) and the palette / objective / Wu-split / `quality_score`
+/// stay byte-identical. It is also a literal no-op on a fully-opaque image: nothing is dimmer than an
+/// `a == 255` source, the term is `0`, and the bundled-photo bytes are preserved. Overflow-safe:
+/// `≤ VANISH_WEIGHT · 255³ ≈ 1.66e9`, and `pdist_lab + dim_penalty + vanish_penalty ≲ 2.6e9 ≪ i64::MAX`.
+#[inline]
+fn vanish_penalty(guard_src_alpha: u8, entry_a: u8) -> i64 {
+  if guard_src_alpha > entry_a {
+    let drop = guard_src_alpha as i64 - entry_a as i64; // 1..=255
+    VANISH_WEIGHT * drop * drop * drop
   } else {
     0
   }
@@ -730,15 +824,26 @@ fn median_cut(
 /// `guard_src_alpha` is the FINAL-REMAP visibility guard: the raw SOURCE pixel's alpha
 /// when this is a real remap of a source pixel (`remap_nearest`, `remap_dither`), or `0`
 /// to DISABLE the guard for clustering-context calls (`kmeans_objective`, `kmeans_refine`,
-/// the `nearest` wrapper used by the Wu split and `quality_score`). When non-zero it adds
-/// [`dim_penalty`] so a visible source pixel cannot be assigned to a much-dimmer entry and
-/// VANISH (see [`DIM_WEIGHT`]). It is kept SEPARATE from `query_a` because in the dither
-/// path `query_a` is the dither-adjusted `want.a` (which can drop below the source alpha),
-/// whereas the guard must key on the RAW source visibility — exactly like `skip_transparent`.
-/// The clustering callers pass `0`, so the palette, the keep-best objective, the D² reseed,
-/// the Wu split, and `quality_score` are byte-identical; the guard touches ONLY the two
-/// final-remap sites. On a fully-opaque image every `dim_penalty` is `0`, so output is
-/// byte-identical there too.
+/// the `nearest` wrapper used by the Wu split and `quality_score`). It drives TWO SCORE terms
+/// so a visible source pixel cannot be assigned to a much-dimmer entry and VANISH, both added to
+/// the `pdist_lab` distance and both keyed on the raw source alpha: the gentle quadratic
+/// [`dim_penalty`] (see [`DIM_WEIGHT`]) that biases ANY visible source away from dimmer entries,
+/// and the steeper cubic [`vanish_penalty`] (see [`VANISH_WEIGHT`]) that dominates only at the
+/// LARGE drop of a genuine vanish (an essentially-solid source onto a near-invisible entry) — so
+/// the solid source lands on a visible entry whenever the palette has one, while a genuinely
+/// TRANSLUCENT source, whose drop to a dim same-hue entry is small, keeps its HUE instead of being
+/// flipped onto a brighter wrong-hue entry. Both are SCORE terms, not exclusions, so there is no
+/// hard source-alpha threshold that force-excludes an otherwise-best entry: the winner is always the
+/// global argmin, so any change at a crossover is a near-tie between two entries (ordinary
+/// nearest-neighbour quantization), not the forced-exclusion cliff every hard-floor form had
+/// (`== 255`, proportional, a `>= 224` band; see [`vanish_penalty`]). The guard is kept SEPARATE from `query_a` because in the
+/// dither path `query_a` is the dither-adjusted `want.a` (which can drop below the source alpha),
+/// whereas the guard must key on the RAW source visibility — exactly like `skip_transparent`. The
+/// clustering callers pass `0`, so both terms vanish (`guard_src_alpha > entry_a` and
+/// `entry_a < guard_src_alpha` are both false at `0`) and the palette, the keep-best objective, the
+/// D² reseed, the Wu split, and `quality_score` are byte-identical; the guard touches ONLY the two
+/// final-remap sites. On a fully-opaque image every entry is `a == 255`, nothing is dimmer than an
+/// `a == 255` source, both terms are `0`, and output is byte-identical there too.
 #[inline]
 fn nearest_lab(
   palette_labs: &[Lab],
@@ -766,13 +871,20 @@ fn nearest_lab(
   // forced onto the transparent slot separately (the override in `quantize_pass`).
   // For opaque images no slot is reserved (no `a == 0` entry exists), so this is a
   // no-op and output stays byte-identical regardless of the flag.
+  // TIER 1 — the production path. Exclude ONLY the reserved transparent slot (for visible sources).
+  // A visible source is kept off a much-dimmer entry by SCORE — the smooth [`vanish_penalty`] (plus
+  // the gentle [`dim_penalty`]) — NOT by a hard exclusion, so the winner is always the global argmin:
+  // no forced-exclusion cliff, just the ordinary near-tie a nearest-neighbour quantizer has at any
+  // boundary between two palette entries.
   let mut best = usize::MAX;
   let mut best_d = i64::MAX;
   for (i, (&plab, &pa)) in palette_labs.iter().zip(palette_alphas.iter()).enumerate() {
     if skip_transparent && pa == 0 {
       continue;
     }
-    let d = pdist_lab(query_lab, query_a, plab, pa) + dim_penalty(guard_src_alpha, pa);
+    let d = pdist_lab(query_lab, query_a, plab, pa)
+      + dim_penalty(guard_src_alpha, pa)
+      + vanish_penalty(guard_src_alpha, pa);
     if d < best_d {
       best_d = d;
       best = i;
@@ -781,16 +893,16 @@ fn nearest_lab(
   if best != usize::MAX {
     return best;
   }
-  // Unreachable in production: a visible query implies the image had visible pixels,
-  // which `quantize_pass` always clusters into at least one visible (`a > 0`) entry.
-  // Defensive fallback so the result is always defined — pick the perceptually-nearest
-  // entry without the exclusion (lower index wins ties, like the main loop). The
-  // `dim_penalty` is applied here too for consistency; when this loop runs every entry
-  // is `a == 0`, so the penalty is a constant offset and does not change the argmin.
+  // TIER 2 — fallback for an all-transparent palette (every entry `a == 0`, so Tier 1 skipped them
+  // all). Drop the transparent-slot exclusion so the result is always defined (lower index wins ties).
+  // With every entry `a == 0` the dimming terms are a constant offset and do not change the argmin.
+  // Unreachable in production: `quantize_pass` always clusters visible pixels into ≥ one visible entry.
   let mut best = 0usize;
   let mut best_d = i64::MAX;
   for (i, (&plab, &pa)) in palette_labs.iter().zip(palette_alphas.iter()).enumerate() {
-    let d = pdist_lab(query_lab, query_a, plab, pa) + dim_penalty(guard_src_alpha, pa);
+    let d = pdist_lab(query_lab, query_a, plab, pa)
+      + dim_penalty(guard_src_alpha, pa)
+      + vanish_penalty(guard_src_alpha, pa);
     if d < best_d {
       best_d = d;
       best = i;
@@ -4056,9 +4168,10 @@ mod tests {
     // distance up to ~2x for a low-alpha entry, and `da² * ALPHA_WEIGHT_LAB` is far
     // smaller than Lab color distances, so an opaque green is otherwise pulled onto a
     // same-hue near-invisible green entry instead of the correct opaque red. The
-    // final-remap visibility guard (`dim_penalty`, keyed on the source alpha) makes the
-    // dimmer entry lose. This asserts the fix at the `quantize_rgba` boundary; it FAILS
-    // pre-fix (the opaque greens map to a green entry with a≈11).
+    // final-remap visibility guard (the smooth `dim_penalty` + `vanish_penalty` score
+    // terms, keyed on the source alpha) makes the dimmer entry lose. This asserts the fix
+    // at the `quantize_rgba` boundary; it FAILS pre-fix (the opaque greens map to a green
+    // entry with a≈11).
     let mut px: Vec<RGBA8> = Vec::with_capacity(308);
     px.extend(std::iter::repeat_n(rgba(0, 200, 0, 1), 200)); // faint visible green
     px.extend(std::iter::repeat_n(rgba(0, 200, 0, 255), 8)); // opaque green
@@ -4103,6 +4216,349 @@ mod tests {
           entry.r == 0 && entry.g > 0,
           "faint (a=1) green source px{i} must map to the green cluster (r==0, g>0), \
            not red; entry = {entry:?}, palette = {:?}",
+          out.palette
+        );
+      }
+    }
+  }
+
+  #[test]
+  fn opaque_pixel_never_vanishes_onto_low_alpha_entry_with_dither() {
+    // Regression (DITHER ON): the same opaque-vanish as the sibling test above, but through
+    // `remap_dither`. Here `want.a` stays high (~255) for the opaque pixels, so the gentle
+    // quadratic `dim_penalty` is NOT enough on its own: Floyd–Steinberg COLOUR diffusion pushes
+    // `want` toward a saturated green `(0,255,0)`, whose colour gap to the only opaque alternative
+    // (red) grows past the quadratic penalty, so pre-fix the opaque greens are pulled onto the dim
+    // green centroid (a≈29) and VANISH. The steeper cubic `vanish_penalty` dominates at this large
+    // drop (255→29) and forces them onto the visible red instead. The sibling test
+    // uses `dither = false`, so it exercises `remap_nearest`, not `remap_dither`, and never
+    // caught this path. FAILS pre-fix (the FS-saturated opaque greens map to a≈29).
+    let mut px: Vec<RGBA8> = Vec::with_capacity(172);
+    px.extend(std::iter::repeat_n(rgba(0, 200, 0, 1), 64)); // faint green: drags green centroid to a≈29
+    px.extend(std::iter::repeat_n(rgba(0, 200, 0, 255), 8)); // opaque green
+    px.extend(std::iter::repeat_n(rgba(220, 0, 0, 255), 100)); // opaque red
+
+    // max_colors 2, DITHER ON, 5 k-means iters; min_quality 0. width 172, height 1 so the
+    // serpentine error diffusion runs along the row.
+    let out = quantize_rgba(&px, 172, 1, &cfg(2, true, 5));
+
+    // Setup invariants (keep the test non-vacuous):
+    //  * no transparent source -> no reserved transparent slot (this is the low-alpha-but-
+    //    visible case, not the transparent-slot regression);
+    //  * the DIM green entry the penalty must out-rank genuinely exists (r==0, g>0, a<128) —
+    //    without it the `>= 128` assertion below could pass vacuously.
+    assert!(
+      !out.palette.iter().any(|c| c.a == 0),
+      "setup: no transparent source, so no transparent slot should be reserved; palette = {:?}",
+      out.palette
+    );
+    assert!(
+      out.palette.iter().any(|c| c.r == 0 && c.g > 0 && c.a < 128),
+      "setup: the dim green entry (r==0, g>0, a<128) must exist for this to be the vanish \
+       case; palette = {:?}",
+      out.palette
+    );
+
+    // Every OPAQUE (a=255) source pixel must map to a clearly-visible entry (a>=128). Pre-fix
+    // (no vanish_penalty) the FS-saturated opaque greens map to the dim green entry (a≈29) and
+    // vanish; the cubic penalty redirects them to the visible red.
+    for (i, &p) in px.iter().enumerate() {
+      if p.a == 255 {
+        let entry = out.palette[out.indices[i] as usize];
+        assert!(
+          entry.a >= 128,
+          "opaque source px{i} (a=255) mapped to a low-alpha entry (a={}) under dither — it \
+           would VANISH; the vanish_penalty must keep it on a visible entry; entry = {entry:?}, \
+           palette = {:?}",
+          entry.a,
+          out.palette
+        );
+      }
+    }
+
+    // PARTIAL-ALPHA PRESERVED: the faint (a=1) greens must still map to the LOW-alpha GREEN
+    // cluster — the cubic `vanish_penalty` is keyed on the source alpha, so for an `a == 1` source
+    // it barely fires (the drop to a same-hue dim entry is tiny); faint (and any translucent)
+    // sources keep their hue and are NOT forced onto opaque red.
+    for (i, &p) in px.iter().enumerate() {
+      if p.a == 1 {
+        let entry = out.palette[out.indices[i] as usize];
+        assert!(
+          entry.r == 0 && entry.g > 0,
+          "faint (a=1) green source px{i} must map to the green cluster (r==0, g>0), not red \
+           (the penalty must not flip partial-alpha sources); entry = {entry:?}, palette = {:?}",
+          out.palette
+        );
+      }
+    }
+  }
+
+  #[test]
+  fn near_opaque_pixel_never_vanishes_onto_low_alpha_entry_with_dither() {
+    // Regression (DITHER ON, NEAR-OPAQUE source): the `vanish_penalty` is a CONTINUOUS function of
+    // the source alpha, so there is no threshold (no `== 255` gate, no `>= 224` band) below which a
+    // near-opaque pixel abruptly loses protection and vanishes. A pixel at `a == 254` is visually
+    // opaque, and under dither it vanishes onto the dim green centroid (a≈29) exactly like a `255`
+    // pixel does; the cubic penalty at the large drop (254→29) is essentially as strong as at 255→29
+    // (no one-alpha cliff), so it keeps the 254 source visible too. This is the `near_opaque`
+    // analogue of the sibling `opaque_pixel_..._with_dither` test, with the 8 opaque greens dropped
+    // to `a == 254`. FAILS against an `a == 255`-gated hard floor (which never fires for the 254
+    // sources, so the FS-saturated near-opaque greens are pulled onto the dim green entry at a≈29).
+    let mut px: Vec<RGBA8> = Vec::with_capacity(172);
+    px.extend(std::iter::repeat_n(rgba(0, 200, 0, 1), 64)); // faint green: drags green centroid to a≈29
+    px.extend(std::iter::repeat_n(rgba(0, 200, 0, 254), 8)); // NEAR-opaque green (one below 255)
+    px.extend(std::iter::repeat_n(rgba(220, 0, 0, 255), 100)); // opaque red
+
+    // max_colors 2, DITHER ON, 5 k-means iters; min_quality 0. width 172, height 1.
+    let out = quantize_rgba(&px, 172, 1, &cfg(2, true, 5));
+
+    // Setup invariants (keep the test non-vacuous): no transparent slot, and the dim green entry
+    // the penalty must out-rank genuinely exists (r==0, g>0, a<128).
+    assert!(
+      !out.palette.iter().any(|c| c.a == 0),
+      "setup: no transparent source, so no transparent slot should be reserved; palette = {:?}",
+      out.palette
+    );
+    assert!(
+      out.palette.iter().any(|c| c.r == 0 && c.g > 0 && c.a < 128),
+      "setup: the dim green entry (r==0, g>0, a<128) must exist for this to be the vanish case; \
+       palette = {:?}",
+      out.palette
+    );
+
+    // Every NEAR-OPAQUE (a=254) source must map to a HALF-OPAQUE-or-better entry (`entry_a >= 128`)
+    // — i.e. it must not vanish onto the dim green (a≈29). The cubic `vanish_penalty` out-ranks the
+    // dim green for a 254 source essentially as strongly as for a 255 one (no one-alpha cliff).
+    for (i, &p) in px.iter().enumerate() {
+      if p.a == 254 {
+        let entry = out.palette[out.indices[i] as usize];
+        assert!(
+          entry.a >= 128,
+          "near-opaque source px{i} (a=254) mapped to entry a={} (< half opaque) under dither — it \
+           would VANISH; the vanish_penalty must keep it on a visible entry; entry = {entry:?}, \
+           palette = {:?}",
+          entry.a,
+          out.palette
+        );
+      }
+    }
+  }
+
+  #[test]
+  fn opaque_pixel_never_vanishes_onto_low_alpha_entry_against_far_hue() {
+    // Regression (FAR-HUE fallback): the anti-vanish penalty must dominate the WORST-case hue gap,
+    // not just a near one. With `VANISH_WEIGHT` calibrated only against red (ΔE² ≈ 2.9e8) an opaque
+    // green still vanished when its only VISIBLE alternative was a far hue like blue (ΔE² up to the
+    // gamut diameter 6.69e8): the dim same-hue green out-scored blue and won. Here the visible
+    // alternative is blue@255 (the farthest hue from green), and the green centroid is dragged to
+    // a≈11 by faint greens. The opaque greens must still map to blue (a>=128), i.e. stay VISIBLE,
+    // never onto the near-invisible green. PROVE-FAILS at a too-small weight (the opaque greens map
+    // to green@11 and disappear); passes once the weight dominates `MAX_DELTA_E76_SQ`.
+    let mut px: Vec<RGBA8> = Vec::with_capacity(308);
+    px.extend(std::iter::repeat_n(rgba(0, 200, 0, 1), 200)); // faint green: green centroid -> a≈11
+    px.extend(std::iter::repeat_n(rgba(0, 200, 0, 255), 8)); // opaque green (same hue as the dim entry)
+    px.extend(std::iter::repeat_n(rgba(0, 0, 255, 255), 100)); // opaque BLUE: the far-hue visible entry
+
+    // max_colors 2, no dither, 4 k-means iters; min_quality 0.
+    let out = quantize_rgba(&px, 308, 1, &cfg(2, false, 4));
+
+    // Setup invariants (keep the test non-vacuous): no transparent slot, a dim GREEN entry exists
+    // (r==0, g>0, a<128), and the only visible entry is a FAR hue (blue: b-channel dominant).
+    assert!(
+      !out.palette.iter().any(|c| c.a == 0),
+      "setup: no transparent source, so no transparent slot should be reserved; palette = {:?}",
+      out.palette
+    );
+    assert!(
+      out.palette.iter().any(|c| c.r == 0 && c.g > 0 && c.a < 128),
+      "setup: the dim green entry (r==0, g>0, a<128) must exist for this to be the vanish case; \
+       palette = {:?}",
+      out.palette
+    );
+    assert!(
+      out
+        .palette
+        .iter()
+        .any(|c| c.b > c.r && c.b > c.g && c.a >= 128),
+      "setup: the only visible entry must be the far-hue blue; palette = {:?}",
+      out.palette
+    );
+
+    // Every OPAQUE green source must map to the VISIBLE blue (a>=128), accepting the hue change as
+    // the price of staying visible — NOT vanish onto the near-invisible same-hue green.
+    for (i, &p) in px.iter().enumerate() {
+      if p.a == 255 && p.g > 0 {
+        let entry = out.palette[out.indices[i] as usize];
+        assert!(
+          entry.a >= 128,
+          "opaque green source px{i} (a=255) mapped to a low-alpha entry (a={}) when only a far-hue \
+           visible entry existed — it would VANISH; the vanish_penalty must dominate the worst-case \
+           hue gap; entry = {entry:?}, palette = {:?}",
+          entry.a,
+          out.palette
+        );
+      }
+    }
+  }
+
+  #[test]
+  fn near_opaque_pixel_never_vanishes_onto_low_alpha_entry_against_far_hue_with_dither() {
+    // Regression (round-10): the far-hue guarantee must cover the whole NEAR-OPAQUE band, not just
+    // `a == 255`. The cubic penalty is keyed on the source-alpha DROP, so a source at `a == 224`
+    // onto a ~20%-opacity same-hue entry has a smaller drop than a 255 source does, and under dither
+    // `want.a` can rise toward 255, which only WEAKENS the dim entry's disadvantage. At a too-small
+    // weight a 224 source therefore still vanished onto a dim same-hue green when its only visible
+    // alternative was a far hue (blue). `VANISH_WEIGHT` is sized (and compile-time-proven, see its
+    // const block) so the guarantee holds across `src_a >= VANISH_GUARD_MIN_SRC` and entry alpha
+    // `<= VANISH_GUARD_MAX_ENTRY` for ANY query alpha including the dither maximum. Here the green
+    // centroid is dragged to a≈38 (well inside the <=50 zone) and the only visible entry is blue;
+    // the near-opaque greens must map to blue (stay VISIBLE). PROVE-FAILS at the prior weight (the
+    // 224 greens vanish onto the dim green under dither).
+    let mut px: Vec<RGBA8> = Vec::with_capacity(308);
+    px.extend(std::iter::repeat_n(rgba(0, 200, 0, 30), 200)); // faint green: centroid -> a≈38
+    px.extend(std::iter::repeat_n(rgba(0, 200, 0, 224), 8)); // NEAR-opaque green (essentially solid)
+    px.extend(std::iter::repeat_n(rgba(0, 0, 255, 255), 100)); // opaque BLUE: the far-hue visible entry
+
+    // max_colors 2, DITHER ON, 5 k-means iters; min_quality 0. width 308, height 1.
+    let out = quantize_rgba(&px, 308, 1, &cfg(2, true, 5));
+
+    // Setup invariants: no transparent slot, a dim GREEN entry exists (r==0, g>0, a<=50), and the
+    // only visible entry is the far hue (blue: b dominant, a>=128).
+    assert!(
+      !out.palette.iter().any(|c| c.a == 0),
+      "setup: no transparent source, so no transparent slot should be reserved; palette = {:?}",
+      out.palette
+    );
+    assert!(
+      out.palette.iter().any(|c| c.r == 0 && c.g > 0 && c.a <= 50),
+      "setup: a dim green entry (r==0, g>0, a<=50) must exist inside the guarantee zone; palette = {:?}",
+      out.palette
+    );
+    assert!(
+      out
+        .palette
+        .iter()
+        .any(|c| c.b > c.r && c.b > c.g && c.a >= 128),
+      "setup: the only visible entry must be the far-hue blue; palette = {:?}",
+      out.palette
+    );
+
+    // Every NEAR-OPAQUE green source must map to the VISIBLE blue (a>=128) -- not vanish onto the dim
+    // same-hue green -- even though dither can lift its want.a toward full opacity.
+    for (i, &p) in px.iter().enumerate() {
+      if p.a == 224 && p.g > 0 {
+        let entry = out.palette[out.indices[i] as usize];
+        assert!(
+          entry.a >= 128,
+          "near-opaque green source px{i} (a=224) mapped to a low-alpha entry (a={}) under dither when \
+           only a far-hue visible entry existed — it would VANISH; the vanish_penalty must cover the \
+           near-opaque band; entry = {entry:?}, palette = {:?}",
+          entry.a,
+          out.palette
+        );
+      }
+    }
+  }
+
+  #[test]
+  fn translucent_pixel_keeps_hue_not_flipped_to_brighter_wrong_hue() {
+    // Regression (round-7): the anti-vanish term must NOT recolour genuinely TRANSLUCENT sources.
+    // A translucent pixel whose only same-hue palette entry is dim must keep its HUE at a lower
+    // alpha, NOT be forced onto a brighter WRONG-hue entry. (An earlier fully-proportional hard
+    // floor `2·entry_a < src_a` excluded the same-hue dim green for an a=100 source and flipped it
+    // onto opaque red — a visible recolour.) The cubic `vanish_penalty` stays tiny at the SMALL drop
+    // of a translucent source to a same-hue dim entry (here 100→38: `100·62³ ≈ 2.4e7`, far below the
+    // green→red hue cost), so `pdist_lab` still decides and the a=100 green keeps the dim same-hue
+    // green. FAILS against a fully-proportional floor (the a=100 greens decode as red). Mirrors the
+    // public-path fixture a reviewer used (green@30 x64, green@100 x8, red@255 x100, blue@255 x100,
+    // maxQuality:6).
+    let mut px: Vec<RGBA8> = Vec::with_capacity(272);
+    px.extend(std::iter::repeat_n(rgba(0, 200, 0, 30), 64)); // faint green -> green centroid a≈38
+    px.extend(std::iter::repeat_n(rgba(0, 200, 0, 100), 8)); // TRANSLUCENT green (the round-7 source)
+    px.extend(std::iter::repeat_n(rgba(255, 0, 0, 255), 100)); // opaque red
+    px.extend(std::iter::repeat_n(rgba(0, 0, 255, 255), 100)); // opaque blue
+
+    // max_colors 3 (maxQuality:6), NO dither (speed:10 -> 0 k-means iters); min_quality 0.
+    let out = quantize_rgba(&px, 272, 1, &cfg(3, false, 0));
+
+    // Setup invariants (keep the test non-vacuous): a dim GREEN entry exists (r==0, g>0, a<128) AND
+    // a brighter half-opaque-or-better entry exists (the only green is sub-128, so any a>=128 entry
+    // is a wrong hue) — so the flip onto a brighter wrong-hue entry was physically possible.
+    assert!(
+      out.palette.iter().any(|c| c.r == 0 && c.g > 0 && c.a < 128),
+      "setup: dim green entry (r==0,g>0,a<128) must exist; palette = {:?}",
+      out.palette
+    );
+    assert!(
+      out.palette.iter().any(|c| c.a >= 128),
+      "setup: a brighter (a>=128) wrong-hue entry must exist for the flip to be possible; \
+       palette = {:?}",
+      out.palette
+    );
+
+    // Every TRANSLUCENT (a=100) green source must keep its HUE: map to the green entry (r==0, g>0),
+    // NOT be flipped onto the brighter opaque red/blue.
+    for (i, &p) in px.iter().enumerate() {
+      if p.a == 100 {
+        let entry = out.palette[out.indices[i] as usize];
+        assert!(
+          entry.r == 0 && entry.g > 0,
+          "translucent green source px{i} (a=100) was flipped to a wrong-hue entry {entry:?} — the \
+           cubic vanish_penalty must stay small at this drop and not recolour translucent sources; \
+           palette = {:?}",
+          out.palette
+        );
+      }
+    }
+  }
+
+  #[test]
+  fn opaque_source_never_remaps_to_transparent_slot_when_only_dim_entries_exist() {
+    // BOUNDARY of the anti-vanish penalty (the case it cannot fully fix — and must still stay safe
+    // in). When transparency reserves a slot AND a forced 2-colour palette leaves a single
+    // faint-dominated visible centroid below a=128, the palette holds NO half-opaque (a>=128) entry
+    // at all — no single visible colour can represent both the faint (a=1) and the opaque (a=255)
+    // same-hue sources. The cubic `vanish_penalty` cannot conjure a brighter entry that does not
+    // exist, so an opaque source maps to the only visible entry (the dim green) — but it must NEVER
+    // be re-admitted to the reserved transparent slot: that exclusion is `skip_transparent`
+    // (independent of the penalty), and `nearest_lab`'s Tier-2 fallback runs only when EVERY entry
+    // is transparent, which is not the case here. This pins the degenerate boundary: best-effort
+    // visible mapping, never the transparent slot. Such a palette fails the default min_quality
+    // gate and self-heals via retry; it is reachable only at minQuality:0 (the caller opted out of
+    // quality).
+    let mut px: Vec<RGBA8> = Vec::with_capacity(102);
+    px.extend(std::iter::repeat_n(rgba(0, 200, 0, 1), 64)); // faint green: green centroid -> a≈29 (<128)
+    px.extend(std::iter::repeat_n(rgba(0, 200, 0, 255), 8)); // opaque green
+    px.extend(std::iter::repeat_n(rgba(0, 0, 0, 0), 30)); // transparent: reserves the transparent slot
+
+    // max_colors 2, no dither, 4 k-means iters; min_quality 0. width 102, height 1.
+    let out = quantize_rgba(&px, 102, 1, &cfg(2, false, 4));
+
+    // Setup invariants — the degenerate boundary is genuinely present:
+    //  * a transparent slot was reserved (an a==0 entry exists);
+    //  * there is NO half-opaque entry — EVERY entry is below a=128 — so the penalty physically
+    //    cannot deliver an a>=128 result and this is the best-effort case, not the guarantee.
+    assert!(
+      out.palette.iter().any(|c| c.a == 0),
+      "setup: a transparent slot must be reserved; palette = {:?}",
+      out.palette
+    );
+    assert!(
+      out.palette.iter().all(|c| c.a < 128),
+      "setup: there must be NO half-opaque (a>=128) entry, so this exercises the best-effort \
+       case (map to the only visible entry) rather than the guarantee; palette = {:?}",
+      out.palette
+    );
+
+    // Best-effort guarantee: every OPAQUE source maps to a VISIBLE entry (a>0) — and is NEVER
+    // re-admitted to the reserved transparent slot (a==0).
+    for (i, &p) in px.iter().enumerate() {
+      if p.a == 255 {
+        let entry = out.palette[out.indices[i] as usize];
+        assert!(
+          entry.a > 0,
+          "opaque source px{i} (a=255) was re-admitted to the transparent slot (a=0) — it must \
+           map to a VISIBLE entry instead; entry = {entry:?}, palette = {:?}",
           out.palette
         );
       }

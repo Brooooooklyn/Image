@@ -39,6 +39,16 @@ pub(crate) struct Lab {
 /// Fixed-point scale applied to every `Lab` component (value ×100).
 pub(crate) const LAB_SCALE: i32 = 100;
 
+/// Exact global maximum of [`delta_e76_sq`] over the whole sRGB cube — the squared-ΔE *diameter*
+/// of the gamut. It is reached between pure blue `(0,0,255)` and pure green `(0,255,0)` (verified by
+/// an exhaustive 256³ sweep against the gamut corners; the diameter of this point set is
+/// corner-to-corner). So for ANY two colors at full alpha, the perceptual color term in `pdist_lab`
+/// (`delta_e76_sq · wa/510`, `wa ≤ 510`) is at most this value. The quantizer uses it to size the
+/// anti-vanish penalty (`quantize::VANISH_WEIGHT`) so a fully-opaque pixel cannot be pulled onto a
+/// clearly-invisible same-hue entry by even the WORST-case hue gap. Pinned by
+/// `max_delta_e76_sq_is_gamut_diameter`; if the integer Lab math ever drifts, that test fails.
+pub(crate) const MAX_DELTA_E76_SQ: i64 = 669_160_034;
+
 /// Number of fractional bits in the Q16 fixed-point used internally for linear light,
 /// the sRGB->XYZ matrix, and the `f(t)` cube-root output.
 const Q: u32 = 16;
@@ -374,6 +384,39 @@ mod tests {
     let da = (p.a - q.a) as i64;
     let db = (p.b - q.b) as i64;
     assert_eq!(delta_e76_sq(p, q), dl * dl + da * da + db * db);
+  }
+
+  /// Pins [`MAX_DELTA_E76_SQ`]: it equals the blue↔green squared distance and is the maximum over
+  /// every pair of the gamut corners (black/white + the six R/G/B/C/M/Y primaries). The full 256³
+  /// global maximum was confirmed once by an exhaustive sweep to be this same corner-to-corner
+  /// diameter; this test re-pins the value cheaply so any drift in the integer Lab math is caught.
+  #[test]
+  fn max_delta_e76_sq_is_gamut_diameter() {
+    let blue = rgb_to_lab(0, 0, 255);
+    let green = rgb_to_lab(0, 255, 0);
+    assert_eq!(delta_e76_sq(blue, green), MAX_DELTA_E76_SQ);
+
+    let corners = [
+      (0u8, 0u8, 0u8),
+      (255, 0, 0),
+      (0, 255, 0),
+      (0, 0, 255),
+      (255, 255, 0),
+      (0, 255, 255),
+      (255, 0, 255),
+      (255, 255, 255),
+    ];
+    let labs: Vec<Lab> = corners
+      .iter()
+      .map(|&(r, g, b)| rgb_to_lab(r, g, b))
+      .collect();
+    let mut max = 0i64;
+    for (i, &p) in labs.iter().enumerate() {
+      for &q in &labs[i + 1..] {
+        max = max.max(delta_e76_sq(p, q));
+      }
+    }
+    assert_eq!(max, MAX_DELTA_E76_SQ, "corner-pair maximum drifted");
   }
 
   /// Direct unit test of the deterministic integer cube root against a checked reference.
