@@ -44,6 +44,45 @@ const ALPHA_WEIGHT: i64 = 3;
 /// `dist2`.
 const ALPHA_WEIGHT_LAB: i64 = 1500;
 
+/// One-sided "visibility-loss" weight for the FINAL REMAP assignment only.
+///
+/// Added to the assignment score (in [`nearest_lab`]) ONLY when a candidate palette
+/// entry is strictly DIMMER than the SOURCE pixel, as `DIM_WEIGHT · (src_a − entry_a)²`;
+/// it is ZERO when the entry is as opaque or more. It exists to stop a VISIBLE source
+/// pixel being assigned to a non-zero-but-near-invisible SAME-HUE entry and VANISHING:
+/// `pdist_lab`'s color term `de · wa/510` is discounted up to ~2× for a low-alpha entry
+/// (`wa = query_a + entry_a` shrinks), and `da² · ALPHA_WEIGHT_LAB` alone is too small
+/// versus Lab color gaps (~1e8), so an opaque query is otherwise pulled onto a dim entry.
+///
+/// It is `2 · ALPHA_WEIGHT_LAB` (= 3000), i.e. dimming a pixel costs 3× the symmetric
+/// alpha penalty (1500 base + 3000 one-sided) while brightening stays at 1×. Lower bound:
+/// flipping the verified repro (opaque green must rank red@255 over green@11) needs
+/// `(1500 + DIM_WEIGHT) · 244² > 212.5e6`, i.e. `DIM_WEIGHT > 2070`; 3000 clears it with
+/// margin. It is NOT bounded above by any pinned test because the penalty is applied ONLY
+/// at the two remap sites (`remap_nearest`, `remap_dither`) — clustering, `kmeans_objective`,
+/// the D² reseed, the Wu split, and `quality_score` all pass `guard_src_alpha = 0` and so
+/// are byte-identical. Being one-sided and PROPORTIONAL, small dimming stays negligible
+/// (e.g. `a=8 → a=3`: `3000·25 = 75_000 ≪` a typical `pdist` gap), so legitimate
+/// partial-alpha remaps are not disturbed (no hard cliff). OPAQUE-NEUTRAL by construction:
+/// every all-opaque pair has `entry_a == src_a == 255`, so the term is identically 0.
+const DIM_WEIGHT: i64 = 2 * ALPHA_WEIGHT_LAB;
+
+/// Visibility-loss penalty for the final remap argmin: how much a candidate palette
+/// entry would reduce the SOURCE pixel's visibility. Zero unless the entry is strictly
+/// dimmer than the source (and zero when `src_a == 0`, the signal clustering callers use
+/// to DISABLE the guard). Flat-additive integer term — no `wa/510` discount, so a dim
+/// entry cannot soften its own penalty. Overflow-safe: `≤ DIM_WEIGHT · 255² ≈ 1.95e8`,
+/// and `pdist_lab + dim_penalty ≤ ~1.5e9 ≪ i64::MAX`.
+#[inline]
+fn dim_penalty(src_a: u8, entry_a: u8) -> i64 {
+  if src_a > 0 && entry_a < src_a {
+    let d = src_a as i64 - entry_a as i64; // 1..=255
+    DIM_WEIGHT * d * d
+  } else {
+    0
+  }
+}
+
 /// Tunable parameters for a single quantization run.
 ///
 /// Constructed from the public [`crate::png::PngQuantOptions`] via
@@ -687,6 +726,19 @@ fn median_cut(
 /// computed ONCE per query by the caller and once per palette entry in
 /// `palette_labs`, so the per-call cost is `O(palette · delta_e76_sq)` with no
 /// cube roots. Lower index wins ties (`<`), exactly like the old `dist2` `nearest`.
+///
+/// `guard_src_alpha` is the FINAL-REMAP visibility guard: the raw SOURCE pixel's alpha
+/// when this is a real remap of a source pixel (`remap_nearest`, `remap_dither`), or `0`
+/// to DISABLE the guard for clustering-context calls (`kmeans_objective`, `kmeans_refine`,
+/// the `nearest` wrapper used by the Wu split and `quality_score`). When non-zero it adds
+/// [`dim_penalty`] so a visible source pixel cannot be assigned to a much-dimmer entry and
+/// VANISH (see [`DIM_WEIGHT`]). It is kept SEPARATE from `query_a` because in the dither
+/// path `query_a` is the dither-adjusted `want.a` (which can drop below the source alpha),
+/// whereas the guard must key on the RAW source visibility — exactly like `skip_transparent`.
+/// The clustering callers pass `0`, so the palette, the keep-best objective, the D² reseed,
+/// the Wu split, and `quality_score` are byte-identical; the guard touches ONLY the two
+/// final-remap sites. On a fully-opaque image every `dim_penalty` is `0`, so output is
+/// byte-identical there too.
 #[inline]
 fn nearest_lab(
   palette_labs: &[Lab],
@@ -694,6 +746,7 @@ fn nearest_lab(
   query_lab: Lab,
   query_a: u8,
   skip_transparent: bool,
+  guard_src_alpha: u8,
 ) -> usize {
   // When `skip_transparent` is set, the reserved fully-transparent palette slot
   // (entry alpha == 0) is excluded from selection. The perceptual metric can rank a
@@ -719,7 +772,7 @@ fn nearest_lab(
     if skip_transparent && pa == 0 {
       continue;
     }
-    let d = pdist_lab(query_lab, query_a, plab, pa);
+    let d = pdist_lab(query_lab, query_a, plab, pa) + dim_penalty(guard_src_alpha, pa);
     if d < best_d {
       best_d = d;
       best = i;
@@ -731,11 +784,13 @@ fn nearest_lab(
   // Unreachable in production: a visible query implies the image had visible pixels,
   // which `quantize_pass` always clusters into at least one visible (`a > 0`) entry.
   // Defensive fallback so the result is always defined — pick the perceptually-nearest
-  // entry without the exclusion (lower index wins ties, like the main loop).
+  // entry without the exclusion (lower index wins ties, like the main loop). The
+  // `dim_penalty` is applied here too for consistency; when this loop runs every entry
+  // is `a == 0`, so the penalty is a constant offset and does not change the argmin.
   let mut best = 0usize;
   let mut best_d = i64::MAX;
   for (i, (&plab, &pa)) in palette_labs.iter().zip(palette_alphas.iter()).enumerate() {
-    let d = pdist_lab(query_lab, query_a, plab, pa);
+    let d = pdist_lab(query_lab, query_a, plab, pa) + dim_penalty(guard_src_alpha, pa);
     if d < best_d {
       best_d = d;
       best = i;
@@ -756,7 +811,10 @@ fn nearest_lab(
 fn nearest(palette: &[RGBA8], c: RGBA8) -> usize {
   let labs = palette_labs(palette);
   let alphas: Vec<u8> = palette.iter().map(|p| p.a).collect();
-  nearest_lab(&labs, &alphas, rgb_to_lab(c.r, c.g, c.b), c.a, c.a > 0)
+  // `nearest` is the clustering/measurement helper (Wu split, `quality_score`). The
+  // final-remap visibility guard is DISABLED here (`guard_src_alpha = 0`) so the split
+  // and the `min_quality` gate stay byte-identical.
+  nearest_lab(&labs, &alphas, rgb_to_lab(c.r, c.g, c.b), c.a, c.a > 0, 0)
 }
 
 /// Exact integer k-means objective for `palette` over `entries`, using the
@@ -784,7 +842,8 @@ fn kmeans_objective(palette: &[RGBA8], entries: &[ColorCount]) -> u128 {
   let mut obj: u128 = 0;
   for e in entries {
     let qlab = rgb_to_lab(e.color.r, e.color.g, e.color.b);
-    let idx = nearest_lab(&labs, &alphas, qlab, e.color.a, e.color.a > 0);
+    // Clustering objective: guard disabled (`0`) so the keep-best metric is pure `pdist`.
+    let idx = nearest_lab(&labs, &alphas, qlab, e.color.a, e.color.a > 0, 0);
     let d = pdist_lab(qlab, e.color.a, labs[idx], alphas[idx]).max(0) as u128;
     obj += e.count as u128 * d;
   }
@@ -856,6 +915,8 @@ fn kmeans_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) {
         entry_labs[ei],
         entry_alphas[ei],
         entry_alphas[ei] > 0,
+        // Clustering assignment: guard disabled so centroids/palette stay byte-identical.
+        0,
       );
       let c = e.count;
       sr[idx] += e.color.r as u64 * c;
@@ -1013,6 +1074,11 @@ fn remap_nearest(px: &[RGBA8], palette: &[RGBA8], bits: u8) -> Vec<u8> {
         // `key` IS the (posterized) source pixel here, so its alpha is the source
         // visibility; a visible source key must not resolve to the transparent slot.
         key.a > 0,
+        // FINAL REMAP: enable the visibility guard keyed on the source pixel's alpha so
+        // a visible pixel cannot be assigned to a much-dimmer entry and vanish. `key.a`
+        // is the (posterized) source alpha; posterize never touches alpha, so it equals
+        // the raw source alpha.
+        key.a,
       ) as u8
     });
     indices.push(idx);
@@ -1295,6 +1361,10 @@ fn remap_dither(px: &[RGBA8], width: usize, height: usize, palette: &[RGBA8], bi
         rgb_to_lab(want.r, want.g, want.b),
         want.a,
         px[base].a > 0,
+        // FINAL REMAP visibility guard, keyed on the RAW source alpha `px[base].a` — NOT
+        // the dither-adjusted `want.a`, which can drop below the source: a visible source
+        // pixel must not vanish onto a much-dimmer entry even when its `want.a` clamped low.
+        px[base].a,
       );
       indices[base] = idx as u8;
       let chosen = palette[idx];
@@ -3978,6 +4048,67 @@ mod tests {
     }
   }
 
+  #[test]
+  fn opaque_pixel_never_vanishes_onto_low_alpha_entry() {
+    // Regression: an OPAQUE (a=255) source pixel can be assigned to a NON-zero but
+    // LOW-alpha palette entry of the SAME hue and visually VANISH. In `pdist_lab` the
+    // color term `delta_e76_sq * wa/510` (wa = query_a + entry_a) discounts color
+    // distance up to ~2x for a low-alpha entry, and `da² * ALPHA_WEIGHT_LAB` is far
+    // smaller than Lab color distances, so an opaque green is otherwise pulled onto a
+    // same-hue near-invisible green entry instead of the correct opaque red. The
+    // final-remap visibility guard (`dim_penalty`, keyed on the source alpha) makes the
+    // dimmer entry lose. This asserts the fix at the `quantize_rgba` boundary; it FAILS
+    // pre-fix (the opaque greens map to a green entry with a≈11).
+    let mut px: Vec<RGBA8> = Vec::with_capacity(308);
+    px.extend(std::iter::repeat_n(rgba(0, 200, 0, 1), 200)); // faint visible green
+    px.extend(std::iter::repeat_n(rgba(0, 200, 0, 255), 8)); // opaque green
+    px.extend(std::iter::repeat_n(rgba(220, 0, 0, 255), 100)); // opaque red
+
+    // max_colors 2, no dither, 4 k-means iters; min_quality 0.
+    let out = quantize_rgba(&px, 308, 1, &cfg(2, false, 4));
+
+    // Setup invariant: there is NO transparent source pixel here, so there is no
+    // reserved transparent slot — assert the palette has a visible entry (this is NOT
+    // the transparent-slot regression; it is the low-alpha-but-visible vanishing case).
+    assert!(
+      out.palette.iter().any(|c| c.a > 0),
+      "setup: palette must have a visible entry; palette = {:?}",
+      out.palette
+    );
+
+    // Every OPAQUE (a=255) source pixel must map to a clearly-visible entry — here the
+    // opaque red cluster (a=255). Pre-fix the opaque greens map to a low-alpha green
+    // entry (a≈11) and vanish; the guard redirects them to the visible entry.
+    for (i, &p) in px.iter().enumerate() {
+      if p.a == 255 {
+        let entry = out.palette[out.indices[i] as usize];
+        assert!(
+          entry.a >= 128,
+          "opaque source px{i} (a=255) mapped to a low-alpha entry (a={}) — it would \
+           VANISH; the dimming guard must keep it on a visible entry; entry = {entry:?}, \
+           palette = {:?}",
+          entry.a,
+          out.palette
+        );
+      }
+    }
+
+    // PARTIAL-ALPHA PRESERVED: the faint (a=1) greens must still map to the LOW-alpha
+    // GREEN cluster — they are NOT forced onto opaque red. The dimming guard is keyed on
+    // the source alpha, so for a faint source it barely fires (small `src_a − entry_a`).
+    for (i, &p) in px.iter().enumerate() {
+      if p.a == 1 {
+        let entry = out.palette[out.indices[i] as usize];
+        assert!(
+          entry.r == 0 && entry.g > 0,
+          "faint (a=1) green source px{i} must map to the green cluster (r==0, g>0), \
+           not red; entry = {entry:?}, palette = {:?}",
+          out.palette
+        );
+      }
+    }
+  }
+
   // One UNGUARDED k-means pass: assign every entry to its perceptual-nearest palette
   // entry, then move each centroid to the count-weighted RGBA mean — identical math to
   // `kmeans_refine`'s pass body, minus the keep-best guard and the empty-cluster
@@ -3999,6 +4130,8 @@ mod tests {
         rgb_to_lab(e.color.r, e.color.g, e.color.b),
         e.color.a,
         e.color.a > 0,
+        // Mirrors `kmeans_refine`'s clustering assignment: guard disabled.
+        0,
       );
       let c = e.count;
       sr[idx] += e.color.r as u64 * c;
