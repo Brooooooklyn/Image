@@ -58,6 +58,11 @@ pub(crate) enum OpaqueKernel {
   /// 4-lane reduction (one structure to audit for the byte-identical cross-platform contract).
   #[cfg(target_arch = "x86_64")]
   Sse41,
+  /// wasm32 `simd128` 4-wide i32 argmin — the 128-bit 4-lane path, uniform with NEON/SSE4.1.
+  /// simd128 is a COMPILE-TIME feature on wasm (no runtime detection exists); the build
+  /// enables it via `.cargo/config.toml` (`+simd128`). A wasm build without it uses scalar.
+  #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+  Simd128,
 }
 
 /// Selects the opaque-scan kernel for this host, honouring the `IMAGE_QUANTIZE_SCALAR`
@@ -99,7 +104,24 @@ fn detect_native() -> OpaqueKernel {
       OpaqueKernel::Scalar
     }
   }
-  #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
+  #[cfg(target_arch = "wasm32")]
+  {
+    // simd128 is compile-time on wasm — no runtime probe. Present (build sets +simd128) ->
+    // Simd128; absent -> scalar. Either way, never an illegal instruction.
+    #[cfg(target_feature = "simd128")]
+    {
+      OpaqueKernel::Simd128
+    }
+    #[cfg(not(target_feature = "simd128"))]
+    {
+      OpaqueKernel::Scalar
+    }
+  }
+  #[cfg(not(any(
+    target_arch = "aarch64",
+    target_arch = "x86_64",
+    target_arch = "wasm32"
+  )))]
   {
     OpaqueKernel::Scalar
   }
@@ -141,6 +163,8 @@ pub(crate) fn opaque_argmin(
     OpaqueKernel::Neon => unsafe { opaque_scan_neon(l, a, b, q) },
     #[cfg(target_arch = "x86_64")]
     OpaqueKernel::Sse41 => unsafe { opaque_scan_sse41(l, a, b, q) },
+    #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+    OpaqueKernel::Simd128 => unsafe { opaque_scan_simd128(l, a, b, q) },
   }
 }
 
@@ -315,6 +339,81 @@ unsafe fn opaque_scan_sse41(l: &[i32], a: &[i32], b: &[i32], q: [i32; 3]) -> usi
   }
 }
 
+/// wasm32 `simd128` implementation of [`opaque_argmin`]: 4-wide i32 argmin of `dl²+da²+db²`,
+/// the 128-bit path uniform with NEON/SSE4.1. Bit-identical to [`opaque_scan_scalar`]: strict
+/// per-lane compare (`i32x4_lt`) keeps the lowest index within a lane, then a lowest-index
+/// cross-lane reduction + the `n % 4` scalar tail reproduce the ascending tie-break. Every
+/// intermediate stays < i32::MAX (in-gamut `de ≤ MAX_DELTA_E76_SQ = 669_160_034`; even an
+/// out-of-gamut `|Δ| ≤ ~26_000` gives `dl²+da²+db² ≈ 2.03e9 < 2³¹`), so the i32 lanes never
+/// overflow. SAFETY: only compiled/reached when `simd128` is statically enabled (gated by
+/// `cfg(target_feature = "simd128")`), so the ops are always legal.
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+#[target_feature(enable = "simd128")]
+unsafe fn opaque_scan_simd128(l: &[i32], a: &[i32], b: &[i32], q: [i32; 3]) -> usize {
+  use core::arch::wasm32::*;
+  unsafe {
+    let n = l.len();
+    let ql = i32x4_splat(q[0]);
+    let qa = i32x4_splat(q[1]);
+    let qb = i32x4_splat(q[2]);
+    let lane_idx = i32x4(0, 1, 2, 3);
+    let mut min_d = i32x4_splat(i32::MAX);
+    let mut min_i = i32x4_splat(i32::MAX);
+
+    let mut i = 0usize;
+    while i + 4 <= n {
+      let lv = v128_load(l.as_ptr().add(i) as *const v128);
+      let av = v128_load(a.as_ptr().add(i) as *const v128);
+      let bv = v128_load(b.as_ptr().add(i) as *const v128);
+      let dl = i32x4_sub(ql, lv);
+      let da = i32x4_sub(qa, av);
+      let db = i32x4_sub(qb, bv);
+      let d = i32x4_add(
+        i32x4_add(i32x4_mul(dl, dl), i32x4_mul(da, da)),
+        i32x4_mul(db, db),
+      );
+      let cur_i = i32x4_add(i32x4_splat(i as i32), lane_idx);
+      // lanes where d < min_d, STRICT signed compare. bitselect(a,b,mask): mask lane all-ones
+      // -> pick a. So pick d/cur_i exactly where d < min_d -> lowest index kept within lane.
+      let mask = i32x4_lt(d, min_d);
+      min_d = v128_bitselect(d, min_d, mask);
+      min_i = v128_bitselect(cur_i, min_i, mask);
+      i += 4;
+    }
+
+    let mut ld = [0i32; 4];
+    let mut li = [0i32; 4];
+    v128_store(ld.as_mut_ptr() as *mut v128, min_d);
+    v128_store(li.as_mut_ptr() as *mut v128, min_i);
+
+    let mut best_d = i64::MAX;
+    let mut best = 0usize;
+    for (&d_lane, &i_lane) in ld.iter().zip(li.iter()) {
+      if i_lane == i32::MAX {
+        continue;
+      }
+      let d = d_lane as i64;
+      let idx = i_lane as usize;
+      if d < best_d || (d == best_d && idx < best) {
+        best_d = d;
+        best = idx;
+      }
+    }
+    while i < n {
+      let dl = (q[0] - l[i]) as i64;
+      let da = (q[1] - a[i]) as i64;
+      let db = (q[2] - b[i]) as i64;
+      let d = dl * dl + da * da + db * db;
+      if d < best_d {
+        best_d = d;
+        best = i;
+      }
+      i += 1;
+    }
+    best
+  }
+}
+
 /// Test-only thread-local kernel override, so a single test process can run the same
 /// quantize twice — once on the detected SIMD kernel, once forced to scalar — and assert
 /// byte-identical output. Thread-local (not a global) so parallel tests don't race.
@@ -441,6 +540,14 @@ mod tests {
     }
     assert_kernel_matches_scalar("sse41", |l, a, b, q| unsafe {
       opaque_scan_sse41(l, a, b, q)
+    });
+  }
+
+  #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+  #[test]
+  fn kernel_matches_scalar_simd128() {
+    assert_kernel_matches_scalar("simd128", |l, a, b, q| unsafe {
+      opaque_scan_simd128(l, a, b, q)
     });
   }
 }
