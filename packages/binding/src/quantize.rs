@@ -179,8 +179,9 @@ fn vanish_penalty(guard_src_alpha: u8, entry_a: u8) -> i64 {
 
 /// Tunable parameters for a single quantization run.
 ///
-/// Constructed from the public [`crate::png::PngQuantOptions`] via
-/// [`QuantizeConfig::from_options`].
+/// In the addon this is built from the public `PngQuantOptions` via `from_options`
+/// (compiled only with the `binding` feature). Benchmarks and other non-addon
+/// callers construct it directly from its public fields.
 pub struct QuantizeConfig {
   /// Target palette size, clamped to `2..=256`.
   pub max_colors: u16,
@@ -194,6 +195,10 @@ pub struct QuantizeConfig {
   pub posterization: u8,
 }
 
+// `from_options` is the only quantizer-core code that references a `#[napi]` module
+// (`crate::png::PngQuantOptions`), so it is gated to the `binding` feature; the bench
+// (`--no-default-features`) constructs `QuantizeConfig` from its public fields instead.
+#[cfg(feature = "binding")]
 impl QuantizeConfig {
   /// Maps the public, JS-facing options onto internal tunables.
   ///
@@ -2068,6 +2073,9 @@ mod tests {
     }
   }
 
+  // Exercises the `binding`-gated `from_options`, so gate the test the same way
+  // (it is a no-op under `--no-default-features`, where `crate::png` is absent).
+  #[cfg(feature = "binding")]
   #[test]
   fn from_options_mapping() {
     use crate::png::PngQuantOptions;

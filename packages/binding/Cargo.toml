@@ -4,7 +4,11 @@ name    = "napi_rs_image"
 version = "0.0.0"
 
 [lib]
-crate-type = ["cdylib"]
+# `rlib` (alongside the addon's `cdylib`) lets the `benches/` CodSpeed harness link
+# the quantizer core as a normal Rust library. An rlib is a non-linked archive, so —
+# unlike the `logo` bin below — it does NOT trip wasm-ld on napi_build's package-scoped
+# export args; it is inert for the `napi build` cdylib/wasm outputs.
+crate-type = ["cdylib", "rlib"]
 
 [[bin]]
 name = "logo"
@@ -19,7 +23,11 @@ path = "logo.rs"
 required-features = ["logo"]
 
 [features]
-default            = ["oxipng/parallel"]
+default            = ["binding", "oxipng/parallel"]
+# Gates the `#[napi]` addon modules. On by default so the shipped addon is unchanged;
+# the CodSpeed bench builds with `--no-default-features` to link only the pure
+# quantizer core (no `napi_*` symbols, which Valgrind cannot resolve).
+binding            = []
 logo               = []
 oxipng_libdeflater = ["oxipng/zopfli", "oxipng/parallel"]
 with_simd          = ["mozjpeg-sys/nasm_simd_parallel_build"]
@@ -57,3 +65,13 @@ libwebp-sys = { version = "0.14", default-features = false, features = ["std", "
 
 [build-dependencies]
 napi-build = "2"
+
+[dev-dependencies]
+# Drop-in criterion replacement, imported as `criterion`: a plain `cargo bench` runs
+# stock criterion, while `cargo codspeed build/run` switches the same benches to
+# CodSpeed instrumentation in CI. Released in lockstep with the `cargo-codspeed` CLI.
+criterion = { package = "codspeed-criterion-compat", version = "4" }
+
+[[bench]]
+harness = false
+name    = "quantize"
