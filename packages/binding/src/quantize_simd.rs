@@ -12,11 +12,12 @@
 //! d == de == dl² + da² + db²        (dl,da,db = query.Lab − entry.Lab, in ×100 units)
 //! ```
 //!
-//! with `de ≤ MAX_DELTA_E76_SQ = 669_160_034 < 2³¹`, so the whole scan fits in **i32
-//! lanes** — no divide, no 64-bit, no penalties, no branches. This module provides an
-//! `i32` argmin over Structure-of-Arrays palette Lab components (`l[]`, `a[]`, `b[]`),
-//! dispatched at runtime to the widest SIMD the host actually supports, with a scalar
-//! reference that defines the result.
+//! For in-gamut Lab this is `de ≤ MAX_DELTA_E76_SQ = 669_160_034`; even an out-of-gamut
+//! k-means centroid keeps each `|Δ| ≤ ~26_000`, so `dl²+da²+db² ≤ 3·26000² ≈ 2.03e9 <
+//! i32::MAX`. The whole scan therefore fits in **i32 lanes** — no divide, no 64-bit, no
+//! penalties, no branches. This module provides an `i32` argmin over Structure-of-Arrays
+//! palette Lab components (`l[]`, `a[]`, `b[]`), dispatched at runtime to a 128-bit 4-lane
+//! SIMD kernel on every supported arch, with a scalar reference that defines the result.
 //!
 //! # Determinism is SACRED
 //!
@@ -51,6 +52,12 @@ pub(crate) enum OpaqueKernel {
   /// always present on aarch64 — no runtime probe, no host can lack it.
   #[cfg(target_arch = "aarch64")]
   Neon,
+  /// SSE4.1 (x86_64) 4-wide i32 argmin — the 128-bit 4-lane path, uniform with
+  /// NEON/simd128. Selected when the host reports SSE4.1; older x86 falls back to scalar.
+  /// AVX2's extra width is intentionally unused so every platform runs the identical
+  /// 4-lane reduction (one structure to audit for the byte-identical cross-platform contract).
+  #[cfg(target_arch = "x86_64")]
+  Sse41,
 }
 
 /// Selects the opaque-scan kernel for this host, honouring the `IMAGE_QUANTIZE_SCALAR`
@@ -71,9 +78,8 @@ pub(crate) fn detect() -> OpaqueKernel {
   detect_native()
 }
 
-/// Runtime feature probe, per architecture. Phase 0 has no SIMD variants yet, so every
-/// arch resolves to [`OpaqueKernel::Scalar`]; later phases fill in the `is_*_detected`
-/// branches. Kept separate from [`detect`] so the override / escape-hatch logic is shared.
+/// Runtime feature probe, per architecture. Kept separate from [`detect`] so the override
+/// / escape-hatch logic is shared.
 #[inline]
 fn detect_native() -> OpaqueKernel {
   #[cfg(target_arch = "aarch64")]
@@ -82,7 +88,18 @@ fn detect_native() -> OpaqueKernel {
     // needed and no host can lack it.
     OpaqueKernel::Neon
   }
-  #[cfg(not(target_arch = "aarch64"))]
+  #[cfg(target_arch = "x86_64")]
+  {
+    // Probe at runtime so a pre-SSE4.1 x86 host never executes an unsupported
+    // instruction — it falls back to scalar. SSE4.1 is the 4-lane 128-bit path; AVX2's
+    // extra width is intentionally unused so every platform runs the identical reduction.
+    if std::is_x86_feature_detected!("sse4.1") {
+      OpaqueKernel::Sse41
+    } else {
+      OpaqueKernel::Scalar
+    }
+  }
+  #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
   {
     OpaqueKernel::Scalar
   }
@@ -122,6 +139,8 @@ pub(crate) fn opaque_argmin(
     OpaqueKernel::Scalar => opaque_scan_scalar(l, a, b, q),
     #[cfg(target_arch = "aarch64")]
     OpaqueKernel::Neon => unsafe { opaque_scan_neon(l, a, b, q) },
+    #[cfg(target_arch = "x86_64")]
+    OpaqueKernel::Sse41 => unsafe { opaque_scan_sse41(l, a, b, q) },
   }
 }
 
@@ -150,8 +169,9 @@ fn opaque_scan_scalar(l: &[i32], a: &[i32], b: &[i32], q: [i32; 3]) -> usize {
 /// `dl²+da²+db²`, bit-identical to [`opaque_scan_scalar`]. Each lane keeps the lowest
 /// index achieving its running min (strict `vcltq`); then a scalar reduction over the 4
 /// lanes followed by the `n % 4` tail reproduces the ascending lowest-index-wins
-/// tie-break. Every intermediate is ≤ `MAX_DELTA_E76_SQ` (= 669_160_034) < 2³¹, so the
-/// i32 lanes never overflow. SAFETY: only reachable via `detect`/`opaque_argmin` on
+/// tie-break. Every intermediate stays < i32::MAX (in-gamut `de ≤ MAX_DELTA_E76_SQ =
+/// 669_160_034`; even an out-of-gamut `|Δ| ≤ ~26_000` gives `dl²+da²+db² ≈ 2.03e9 < 2³¹`),
+/// so the i32 lanes never overflow. SAFETY: only reachable via `detect`/`opaque_argmin` on
 /// aarch64, where NEON is guaranteed.
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
@@ -206,6 +226,80 @@ unsafe fn opaque_scan_neon(l: &[i32], a: &[i32], b: &[i32], q: [i32; 3]) -> usiz
     }
     // Tail (n % 4): ascending, strict `<`, so a tail entry only wins on a STRICT
     // improvement — preserving lowest-index-on-tie against the lower-indexed lane winners.
+    while i < n {
+      let dl = (q[0] - l[i]) as i64;
+      let da = (q[1] - a[i]) as i64;
+      let db = (q[2] - b[i]) as i64;
+      let d = dl * dl + da * da + db * db;
+      if d < best_d {
+        best_d = d;
+        best = i;
+      }
+      i += 1;
+    }
+    best
+  }
+}
+
+/// SSE4.1 (x86_64) implementation of [`opaque_argmin`]: 4-wide i32 argmin of `dl²+da²+db²`,
+/// the 128-bit path uniform with NEON/simd128 (AVX2's extra width is intentionally unused so
+/// every arch runs the identical 4-lane reduction). Bit-identical to [`opaque_scan_scalar`]:
+/// strict per-lane compare (`_mm_cmplt_epi32`) keeps the lowest index within a lane, then a
+/// lowest-index cross-lane reduction + the `n % 4` scalar tail reproduce the ascending
+/// tie-break. Every intermediate stays < i32::MAX (in-gamut `de ≤ MAX_DELTA_E76_SQ =
+/// 669_160_034`; even an out-of-gamut `|Δ| ≤ ~26_000` gives `dl²+da²+db² ≈ 2.03e9 < 2³¹`), so
+/// the i32 lanes never overflow. SAFETY: only reachable via `detect`/`opaque_argmin` after
+/// `is_x86_feature_detected!("sse4.1")`.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "sse4.1")]
+unsafe fn opaque_scan_sse41(l: &[i32], a: &[i32], b: &[i32], q: [i32; 3]) -> usize {
+  use core::arch::x86_64::*;
+  unsafe {
+    let n = l.len();
+    let ql = _mm_set1_epi32(q[0]);
+    let qa = _mm_set1_epi32(q[1]);
+    let qb = _mm_set1_epi32(q[2]);
+    let lane_idx = _mm_setr_epi32(0, 1, 2, 3);
+    let mut min_d = _mm_set1_epi32(i32::MAX);
+    let mut min_i = _mm_set1_epi32(i32::MAX);
+
+    let mut i = 0usize;
+    while i + 4 <= n {
+      let lv = _mm_loadu_si128(l.as_ptr().add(i) as *const __m128i);
+      let av = _mm_loadu_si128(a.as_ptr().add(i) as *const __m128i);
+      let bv = _mm_loadu_si128(b.as_ptr().add(i) as *const __m128i);
+      let dl = _mm_sub_epi32(ql, lv);
+      let da = _mm_sub_epi32(qa, av);
+      let db = _mm_sub_epi32(qb, bv);
+      let d = _mm_add_epi32(
+        _mm_add_epi32(_mm_mullo_epi32(dl, dl), _mm_mullo_epi32(da, da)),
+        _mm_mullo_epi32(db, db),
+      );
+      let cur_i = _mm_add_epi32(_mm_set1_epi32(i as i32), lane_idx);
+      let mask = _mm_cmplt_epi32(d, min_d); // d < min_d, STRICT (SSE2)
+      min_d = _mm_blendv_epi8(min_d, d, mask);
+      min_i = _mm_blendv_epi8(min_i, cur_i, mask);
+      i += 4;
+    }
+
+    let mut ld = [0i32; 4];
+    let mut li = [0i32; 4];
+    _mm_storeu_si128(ld.as_mut_ptr() as *mut __m128i, min_d);
+    _mm_storeu_si128(li.as_mut_ptr() as *mut __m128i, min_i);
+
+    let mut best_d = i64::MAX;
+    let mut best = 0usize;
+    for (&d_lane, &i_lane) in ld.iter().zip(li.iter()) {
+      if i_lane == i32::MAX {
+        continue;
+      }
+      let d = d_lane as i64;
+      let idx = i_lane as usize;
+      if d < best_d || (d == best_d && idx < best) {
+        best_d = d;
+        best = idx;
+      }
+    }
     while i < n {
       let dl = (q[0] - l[i]) as i64;
       let da = (q[1] - a[i]) as i64;
@@ -337,5 +431,16 @@ mod tests {
   #[test]
   fn kernel_matches_scalar_neon() {
     assert_kernel_matches_scalar("neon", |l, a, b, q| unsafe { opaque_scan_neon(l, a, b, q) });
+  }
+
+  #[cfg(target_arch = "x86_64")]
+  #[test]
+  fn kernel_matches_scalar_sse41() {
+    if !std::is_x86_feature_detected!("sse4.1") {
+      return; // host (or Rosetta) without SSE4.1: skip; x86 CI covers it
+    }
+    assert_kernel_matches_scalar("sse41", |l, a, b, q| unsafe {
+      opaque_scan_sse41(l, a, b, q)
+    });
   }
 }
