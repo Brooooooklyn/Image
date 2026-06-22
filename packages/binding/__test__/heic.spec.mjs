@@ -102,6 +102,54 @@ onMac('heic 10-bit round-trip', async (t) => {
   t.is(meta.colorType, JsColorType.Rgba16)
 })
 
+onMac('encodes transparent rgba -> heic (alpha round-trip)', async (t) => {
+  // The committed PNG fixture is fully opaque (alpha plane all 255), so genuine transparency was
+  // never exercised. Build a 32x32 RGBA source with a horizontal alpha gradient (left transparent,
+  // right opaque, RGB constant) so we can prove CGImageDestinationFinalize doesn't choke on real
+  // alpha and that alpha survives the HEVC round-trip.
+  const WIDTH = 32
+  const HEIGHT = 32
+  const pixels = Buffer.alloc(WIDTH * HEIGHT * 4)
+  for (let y = 0; y < HEIGHT; y++) {
+    for (let x = 0; x < WIDTH; x++) {
+      const i = (y * WIDTH + x) * 4
+      pixels[i] = 200 // R (constant)
+      pixels[i + 1] = 100 // G (constant)
+      pixels[i + 2] = 50 // B (constant)
+      // alpha ramps 0 (left, transparent) -> 255 (right, opaque)
+      pixels[i + 3] = Math.round((x / (WIDTH - 1)) * 255)
+    }
+  }
+
+  // `fromRgbaPixels` is a static factory (see transformer.spec.mjs). Encode via both code paths.
+  const syncBuf = Transformer.fromRgbaPixels(pixels, WIDTH, HEIGHT).heicSync()
+  t.true(Buffer.isBuffer(syncBuf))
+  // A non-empty buffer alone proves CGImageDestinationFinalize did NOT fail on RGBA with real alpha.
+  t.true(syncBuf.length > 0)
+
+  const asyncBuf = await Transformer.fromRgbaPixels(pixels, WIDTH, HEIGHT).heic({ quality: 90 })
+  t.true(Buffer.isBuffer(asyncBuf))
+  t.true(asyncBuf.length > 0)
+
+  // Re-decode and confirm format/dims/colorType.
+  const meta = await new Transformer(Buffer.from(syncBuf)).metadata()
+  t.is(meta.format, 'heic')
+  t.is(meta.width, WIDTH)
+  t.is(meta.height, HEIGHT)
+  t.is(meta.colorType, JsColorType.Rgba8)
+
+  // Re-decode the raw RGBA8 pixels and assert alpha survived the round-trip. HEVC is lossy, so use
+  // tolerant bounds: the left edge must stay clearly transparent, the right edge clearly opaque.
+  const raw = new Transformer(Buffer.from(syncBuf)).rawPixelsSync()
+  t.is(raw.length, WIDTH * HEIGHT * 4)
+  const midRow = Math.floor(HEIGHT / 2)
+  const leftAlpha = raw[(midRow * WIDTH + 0) * 4 + 3]
+  const rightAlpha = raw[(midRow * WIDTH + (WIDTH - 1)) * 4 + 3]
+  t.true(leftAlpha < 128, `left-edge alpha should be transparent, got ${leftAlpha}`)
+  t.true(rightAlpha > 200, `right-edge alpha should be opaque, got ${rightAlpha}`)
+  t.true(rightAlpha > leftAlpha, `alpha gradient direction lost (left=${leftAlpha}, right=${rightAlpha})`)
+})
+
 offMac('heic encode rejected off macOS', async (t) => {
   await t.throwsAsync(() => new Transformer(PNG).heic(), {
     message: /only available on macOS/,
