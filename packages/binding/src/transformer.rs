@@ -564,25 +564,18 @@ impl Task for EncodeTask {
     }
 
     let dynamic_image = &mut meta.image;
-    let color_type = &meta.color_type;
     let width = dynamic_image.width();
     let height = dynamic_image.height();
     let format = match self.options {
       EncodeOptions::Webp(quality_factor) => {
         let (output_buf, size) = unsafe {
-          crate::webp::encode_webp_inner(dynamic_image, quality_factor, width, height, color_type)
+          crate::webp::encode_webp_inner(dynamic_image, quality_factor, width, height)
         }?;
         return Ok(EncodeOutput::Raw(output_buf, size));
       }
       EncodeOptions::WebpLossless => {
-        let (output_buf, size) = unsafe {
-          crate::webp::lossless_encode_webp_inner(
-            dynamic_image.as_bytes(),
-            width,
-            height,
-            color_type,
-          )
-        }?;
+        let (output_buf, size) =
+          unsafe { crate::webp::lossless_encode_webp_inner(dynamic_image, width, height) }?;
         if output_buf.is_null() {
           return Err(Error::new(
             Status::GenericFailure,
