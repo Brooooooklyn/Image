@@ -40,10 +40,17 @@ Hard rule that followed from that choice, and that governs everything below:
 > ports "have varying degrees of faithfulness to the original algorithms" — which is
 > the same reason to work from primary papers rather than from someone's code.
 
-Proof it stuck: `grep imagequant|pngquant|gpl` over `Cargo.lock` +
-`packages/binding/Cargo.toml` → **zero matches**. The only deps are `rgb` (RGBA8),
-`image` (decode), `lodepng` (palette+tRNS encode), `oxipng` (lossless recompress) —
-none copyleft.
+Proof it stuck (reproducible from a clone): the checked-in manifest
+`packages/binding/Cargo.toml` lists **no** `imagequant`/`libimagequant`/`pngquant` crate —
+equivalently `cargo tree -i imagequant` resolves nothing. (Don't cite `Cargo.lock`: it is
+git-ignored here, so it isn't part of the repo.) Scope note: the binding crate has ~17
+direct deps (`libavif`, `resvg`, `fast_image_resize`, `mozjpeg-sys`, `napi`, …) for its
+*other* image formats — the **quantizer** touches none of them. The quantizer's algorithm
+modules (`quantize.rs` / `lab.rs` / `quantize_simd.rs`) depend only on `rgb` + std; the PNG
+entry path (`png.rs`) adds `image` (decode), `lodepng` (PLTE+tRNS encode), and `oxipng`
+(recompress) — none copyleft. (The only `imagequant`/`pngquant` strings in the source are
+the public function name `pngQuantize` and a comment noting the *prior* imagequant path was
+removed.)
 
 ---
 
