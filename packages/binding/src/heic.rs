@@ -1,3 +1,6 @@
+use image::DynamicImage;
+use napi::bindgen_prelude::*;
+
 /// Brands that mark an ISOBMFF/HEIF container as HEVC-coded image content (HEIC/HEIF).
 const HEIF_BRANDS: [&[u8; 4]; 11] = [
   b"heic", b"heix", b"heim", b"heis", b"hevc", b"hevx", b"hevm", b"hevs", b"mif1", b"msf1", b"heif",
@@ -46,6 +49,25 @@ pub fn is_heic(buf: &[u8]) -> bool {
   }
 
   false
+}
+
+/// Decode a HEIC/HEIF image to a `DynamicImage` plus EXIF orientation (1..8) if present.
+/// macOS-only (delegates to the OS ImageIO HEVC decoder); errors elsewhere.
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn decode_heic(_buf: &[u8]) -> Result<(DynamicImage, Option<u16>)> {
+  Err(Error::new(
+    Status::InvalidArg,
+    "HEIC decoding is only supported on macOS".to_owned(),
+  ))
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn decode_heic(_buf: &[u8]) -> Result<(DynamicImage, Option<u16>)> {
+  // Implemented via ImageIO in Task 4.
+  Err(Error::new(
+    Status::GenericFailure,
+    "HEIC decoding not yet implemented".to_owned(),
+  ))
 }
 
 #[cfg(test)]
@@ -176,5 +198,14 @@ mod tests {
     let mut buf = ftyp(b"abcd", b"\0\0\0\0", &[], None);
     buf.extend_from_slice(b"he"); // partial chunk, must be ignored without panic
     assert!(!is_heic(&buf));
+  }
+
+  // --- decode_heic stub (Task 4 fills in the macOS impl) ---
+
+  #[test]
+  fn decode_heic_stub_errors() {
+    // The signature/symbol exists; both stubs currently return an error.
+    let buf = ftyp(b"heic", b"\0\0\0\0", &[], None);
+    assert!(super::decode_heic(&buf).is_err());
   }
 }
