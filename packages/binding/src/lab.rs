@@ -214,6 +214,59 @@ pub(crate) fn rgb_to_lab(r: u8, g: u8, b: u8) -> Lab {
   Lab { l, a, b: bb }
 }
 
+/// sRGB 8-bit -> linear light as `f32` in `[0.0, 1.0]`, read from the SAME
+/// [`SRGB_TO_LINEAR`] Q16 table the CIELAB path uses, so the dither's notion of
+/// "linear light" is bit-consistent with palette selection. Deterministic: a table
+/// lookup and one IEEE-754 `f32` divide — no `powf`. Used by `remap_dither` to
+/// diffuse quantization error in LINEAR light (which preserves average DISPLAYED
+/// brightness), while palette SELECTION stays perceptual (CIELAB).
+#[inline]
+pub(crate) fn srgb_to_linear_f(c: u8) -> f32 {
+  SRGB_TO_LINEAR[c as usize] as f32 / 65535.0
+}
+
+/// Nearest-code inverse of [`srgb_to_linear_f`]: the 8-bit sRGB code whose linear
+/// value is closest to `lin` (clamped to `[0,1]`). Deterministic — `lin` is
+/// quantized to the Q16 scale of [`SRGB_TO_LINEAR`] and a binary search over that
+/// strictly-increasing table selects the closest code with integer comparisons
+/// (the only float ops are a multiply + round-to-nearest, which are IEEE-754
+/// deterministic; no `powf`, no platform-dependent branch on a float result).
+///
+/// Exact LEFT INVERSE at the table points: `linear_to_srgb8(srgb_to_linear_f(c))
+/// == c` for every `c` (pinned by `linear_srgb_roundtrip_is_exact`), so a flat /
+/// zero-error pixel re-encodes to its original code and dither-free regions stay
+/// byte-identical to a plain sRGB remap.
+#[inline]
+pub(crate) fn linear_to_srgb8(lin: f32) -> u8 {
+  // Quantize the linear value to the table's Q16 units (0..=65535).
+  let q = (lin.clamp(0.0, 1.0) * 65535.0).round() as i64;
+  // First code whose linear value is >= q (table is strictly increasing).
+  let mut lo = 0usize;
+  let mut hi = 255usize;
+  while lo < hi {
+    let mid = (lo + hi) / 2;
+    if (SRGB_TO_LINEAR[mid] as i64) < q {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  // The nearest code is `lo` (first >= q) or `lo - 1` (last < q); pick by |Δ|.
+  let hi_code = lo;
+  let lo_code = lo.saturating_sub(1);
+  let d_hi = (SRGB_TO_LINEAR[hi_code] as i64 - q).abs();
+  let d_lo = (q - SRGB_TO_LINEAR[lo_code] as i64).abs();
+  // Strictly-closer wins; on a TIE the HIGHER code wins (the `else` branch). This is
+  // deterministic, and makes the exact table point win on the round trip (there
+  // `d_hi == 0 < d_lo`, so `hi_code` is returned and `linear_to_srgb8` is an exact
+  // left-inverse of the table at every code).
+  if d_lo < d_hi {
+    lo_code as u8
+  } else {
+    hi_code as u8
+  }
+}
+
 /// Squared CIE76 distance `dL² + da² + db²` in (×[`LAB_SCALE`])² units.
 ///
 /// Squared (no `sqrt`) because the quantizer only ever compares distances. Components differ by at
@@ -255,6 +308,43 @@ mod tests {
     ((1, 1, 1), (0.2742, -0.0000, 0.0000)),
     ((254, 254, 254), (99.6549, -0.0024, 0.0046)),
   ];
+
+  /// The linear-light dither helpers are an exact LEFT INVERSE at the table points,
+  /// and the underlying table is strictly increasing (so the binary-search inverse is
+  /// unambiguous). Consequence: a flat / zero-error pixel re-encodes to its own code,
+  /// keeping dither-free regions byte-identical to a plain sRGB remap.
+  #[test]
+  fn linear_srgb_roundtrip_is_exact() {
+    // Strictly increasing => no duplicate linear values => nearest-code inverse is well-defined.
+    for c in 1u16..=255 {
+      assert!(
+        SRGB_TO_LINEAR[c as usize] > SRGB_TO_LINEAR[(c - 1) as usize],
+        "SRGB_TO_LINEAR must be strictly increasing at code {c}"
+      );
+    }
+    // Exact round trip for every code (the zero-error / flat-region guarantee).
+    for c in 0u8..=255 {
+      assert_eq!(
+        linear_to_srgb8(srgb_to_linear_f(c)),
+        c,
+        "round trip must be exact for code {c}"
+      );
+    }
+    // Endpoints hit the linear extremes; clamped/out-of-range inputs resolve to them.
+    assert_eq!(srgb_to_linear_f(0), 0.0);
+    assert_eq!(srgb_to_linear_f(255), 1.0);
+    assert_eq!(linear_to_srgb8(-1.0), 0);
+    assert_eq!(linear_to_srgb8(2.0), 255);
+    // Nearest-code: a value between two adjacent codes resolves to one of them, never overshoots.
+    for c in 0u8..=254 {
+      let mid = (srgb_to_linear_f(c) + srgb_to_linear_f(c + 1)) / 2.0;
+      let got = linear_to_srgb8(mid);
+      assert!(
+        got == c || got == c + 1,
+        "midpoint near {c} resolved to {got}"
+      );
+    }
+  }
 
   /// GOLDEN cross-platform canary: exact integer outputs. If any platform's integer math diverged
   /// these byte-exact triples would change. Includes the all-zero and all-255 corners.

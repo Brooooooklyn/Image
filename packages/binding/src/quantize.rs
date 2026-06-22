@@ -15,7 +15,9 @@ use std::collections::HashMap;
 
 use rgb::RGBA8;
 
-use crate::lab::{Lab, MAX_DELTA_E76_SQ, delta_e76_sq, rgb_to_lab};
+use crate::lab::{
+  Lab, MAX_DELTA_E76_SQ, delta_e76_sq, linear_to_srgb8, rgb_to_lab, srgb_to_linear_f,
+};
 
 /// Hard upper bound on an 8-bit indexed palette.
 const MAX_PALETTE: usize = 256;
@@ -1242,10 +1244,22 @@ const DITHER_RESID_LO: f32 = 0.0;
 /// Sweep: 256.0 ..= 1200.0 (lower => gradients dither sooner => smoother/bigger).
 const DITHER_RESID_HI: f32 = 128.0;
 
-/// Global ceiling on dither strength in `[0, 1]`. Damps all dither energy
-/// without retuning the ramp. 1.0 == full FS at maximally-bad pixels.
-/// Sweep: 0.55 ..= 1.0 (lower => smaller, more banding risk).
-const DITHER_MAX_STRENGTH: f32 = 0.9;
+/// Global ceiling on dither strength in `[0, 1]`. 1.0 == strictly unity-gain
+/// Floyd-Steinberg: the FULL quantization residual is diffused at maximally-bad
+/// (flat, high-residual) pixels, which DC / mean-tone preservation REQUIRES
+/// (Kolpatzik & Bouman 1992: a diffusion kernel whose weights sum to one makes
+/// the local average quantized value equal the true value; the FS 7/3/5/1 kernel
+/// sums to 16/16). Any value < 1.0 discards a fixed `(1 - MAX)` fraction of the
+/// diffused error each step (Atkinson-style sub-unity gain). Under LINEAR-LIGHT
+/// color diffusion that lossy gain drives the 1-D steady state to
+/// `src_lin / (1 - MAX)`; at MAX == 0.9 that is `10 * src_lin`, which for sRGB
+/// tones below ~37 never reaches the CIELAB L*=50 white-flip threshold
+/// (linear ~0.184) and COLLAPSES deep shadows to a solid endpoint. Selectivity
+/// is preserved WITHOUT this damp: a clean map drives the resid ramp -> 0
+/// (strength 0, byte-flat for DEFLATE) and a hard edge pins the edge gate ->
+/// DITHER_EDGE_FLOOR; MAX only governs the FLAT, HIGH-RESIDUAL regime, where
+/// unity gain is the correct mean-preserving behavior.
+const DITHER_MAX_STRENGTH: f32 = 1.0;
 
 /// Source-activity `dist2` at/above which a pixel is treated as a hard EDGE /
 /// busy texture and dither is fully suppressed (strength -> ACT_FLOOR). Below
@@ -1452,14 +1466,33 @@ fn remap_dither(px: &[RGBA8], width: usize, height: usize, palette: &[RGBA8], bi
         continue;
       }
       let src = posterize(px[base], bits);
-      // Apply accumulated inbound error, clamped per-channel (Ulichney streak
-      // guard) so a single bad pixel can't poison the rest of the run. Index
+      // Source COLOR in LINEAR light; ALPHA stays in 0..255 (coverage, not
+      // gamma-encoded). The error buffers carry linear COLOR error in channels 0..=2
+      // and sRGB ALPHA error in channel 3.
+      let src_lin = [
+        srgb_to_linear_f(src.r),
+        srgb_to_linear_f(src.g),
+        srgb_to_linear_f(src.b),
+      ];
+      // Apply accumulated inbound error: COLOR in linear units (the [0,1] clamp on the
+      // target is the only bound needed — bounding the *error* would drop energy and
+      // break error-diffusion's DC/unity-gain guarantee), ALPHA in sRGB units. Index
       // selection always uses this FULL inbound error.
       let e = cur[x];
+      let want_lin = [
+        (src_lin[0] + e[0]).clamp(0.0, 1.0),
+        (src_lin[1] + e[1]).clamp(0.0, 1.0),
+        (src_lin[2] + e[2]).clamp(0.0, 1.0),
+      ];
+      // Re-encode the linear target to sRGB8 so perceptual selection AND the residual /
+      // banding signal stay in the same space the palette and `dist2` thresholds are
+      // defined in. `linear_to_srgb8` is the exact inverse at zero error, so a clean
+      // (`e == 0`) pixel re-encodes to `src` and flats stay byte-identical to a plain
+      // sRGB remap.
       let want = RGBA8 {
-        r: clamp_u8(src.r as f32 + dither_clamp_err(e[0])),
-        g: clamp_u8(src.g as f32 + dither_clamp_err(e[1])),
-        b: clamp_u8(src.b as f32 + dither_clamp_err(e[2])),
+        r: linear_to_srgb8(want_lin[0]),
+        g: linear_to_srgb8(want_lin[1]),
+        b: linear_to_srgb8(want_lin[2]),
         a: clamp_u8(src.a as f32 + dither_clamp_err(e[3])),
       };
       // PERCEPTUAL index selection (cached palette Labs; one query `rgb_to_lab`). The
@@ -1488,29 +1521,37 @@ fn remap_dither(px: &[RGBA8], width: usize, height: usize, palette: &[RGBA8], bi
 
       // Post-quantization residual: how far the chosen entry is from the target
       // we wanted. Small => clean map (keep flat); large => band risk. Stays on
-      // RGB `dist2`: the 8 dither consts are calibrated in `dist2` units and the
-      // residual is the RGB reproduction-error / banding signal.
+      // RGB `dist2`: the selective-dither consts are calibrated in `dist2` units and
+      // the residual is the RGB reproduction-error / banding signal. `want` is the
+      // sRGB encoding of the linear target, so this signal lives in the same space.
       let resid = dist2(want, chosen) as f32;
       // Direction-independent local source activity (4-neighborhood of px[]).
       let activity = dither_source_activity(px, width, height, x, y, src, bits);
       let strength = dither_strength(resid, activity);
 
-      // Outbound error to diffuse: hard dead-zone, then scale by strength. The
-      // dead-zone drops sub-threshold jitter; the scale damps where the map is
-      // clean / on edges.
+      // Outbound COLOR error to diffuse, in LINEAR LIGHT: the eye spatially integrates
+      // emitted light, so diffusing the linear residual preserves the average DISPLAYED
+      // brightness of a dithered region (diffusing the sRGB delta biases gradients
+      // brighter — the midpoint code is ~22% light, not 50%). Strength damps the error
+      // where the map is clean / on edges (the residual×activity gate is the only
+      // selective lever — no hard dead-zone, which would drop energy and bias flats).
       //
       // The THREE color channels are additionally scaled by the source pixel's
-      // visibility `vis = src.a / 255` (premultiplied alpha, Porter-Duff 1984):
-      // a pixel's visible color contribution is color*alpha, so a near-transparent
-      // source must not inject its (invisible) matte RGB into neighbors — including
-      // fully-opaque ones. The ALPHA channel is visibility itself and stays
-      // UNSCALED. For opaque sources (`src.a == 255`) `vis == 1.0` exactly, so the
-      // outbound error — and thus every byte of output — is unchanged.
+      // visibility `vis = src.a / 255` (premultiplied alpha, Porter-Duff 1984): a
+      // pixel's visible color contribution is color*alpha, so a near-transparent source
+      // must not inject its (invisible) matte RGB into neighbors — including fully-opaque
+      // ones. The ALPHA channel is visibility itself, stays in sRGB units, and is scaled
+      // by strength only (`vis` does not apply to coverage).
+      let chosen_lin = [
+        srgb_to_linear_f(chosen.r),
+        srgb_to_linear_f(chosen.g),
+        srgb_to_linear_f(chosen.b),
+      ];
       let vis = src.a as f32 / 255.0;
       let err = [
-        dither_deadzone(want.r as f32 - chosen.r as f32) * strength * vis,
-        dither_deadzone(want.g as f32 - chosen.g as f32) * strength * vis,
-        dither_deadzone(want.b as f32 - chosen.b as f32) * strength * vis,
+        (want_lin[0] - chosen_lin[0]) * strength * vis,
+        (want_lin[1] - chosen_lin[1]) * strength * vis,
+        (want_lin[2] - chosen_lin[2]) * strength * vis,
         dither_deadzone(want.a as f32 - chosen.a as f32) * strength,
       ];
 
@@ -3456,14 +3497,18 @@ mod tests {
 
   #[test]
   fn selective_dither_endpoint_tone_still_dithers() {
-    // Endpoint dead-band regression (Codex finding). With palette {black, white}
-    // and a flat near-endpoint tone, the inbound DITHER_ERR_CLAMP must be large
-    // enough to push `want` across the 128 decision threshold so the field
-    // DITHERS rather than collapsing to a flat endpoint. At the shipped 192 the
-    // dead-band width `max(0, ceil(255/2) - CLAMP)` is 0, so both the bright
-    // (T=224) and dark (T=31) near-endpoint fields mix in the opposite color.
-    // The midpoint-only `selective_dither_smooths_what_nearest_would_band`
-    // (T=128) never exercised the endpoints, where the old clamp=96 was inert.
+    // Endpoint dithering regression (Codex finding). With palette {black, white}
+    // and a flat near-endpoint tone, unity-gain (DITHER_MAX_STRENGTH == 1.0)
+    // linear-light error diffusion keeps the field DITHERING rather than
+    // collapsing to a flat endpoint. Both the bright (T=224) and the dark (T=31)
+    // near-endpoint fields mix in the opposite color.
+    //
+    // The dark end is the load-bearing case: a sub-unity ceiling (the old 0.9)
+    // makes diffusion lossy, and in LINEAR light a deep-shadow tone's tiny
+    // residual then never accumulates past the CIELAB L*=50 flip threshold, so
+    // T=31 collapses to solid black. At unity gain the full residual is diffused
+    // and the dark field mixes in white again. PROVE-FAILS at
+    // DITHER_MAX_STRENGTH = 0.9: T=31 -> a single distinct index (solid black).
     let palette = vec![rgba(0, 0, 0, 255), rgba(255, 255, 255, 255)];
     let (w, h) = (16usize, 16usize);
 
@@ -3483,7 +3528,7 @@ mod tests {
     assert!(
       distinct_indices(&bot_dith) >= 2,
       "flat T=31 field must DITHER (mix in white), not collapse to flat black; \
-       got {} distinct",
+       got {} distinct -- a sub-unity DITHER_MAX_STRENGTH re-creates the collapse",
       distinct_indices(&bot_dith)
     );
   }
@@ -3711,15 +3756,58 @@ mod tests {
     // threshold over this midtone field shifts and several indices move; the
     // opaque-neutrality property this test guards (vis == 1.0 on every opaque pixel,
     // so a /256 mis-scale still breaks the pin) is unchanged and metric-independent.
+    // Oracle regenerated for the linear-light color-diffusion port at unity gain
+    // (DITHER_MAX_STRENGTH = 1.0): color error now diffuses in LINEAR light and the
+    // FULL residual is carried at flat high-residual pixels, so a few midtone indices
+    // shift off the prior sub-unity sRGB-space pin. Opaque-neutrality (vis == 1.0 on
+    // every opaque pixel) is unchanged and metric-independent.
     let expected: Vec<u8> = vec![
-      1, 0, 1, 1, 1, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 1, 1, 0, 1, 1, 0, 1, 1, 0,
-      1, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 1,
+      1, 0, 1, 0, 1, 1, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 1, 0,
+      1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 1,
     ];
     assert_eq!(
       got, expected,
       "opaque dithered output must match the pinned /255 oracle; a 255/256 (or any \
        != 1.0) opaque vis scale shifts diffused indices off this pin"
     );
+  }
+
+  #[test]
+  fn linear_brightness_tracks_linear_target() {
+    // Linear-light error diffusion preserves average DISPLAYED (linear) luminance:
+    // a flat mid-tone dithered to a {black, white} palette produces a white FRACTION
+    // that tracks the source's LINEAR luminance, NOT its sRGB code fraction. Diffusing
+    // error in sRGB space (the old behavior) instead preserves the sRGB-code average,
+    // which over-brightens (the 50%-gray code is only ~21.6% light). At unity gain
+    // (DITHER_MAX_STRENGTH == 1.0) the full residual is diffused, so even deep shadows
+    // dither toward their linear target instead of collapsing to a flat endpoint.
+    //
+    // PROVE-FAIL: revert remap_dither's color error to sRGB-space deltas and the white
+    // fraction swings toward g/255 (e.g. g=128 from ~0.25 back toward ~0.50), so it is
+    // no longer closer to the linear target than to the sRGB fraction and this fails.
+    let palette = vec![rgba(0, 0, 0, 255), rgba(255, 255, 255, 255)];
+    let (w, h) = (64usize, 64usize);
+    for &g in &[32u8, 64, 96, 128, 160, 192, 224] {
+      let px = vec![rgba(g, g, g, 255); w * h];
+      let idx = remap_dither(&px, w, h, &palette, 0);
+      let white = idx.iter().filter(|&&i| i == 1).count() as f32 / (w * h) as f32;
+      let target_lin = srgb_to_linear_f(g);
+      let srgb_frac = g as f32 / 255.0;
+      // Non-collapse: every tone here has target_lin > 0, so a unity-gain dither MUST
+      // place some white. This guard is what catches a dark-end COLLAPSE (a sub-unity
+      // ceiling drives white -> 0 at the darkest g), which the closeness check below
+      // would otherwise pass vacuously (0 is trivially nearer the small linear target).
+      assert!(
+        white > 0.0,
+        "g={g}: unity-gain linear-light dither must place some white (no dark-end \
+         collapse); got white fraction 0"
+      );
+      assert!(
+        (white - target_lin).abs() < (white - srgb_frac).abs(),
+        "g={g}: white fraction {white:.3} must track the LINEAR target {target_lin:.3} \
+         closer than the sRGB fraction {srgb_frac:.3} (linear-light dither correctness)"
+      );
+    }
   }
 
   #[test]
