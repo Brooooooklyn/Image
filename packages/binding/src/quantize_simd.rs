@@ -16,8 +16,9 @@
 //! k-means centroid keeps each `|Δ| ≤ ~26_000`, so `dl²+da²+db² ≤ 3·26000² ≈ 2.03e9 <
 //! i32::MAX`. The whole scan therefore fits in **i32 lanes** — no divide, no 64-bit, no
 //! penalties, no branches. This module provides an `i32` argmin over Structure-of-Arrays
-//! palette Lab components (`l[]`, `a[]`, `b[]`), dispatched at runtime to a 128-bit 4-lane
-//! SIMD kernel on every supported arch, with a scalar reference that defines the result.
+//! palette Lab components (`l[]`, `a[]`, `b[]`), dispatched at runtime to the widest SIMD the
+//! host supports (AVX2 8-wide or SSE4.1 4-wide on x86; NEON 4-wide on aarch64; simd128 4-wide
+//! on wasm), with a scalar reference that defines the result every width reproduces.
 //!
 //! # Determinism is SACRED
 //!
@@ -33,9 +34,14 @@
 //! Each `*_simd` kernel is an `unsafe fn` marked `#[target_feature(enable = …)]`; it is
 //! ONLY ever reached through [`detect`], which gates on `is_*_feature_detected!` (x86) or
 //! a guaranteed-baseline arch (`neon` on aarch64, `simd128` compiled-in on wasm). A host
-//! lacking the feature takes the scalar path, so no illegal instruction can execute. The
-//! `IMAGE_QUANTIZE_SCALAR=1` escape hatch (and the test-only thread-local override) force
-//! the scalar path on a SIMD-capable host to prove the fallback.
+//! lacking the feature takes the scalar path, so no illegal instruction can execute — but on
+//! x86 this holds ONLY because the distributed builds are not compiled with a static
+//! `+avx2`/`+sse4.1` floor: `is_x86_feature_detected!` short-circuits on
+//! `cfg!(target_feature)` (std_detect), so a static floor would fold the probe to a
+//! compile-time `true` and run the kernel unconditionally — SIGILL on a host that lacks it.
+//! Keep those floors out of `.cargo/config.toml` for distributed x86_64 targets (see the note
+//! there). The `IMAGE_QUANTIZE_SCALAR=1` escape hatch (and the test-only thread-local
+//! override) force the scalar path on a SIMD-capable host to prove the fallback.
 
 use std::sync::OnceLock;
 
@@ -52,10 +58,17 @@ pub(crate) enum OpaqueKernel {
   /// always present on aarch64 — no runtime probe, no host can lack it.
   #[cfg(target_arch = "aarch64")]
   Neon,
-  /// SSE4.1 (x86_64) 4-wide i32 argmin — the 128-bit 4-lane path, uniform with
-  /// NEON/simd128. Selected when the host reports SSE4.1; older x86 falls back to scalar.
-  /// AVX2's extra width is intentionally unused so every platform runs the identical
-  /// 4-lane reduction (one structure to audit for the byte-identical cross-platform contract).
+  /// AVX2 (x86_64) 8-wide i32 argmin — the widest x86 path, preferred when the host reports
+  /// AVX2 (the common case on modern x86 and the CodSpeed runner). Wider lanes than the 4-wide
+  /// kernels, but byte-identical: integer add/mul/min are exact, so the 8-lane reduction
+  /// reaches the same lowest-index argmin as scalar (the `kernel_matches_scalar_*` tests gate
+  /// every width against the scalar reference).
+  #[cfg(target_arch = "x86_64")]
+  Avx2,
+  /// SSE4.1 (x86_64) 4-wide i32 argmin — the pre-AVX2 x86 fallback (older Intel Macs, some
+  /// musl/Windows hosts). Selected when the host reports SSE4.1 but not AVX2; older x86 still
+  /// falls back to scalar. Produces the identical argmin as AVX2/scalar — different lane width,
+  /// same exact-integer result, so the byte-identical cross-arch contract holds across widths.
   #[cfg(target_arch = "x86_64")]
   Sse41,
   /// wasm32 `simd128` 4-wide i32 argmin — the 128-bit 4-lane path, uniform with NEON/SSE4.1.
@@ -95,10 +108,12 @@ fn detect_native() -> OpaqueKernel {
   }
   #[cfg(target_arch = "x86_64")]
   {
-    // Probe at runtime so a pre-SSE4.1 x86 host never executes an unsupported
-    // instruction — it falls back to scalar. SSE4.1 is the 4-lane 128-bit path; AVX2's
-    // extra width is intentionally unused so every platform runs the identical reduction.
-    if std::is_x86_feature_detected!("sse4.1") {
+    // Probe at runtime, preferring the widest path the host supports so no host ever
+    // executes an unsupported instruction: AVX2 (8-wide) on modern x86, SSE4.1 (4-wide)
+    // on pre-AVX2 x86, scalar on anything older. All three reach the byte-identical argmin.
+    if std::is_x86_feature_detected!("avx2") {
+      OpaqueKernel::Avx2
+    } else if std::is_x86_feature_detected!("sse4.1") {
       OpaqueKernel::Sse41
     } else {
       OpaqueKernel::Scalar
@@ -161,6 +176,8 @@ pub(crate) fn opaque_argmin(
     OpaqueKernel::Scalar => opaque_scan_scalar(l, a, b, q),
     #[cfg(target_arch = "aarch64")]
     OpaqueKernel::Neon => unsafe { opaque_scan_neon(l, a, b, q) },
+    #[cfg(target_arch = "x86_64")]
+    OpaqueKernel::Avx2 => unsafe { opaque_scan_avx2(l, a, b, q) },
     #[cfg(target_arch = "x86_64")]
     OpaqueKernel::Sse41 => unsafe { opaque_scan_sse41(l, a, b, q) },
     #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
@@ -265,9 +282,84 @@ unsafe fn opaque_scan_neon(l: &[i32], a: &[i32], b: &[i32], q: [i32; 3]) -> usiz
   }
 }
 
+/// AVX2 (x86_64) implementation of [`opaque_argmin`]: 8-wide i32 argmin of `dl²+da²+db²`, the
+/// widest x86 path. Bit-identical to [`opaque_scan_scalar`] and to the 4-wide kernels: the
+/// per-lane compare is STRICT (`_mm256_cmpgt_epi32(min_d, d)` is `d < min_d`), so a later equal
+/// value never displaces the lower index within a lane; an 8-lane lowest-index cross-lane
+/// reduction + the `n % 8` scalar tail reproduce the scalar reference's ascending
+/// lowest-index-wins tie-break. Every intermediate stays < i32::MAX (in-gamut
+/// `de ≤ MAX_DELTA_E76_SQ = 669_160_034`; even an out-of-gamut `|Δ| ≤ ~26_000` gives
+/// `dl²+da²+db² ≈ 2.03e9 < 2³¹`), so the i32 lanes never overflow. SAFETY: only reachable via
+/// `detect`/`opaque_argmin` after `is_x86_feature_detected!("avx2")`.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn opaque_scan_avx2(l: &[i32], a: &[i32], b: &[i32], q: [i32; 3]) -> usize {
+  use core::arch::x86_64::*;
+  unsafe {
+    let n = l.len();
+    let ql = _mm256_set1_epi32(q[0]);
+    let qa = _mm256_set1_epi32(q[1]);
+    let qb = _mm256_set1_epi32(q[2]);
+    let lane_idx = _mm256_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7);
+    let mut min_d = _mm256_set1_epi32(i32::MAX);
+    let mut min_i = _mm256_set1_epi32(i32::MAX);
+
+    let mut i = 0usize;
+    while i + 8 <= n {
+      let lv = _mm256_loadu_si256(l.as_ptr().add(i) as *const __m256i);
+      let av = _mm256_loadu_si256(a.as_ptr().add(i) as *const __m256i);
+      let bv = _mm256_loadu_si256(b.as_ptr().add(i) as *const __m256i);
+      let dl = _mm256_sub_epi32(ql, lv);
+      let da = _mm256_sub_epi32(qa, av);
+      let db = _mm256_sub_epi32(qb, bv);
+      let d = _mm256_add_epi32(
+        _mm256_add_epi32(_mm256_mullo_epi32(dl, dl), _mm256_mullo_epi32(da, da)),
+        _mm256_mullo_epi32(db, db),
+      );
+      let cur_i = _mm256_add_epi32(_mm256_set1_epi32(i as i32), lane_idx);
+      // lanes where d < min_d: cmpgt(min_d, d) == (min_d > d) == (d < min_d), STRICT.
+      let mask = _mm256_cmpgt_epi32(min_d, d);
+      min_d = _mm256_blendv_epi8(min_d, d, mask);
+      min_i = _mm256_blendv_epi8(min_i, cur_i, mask);
+      i += 8;
+    }
+
+    let mut ld = [0i32; 8];
+    let mut li = [0i32; 8];
+    _mm256_storeu_si256(ld.as_mut_ptr() as *mut __m256i, min_d);
+    _mm256_storeu_si256(li.as_mut_ptr() as *mut __m256i, min_i);
+
+    let mut best_d = i64::MAX;
+    let mut best = 0usize;
+    for (&d_lane, &i_lane) in ld.iter().zip(li.iter()) {
+      if i_lane == i32::MAX {
+        continue;
+      }
+      let d = d_lane as i64;
+      let idx = i_lane as usize;
+      if d < best_d || (d == best_d && idx < best) {
+        best_d = d;
+        best = idx;
+      }
+    }
+    while i < n {
+      let dl = (q[0] - l[i]) as i64;
+      let da = (q[1] - a[i]) as i64;
+      let db = (q[2] - b[i]) as i64;
+      let d = dl * dl + da * da + db * db;
+      if d < best_d {
+        best_d = d;
+        best = i;
+      }
+      i += 1;
+    }
+    best
+  }
+}
+
 /// SSE4.1 (x86_64) implementation of [`opaque_argmin`]: 4-wide i32 argmin of `dl²+da²+db²`,
-/// the 128-bit path uniform with NEON/simd128 (AVX2's extra width is intentionally unused so
-/// every arch runs the identical 4-lane reduction). Bit-identical to [`opaque_scan_scalar`]:
+/// the pre-AVX2 x86 fallback (older Intel Macs, some musl/Windows hosts). Bit-identical to
+/// [`opaque_scan_scalar`] and to AVX2 — same exact-integer argmin, narrower lanes:
 /// strict per-lane compare (`_mm_cmplt_epi32`) keeps the lowest index within a lane, then a
 /// lowest-index cross-lane reduction + the `n % 4` scalar tail reproduce the ascending
 /// tie-break. Every intermediate stays < i32::MAX (in-gamut `de ≤ MAX_DELTA_E76_SQ =
@@ -530,6 +622,15 @@ mod tests {
   #[test]
   fn kernel_matches_scalar_neon() {
     assert_kernel_matches_scalar("neon", |l, a, b, q| unsafe { opaque_scan_neon(l, a, b, q) });
+  }
+
+  #[cfg(target_arch = "x86_64")]
+  #[test]
+  fn kernel_matches_scalar_avx2() {
+    if !std::is_x86_feature_detected!("avx2") {
+      return; // host (or Rosetta) without AVX2: skip; real-AVX2 x86 (CI / qemu) covers it
+    }
+    assert_kernel_matches_scalar("avx2", |l, a, b, q| unsafe { opaque_scan_avx2(l, a, b, q) });
   }
 
   #[cfg(target_arch = "x86_64")]

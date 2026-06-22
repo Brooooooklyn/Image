@@ -1,7 +1,11 @@
 [target.i686-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+avx2"]
-[target.x86_64-unknown-linux-gnu]
-rustflags = ["-C", "target-feature=+avx2"]
+# x86_64-unknown-linux-gnu intentionally has NO `target-feature=+avx2`. The pngQuantize
+# quantizer runtime-detects AVX2/SSE4.1 per host and falls back to scalar on pre-AVX2 CPUs
+# (packages/binding/src/quantize_simd.rs). A static `+avx2` here would make
+# `is_x86_feature_detected!("avx2")` fold to a compile-time `true` (std_detect short-circuits
+# on `cfg!(target_feature)`), defeating that runtime fallback and SIGILL-ing the distributed
+# binary on pre-AVX2 x86_64 hosts. Keep the SIMD floor OFF for distributed x86_64 builds.
 [target.x86_64-unknown-linux-musl]
 rustflags = ["-C", "target-feature=-crt-static"]
 [target.aarch64-unknown-linux-gnu]
