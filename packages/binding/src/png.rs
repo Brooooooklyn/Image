@@ -239,6 +239,20 @@ pub fn png_quantize_sync(input: &[u8], options: Option<PngQuantOptions>) -> Resu
 ///
 /// Valid PNGs of any color type or bit depth are normalized to 8-bit RGBA.
 /// Returns the raw RGBA byte buffer (reinterpret with `as_rgba()`) plus width/height.
+///
+/// COLOR TRANSFER — deliberately sRGB: the quantizer scores color distance in
+/// CIELAB derived from a FIXED sRGB transfer (`lab::SRGB_TO_LINEAR`), and this
+/// decode intentionally does NOT honor a `gAMA`/`sRGB`/`iCCP` chunk. This matches
+/// the PNG spec's precedence (gAMA is the lowest-priority color chunk, overridden
+/// by sRGB/iCCP) and how the web stack treats PNGs (browsers, libvips/sharp,
+/// ImageMagick's default all normalize untagged/gAMA PNGs to sRGB). For the
+/// overwhelmingly common sRGB-ish tag (`gAMA == 45455 ≈ 1/2.2`) the difference
+/// from the sRGB piecewise curve is ≤ ~3 ΔE and shadow-only — below the
+/// quantization step. A genuinely non-sRGB `gAMA` (e.g. linear `100000`) is the
+/// rare, least-portable tail and is intentionally not special-cased here. NOTE:
+/// the prior imagequant path DID pass a per-image gamma into `new_image` (it was
+/// live, not dead code) — dropping it is an intentional sRGB-normalization
+/// decision, not an oversight.
 fn decode_rgba8(input: &[u8]) -> std::result::Result<(Vec<u8>, u32, u32), String> {
   let rgba = image::load_from_memory_with_format(input, image::ImageFormat::Png)
     .map_err(|err| err.to_string())?

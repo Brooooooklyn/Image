@@ -18,7 +18,14 @@ test('should be able to lossy optimize png image which has gama chunk', async (t
     return
   }
   const dest = await pngQuantize(GAMA, { speed: 5, maxQuality: 1, minQuality: 1 })
-  t.true(dest.length < PNG.length)
+  // pngQuantize deliberately assumes sRGB and ignores the gAMA chunk (matches the
+  // PNG spec's lowest-precedence treatment of gAMA, and browsers / libvips / sharp).
+  // Assert it produces a real, SMALLER PNG of the SAME dimensions as the actual
+  // gAMA-tagged input — not merely smaller than an unrelated 1.2 MB reference file.
+  t.true(dest.length < GAMA.length, 'shrinks the actual gAMA input')
+  // pngDimensions() also validates the PNG signature + IHDR, so this proves dest
+  // is a decodable PNG whose width/height survived quantization unchanged.
+  t.deepEqual(pngDimensions(dest), pngDimensions(GAMA), 'dimensions preserved')
 })
 
 // Read width/height straight from the PNG IHDR (big-endian u32 at byte 16/20).
