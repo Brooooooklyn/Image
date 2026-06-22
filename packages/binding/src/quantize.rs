@@ -18,6 +18,7 @@ use rgb::RGBA8;
 use crate::lab::{
   Lab, MAX_DELTA_E76_SQ, delta_e76_sq, linear_to_srgb8, rgb_to_lab, srgb_to_linear_f,
 };
+use crate::quantize_simd::{self, OpaqueKernel};
 
 /// Hard upper bound on an 8-bit indexed palette.
 const MAX_PALETTE: usize = 256;
@@ -323,6 +324,75 @@ fn pdist_lab(query_lab: Lab, query_a: u8, entry_lab: Lab, entry_a: u8) -> i64 {
 #[inline]
 fn palette_labs(palette: &[RGBA8]) -> Vec<Lab> {
   palette.iter().map(|p| rgb_to_lab(p.r, p.g, p.b)).collect()
+}
+
+/// Structure-of-Arrays palette Lab cache for the hot nearest-palette scan.
+///
+/// Built ONCE where the palette is fixed across many queries (remap, k-means
+/// assignment/objective). It carries two views of the same data:
+///
+/// * `labs` (AoS) + `alpha` feed the COLD general path: a translucent query or a
+///   palette with a reserved transparent slot still goes through the unchanged
+///   [`nearest_lab`] (full `pdist_lab` + dim/vanish penalties). Reusing `nearest_lab`
+///   verbatim keeps that rare path byte-identical with zero logic duplication.
+/// * `l` / `a` / `b` (SoA `i32`) feed the HOT opaque fast path: contiguous component
+///   arrays a SIMD kernel can vector-load. See [`crate::quantize_simd`].
+///
+/// `all_opaque` is set when every entry has `alpha == 255`. Combined with an opaque
+/// query (`qa == 255`), the perceptual distance collapses to plain squared CIE76 ΔE
+/// (`dl²+da²+db²` — `wa/510 == 1`, alpha term 0, both penalties 0), which is exactly
+/// what the opaque kernel computes; proven equal to [`nearest_lab`] by the test
+/// `opaque_fast_path_equals_general`.
+struct PaletteLabSoa {
+  labs: Vec<Lab>,
+  l: Vec<i32>,
+  a: Vec<i32>,
+  b: Vec<i32>,
+  alpha: Vec<u8>,
+  all_opaque: bool,
+}
+
+impl PaletteLabSoa {
+  /// Builds the cache from a palette. `labs` matches [`palette_labs`] exactly.
+  fn from_palette(palette: &[RGBA8]) -> Self {
+    let labs: Vec<Lab> = palette.iter().map(|p| rgb_to_lab(p.r, p.g, p.b)).collect();
+    let l = labs.iter().map(|x| x.l).collect();
+    let a = labs.iter().map(|x| x.a).collect();
+    let b = labs.iter().map(|x| x.b).collect();
+    let alpha: Vec<u8> = palette.iter().map(|p| p.a).collect();
+    let all_opaque = alpha.iter().all(|&av| av == 255);
+    Self {
+      labs,
+      l,
+      a,
+      b,
+      alpha,
+      all_opaque,
+    }
+  }
+
+  /// Index of the nearest palette entry to `qlab`/`qa` under the perceptual metric.
+  ///
+  /// Fast path (opaque palette + opaque query): the SIMD/scalar `opaque_argmin` of
+  /// `dl²+da²+db²`, byte-identical to the general path. Otherwise the unchanged
+  /// [`nearest_lab`] (cold; translucent / transparent-slot cases). `skip_transparent`
+  /// and `guard` matter only on the general path — on the fast path the palette has no
+  /// transparent slot and the dim/vanish penalties are identically zero.
+  #[inline]
+  fn nearest(
+    &self,
+    kernel: OpaqueKernel,
+    qlab: Lab,
+    qa: u8,
+    skip_transparent: bool,
+    guard: u8,
+  ) -> usize {
+    if self.all_opaque && qa == 255 {
+      quantize_simd::opaque_argmin(kernel, &self.l, &self.a, &self.b, [qlab.l, qlab.a, qlab.b])
+    } else {
+      nearest_lab(&self.labs, &self.alpha, qlab, qa, skip_transparent, guard)
+    }
+  }
 }
 
 /// A distinct color and how many source pixels carry it.
@@ -956,14 +1026,14 @@ fn nearest(palette: &[RGBA8], c: RGBA8) -> usize {
 /// `pdist`; the D² reseed weights (`count · pdist`) are bounded identically and
 /// already use `u128`.
 fn kmeans_objective(palette: &[RGBA8], entries: &[ColorCount]) -> u128 {
-  let labs = palette_labs(palette);
-  let alphas: Vec<u8> = palette.iter().map(|p| p.a).collect();
+  let soa = PaletteLabSoa::from_palette(palette);
+  let kernel = quantize_simd::detect();
   let mut obj: u128 = 0;
   for e in entries {
     let qlab = rgb_to_lab(e.color.r, e.color.g, e.color.b);
     // Clustering objective: guard disabled (`0`) so the keep-best metric is pure `pdist`.
-    let idx = nearest_lab(&labs, &alphas, qlab, e.color.a, e.color.a > 0, 0);
-    let d = pdist_lab(qlab, e.color.a, labs[idx], alphas[idx]).max(0) as u128;
+    let idx = soa.nearest(kernel, qlab, e.color.a, e.color.a > 0, 0);
+    let d = pdist_lab(qlab, e.color.a, soa.labs[idx], soa.alpha[idx]).max(0) as u128;
     obj += e.count as u128 * d;
   }
   obj
@@ -1014,11 +1084,14 @@ fn kmeans_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) {
   let mut best: Vec<RGBA8> = palette.to_vec();
   let mut best_obj: u128 = kmeans_objective(palette, entries);
 
+  // Detect the opaque-scan kernel ONCE for the whole refine (cheap, but never per
+  // entry); the SoA is rebuilt each pass below because the centroids move.
+  let kernel = quantize_simd::detect();
+
   for _ in 0..iters {
-    // Cache the palette's Labs for this pass's assignment scan (perceptual
-    // nearest), rebuilt each pass because the centroids moved.
-    let pal_labs = palette_labs(palette);
-    let pal_alphas: Vec<u8> = palette.iter().map(|p| p.a).collect();
+    // Cache the palette's Labs (SoA) for this pass's assignment scan, rebuilt each
+    // pass because the centroids moved.
+    let soa = PaletteLabSoa::from_palette(palette);
 
     // Accumulators per cluster.
     let mut sr = vec![0u64; k];
@@ -1028,13 +1101,12 @@ fn kmeans_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) {
     let mut wn = vec![0u64; k];
 
     for (ei, e) in entries.iter().enumerate() {
-      let idx = nearest_lab(
-        &pal_labs,
-        &pal_alphas,
+      // Clustering assignment: guard disabled so centroids/palette stay byte-identical.
+      let idx = soa.nearest(
+        kernel,
         entry_labs[ei],
         entry_alphas[ei],
         entry_alphas[ei] > 0,
-        // Clustering assignment: guard disabled so centroids/palette stay byte-identical.
         0,
       );
       let c = e.count;
@@ -1176,27 +1248,25 @@ fn kmeans_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) {
 
 /// Nearest-color remap with a per-color memoization cache (no dithering).
 fn remap_nearest(px: &[RGBA8], palette: &[RGBA8], bits: u8) -> Vec<u8> {
-  // Palette Labs cached once; the per-color cache only computes `rgb_to_lab` for
-  // each DISTINCT canonical key once (perceptual assignment via `nearest_lab`).
-  let pal_labs = palette_labs(palette);
-  let pal_alphas: Vec<u8> = palette.iter().map(|p| p.a).collect();
+  // Palette Labs cached once (SoA); the per-color cache only computes `rgb_to_lab`
+  // for each DISTINCT canonical key once (perceptual assignment via the dispatched scan).
+  let soa = PaletteLabSoa::from_palette(palette);
+  let kernel = quantize_simd::detect();
   let mut cache: HashMap<RGBA8, u8> = HashMap::new();
   let mut indices = Vec::with_capacity(px.len());
   for &p in px {
     let key = canonical_key(p, bits);
     let idx = *cache.entry(key).or_insert_with(|| {
-      nearest_lab(
-        &pal_labs,
-        &pal_alphas,
+      // `key` IS the (posterized) source pixel, so its alpha is the source visibility:
+      // `skip_transparent = key.a > 0` (a visible key must not resolve to the transparent
+      // slot) and the FINAL-REMAP visibility guard is keyed on the same source alpha
+      // `key.a` (posterize never touches alpha) so a visible pixel cannot vanish onto a
+      // much-dimmer entry.
+      soa.nearest(
+        kernel,
         rgb_to_lab(key.r, key.g, key.b),
         key.a,
-        // `key` IS the (posterized) source pixel here, so its alpha is the source
-        // visibility; a visible source key must not resolve to the transparent slot.
         key.a > 0,
-        // FINAL REMAP: enable the visibility guard keyed on the source pixel's alpha so
-        // a visible pixel cannot be assigned to a much-dimmer entry and vanish. `key.a`
-        // is the (posterized) source alpha; posterize never touches alpha, so it equals
-        // the raw source alpha.
         key.a,
       ) as u8
     });
@@ -1441,12 +1511,12 @@ fn remap_dither(px: &[RGBA8], width: usize, height: usize, palette: &[RGBA8], bi
   if width == 0 || height == 0 {
     return indices;
   }
-  // Cache the palette Labs ONCE: the palette is fixed across every pixel, so
+  // Cache the palette Labs ONCE (SoA): the palette is fixed across every pixel, so
   // `rgb_to_lab` runs `palette.len()` times here, not once per pixel. The per-pixel
   // query Lab (for `want`) is still computed per pixel — `want` varies — but that is
   // a single `rgb_to_lab` per visible pixel (the residual stays on RGB `dist2`).
-  let pal_labs = palette_labs(palette);
-  let pal_alphas: Vec<u8> = palette.iter().map(|p| p.a).collect();
+  let soa = PaletteLabSoa::from_palette(palette);
+  let kernel = quantize_simd::detect();
   // Two error rows of (r, g, b, a) deltas in f32 for sub-unit accumulation.
   let mut cur = vec![[0f32; 4]; width];
   let mut next = vec![[0f32; 4]; width];
@@ -1505,15 +1575,14 @@ fn remap_dither(px: &[RGBA8], width: usize, height: usize, palette: &[RGBA8], bi
       // are `continue`d above — so this flag is always `true` in this call; passing it
       // explicitly documents the invariant and removes any dependence on alpha never
       // being posterized.
-      let idx = nearest_lab(
-        &pal_labs,
-        &pal_alphas,
+      // FINAL-REMAP visibility guard keyed on the RAW source alpha `px[base].a` — NOT
+      // the dither-adjusted `want.a`, which can drop below the source: a visible source
+      // pixel must not vanish onto a much-dimmer entry even when its `want.a` clamped low.
+      let idx = soa.nearest(
+        kernel,
         rgb_to_lab(want.r, want.g, want.b),
         want.a,
         px[base].a > 0,
-        // FINAL REMAP visibility guard, keyed on the RAW source alpha `px[base].a` — NOT
-        // the dither-adjusted `want.a`, which can drop below the source: a visible source
-        // pixel must not vanish onto a much-dimmer entry even when its `want.a` clamped low.
         px[base].a,
       );
       indices[base] = idx as u8;
@@ -1914,6 +1983,76 @@ pub fn quantize_rgba(
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  /// The SoA opaque fast path (scalar kernel) must return the SAME index as the general
+  /// [`nearest_lab`] for any fully-opaque palette + opaque query, because the perceptual
+  /// metric provably collapses to `dl²+da²+db²` there (`wa/510 == 1`, alpha term 0, both
+  /// penalties 0). This is the equivalence the golden pins depend on; the per-ISA SIMD
+  /// phases extend it (`quantize_simd::tests`) by swapping the scalar kernel for each
+  /// intrinsic. Sweeps palette sizes 1..=80 to exercise short and long scans.
+  #[test]
+  fn opaque_fast_path_equals_general() {
+    let mut seed: u64 = 0x1234_5678_9abc_def0;
+    let mut next = || {
+      seed = seed
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
+      (seed >> 33) as u32
+    };
+    for n in 1..=80usize {
+      let palette: Vec<RGBA8> = (0..n)
+        .map(|_| RGBA8 {
+          r: (next() & 0xff) as u8,
+          g: (next() & 0xff) as u8,
+          b: (next() & 0xff) as u8,
+          a: 255,
+        })
+        .collect();
+      let soa = PaletteLabSoa::from_palette(&palette);
+      assert!(soa.all_opaque, "constructed palette must be opaque");
+      for _ in 0..20 {
+        let (r, g, b) = (
+          (next() & 0xff) as u8,
+          (next() & 0xff) as u8,
+          (next() & 0xff) as u8,
+        );
+        let qlab = rgb_to_lab(r, g, b);
+        let fast = soa.nearest(OpaqueKernel::Scalar, qlab, 255, true, 255);
+        let general = nearest_lab(&soa.labs, &soa.alpha, qlab, 255, true, 255);
+        assert_eq!(fast, general, "n={n} q=({r},{g},{b})");
+      }
+    }
+  }
+
+  /// NEON and forced-scalar must produce byte-identical quantizer output end to end. A
+  /// smooth opaque gradient with many distinct colors forces the lossy remap+dither path
+  /// where the opaque SIMD kernel runs. Proves the kernel is exact AND that the
+  /// `IMAGE_QUANTIZE_SCALAR` fallback path is wired correctly (never-panic / same bytes).
+  #[cfg(target_arch = "aarch64")]
+  #[test]
+  fn neon_matches_scalar_end_to_end() {
+    let (w, h) = (48usize, 48usize);
+    let mut px = Vec::with_capacity(w * h);
+    for y in 0..h {
+      for x in 0..w {
+        px.push(RGBA8 {
+          r: (x * 5) as u8,
+          g: (y * 5) as u8,
+          b: ((x + y) * 2) as u8,
+          a: 255,
+        });
+      }
+    }
+    let config = cfg(16, true, 5);
+    let neon =
+      quantize_simd::test_override::with(OpaqueKernel::Neon, || quantize_rgba(&px, w, h, &config));
+    let scalar = quantize_simd::test_override::with(OpaqueKernel::Scalar, || {
+      quantize_rgba(&px, w, h, &config)
+    });
+    assert_eq!(neon.indices, scalar.indices, "indices differ");
+    assert_eq!(neon.palette, scalar.palette, "palette differs");
+    assert_eq!(neon.quality, scalar.quality, "quality differs");
+  }
 
   fn cfg(max_colors: u16, dither: bool, kmeans: u8) -> QuantizeConfig {
     QuantizeConfig {
