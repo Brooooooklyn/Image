@@ -2551,6 +2551,18 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@napi-rs/image-wasm32-wasi@npm:1.13.0":
+  version: 1.13.0
+  resolution: "@napi-rs/image-wasm32-wasi@npm:1.13.0"
+  dependencies:
+    "@emnapi/core": "npm:1.11.1"
+    "@emnapi/runtime": "npm:1.11.1"
+    "@napi-rs/wasm-runtime": "npm:^1.1.5"
+  checksum: 10c0/2940a8f058bfc4c61c04f3e65fab33ebfcf2cc8c3bc9332c71894518f7fc8556278dc02e5b80c286738a8591d6806b319fdde6b0b40cfe0e59c59e7e07846a88
+  conditions: cpu=wasm32
+  languageName: node
+  linkType: hard
+
 "@napi-rs/image-win32-arm64-msvc@npm:1.12.1":
   version: 1.12.1
   resolution: "@napi-rs/image-win32-arm64-msvc@npm:1.12.1"
@@ -12494,7 +12506,7 @@ __metadata:
     "@fontsource-variable/space-grotesk": "npm:^5.2.10"
     "@napi-rs/canvas": "npm:^1.0.0"
     "@napi-rs/image": "npm:1.12.1"
-    "@napi-rs/image-wasm32-wasi": "npm:1.12.1"
+    "@napi-rs/image-wasm32-wasi": "npm:1.13.0"
     "@playwright/test": "npm:^1.50.0"
     "@tailwindcss/vite": "npm:4.3.1"
     "@types/node": "npm:^24.10.1"
