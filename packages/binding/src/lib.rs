@@ -17,6 +17,10 @@ mod lab;
 #[cfg(feature = "binding")]
 pub mod png;
 mod quantize;
+// Runtime-dispatched SIMD kernels for the quantizer's nearest-palette argmin. Not
+// behind `binding` (same as `quantize`/`lab`) so the `--no-default-features` bench
+// core links it. Pure integer math -> byte-identical to the scalar reference.
+mod quantize_simd;
 /// Quantizer core, re-exported solely for the `benches/` CodSpeed micro-benchmarks
 /// (`benches/quantize.rs`). These names are not part of the addon's public API and
 /// may change without notice; nothing in the shipped JS surface depends on them.
