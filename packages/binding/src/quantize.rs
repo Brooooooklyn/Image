@@ -2024,6 +2024,36 @@ mod tests {
     }
   }
 
+  /// NEON and forced-scalar must produce byte-identical quantizer output end to end. A
+  /// smooth opaque gradient with many distinct colors forces the lossy remap+dither path
+  /// where the opaque SIMD kernel runs. Proves the kernel is exact AND that the
+  /// `IMAGE_QUANTIZE_SCALAR` fallback path is wired correctly (never-panic / same bytes).
+  #[cfg(target_arch = "aarch64")]
+  #[test]
+  fn neon_matches_scalar_end_to_end() {
+    let (w, h) = (48usize, 48usize);
+    let mut px = Vec::with_capacity(w * h);
+    for y in 0..h {
+      for x in 0..w {
+        px.push(RGBA8 {
+          r: (x * 5) as u8,
+          g: (y * 5) as u8,
+          b: ((x + y) * 2) as u8,
+          a: 255,
+        });
+      }
+    }
+    let config = cfg(16, true, 5);
+    let neon =
+      quantize_simd::test_override::with(OpaqueKernel::Neon, || quantize_rgba(&px, w, h, &config));
+    let scalar = quantize_simd::test_override::with(OpaqueKernel::Scalar, || {
+      quantize_rgba(&px, w, h, &config)
+    });
+    assert_eq!(neon.indices, scalar.indices, "indices differ");
+    assert_eq!(neon.palette, scalar.palette, "palette differs");
+    assert_eq!(neon.quality, scalar.quality, "quality differs");
+  }
+
   fn cfg(max_colors: u16, dither: bool, kmeans: u8) -> QuantizeConfig {
     QuantizeConfig {
       max_colors,

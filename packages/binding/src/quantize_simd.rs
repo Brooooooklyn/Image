@@ -47,6 +47,10 @@ pub(crate) enum OpaqueKernel {
   /// Portable integer reference. Defines the byte-exact result every other kernel
   /// must reproduce. Always available on every target.
   Scalar,
+  /// NEON (aarch64) 4-wide i32 argmin. NEON is part of the AArch64 baseline, so it is
+  /// always present on aarch64 — no runtime probe, no host can lack it.
+  #[cfg(target_arch = "aarch64")]
+  Neon,
 }
 
 /// Selects the opaque-scan kernel for this host, honouring the `IMAGE_QUANTIZE_SCALAR`
@@ -72,7 +76,16 @@ pub(crate) fn detect() -> OpaqueKernel {
 /// branches. Kept separate from [`detect`] so the override / escape-hatch logic is shared.
 #[inline]
 fn detect_native() -> OpaqueKernel {
-  OpaqueKernel::Scalar
+  #[cfg(target_arch = "aarch64")]
+  {
+    // NEON is mandatory in the AArch64 baseline, so it is always present — no probe
+    // needed and no host can lack it.
+    OpaqueKernel::Neon
+  }
+  #[cfg(not(target_arch = "aarch64"))]
+  {
+    OpaqueKernel::Scalar
+  }
 }
 
 /// `true` when `IMAGE_QUANTIZE_SCALAR` is set to a truthy value (`1`/`true`/`yes`). Read
@@ -107,6 +120,8 @@ pub(crate) fn opaque_argmin(
   debug_assert!(!l.is_empty());
   match kernel {
     OpaqueKernel::Scalar => opaque_scan_scalar(l, a, b, q),
+    #[cfg(target_arch = "aarch64")]
+    OpaqueKernel::Neon => unsafe { opaque_scan_neon(l, a, b, q) },
   }
 }
 
@@ -129,6 +144,81 @@ fn opaque_scan_scalar(l: &[i32], a: &[i32], b: &[i32], q: [i32; 3]) -> usize {
     }
   }
   best
+}
+
+/// NEON (aarch64) implementation of [`opaque_argmin`]: 4-wide i32 argmin of
+/// `dl²+da²+db²`, bit-identical to [`opaque_scan_scalar`]. Each lane keeps the lowest
+/// index achieving its running min (strict `vcltq`); then a scalar reduction over the 4
+/// lanes followed by the `n % 4` tail reproduces the ascending lowest-index-wins
+/// tie-break. Every intermediate is ≤ `MAX_DELTA_E76_SQ` (= 669_160_034) < 2³¹, so the
+/// i32 lanes never overflow. SAFETY: only reachable via `detect`/`opaque_argmin` on
+/// aarch64, where NEON is guaranteed.
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn opaque_scan_neon(l: &[i32], a: &[i32], b: &[i32], q: [i32; 3]) -> usize {
+  use core::arch::aarch64::*;
+  unsafe {
+    let n = l.len();
+    let ql = vdupq_n_s32(q[0]);
+    let qa = vdupq_n_s32(q[1]);
+    let qb = vdupq_n_s32(q[2]);
+    let idx_arr = [0i32, 1, 2, 3];
+    let lane_idx = vld1q_s32(idx_arr.as_ptr());
+    let mut min_d = vdupq_n_s32(i32::MAX);
+    let mut min_i = vdupq_n_s32(i32::MAX);
+
+    let mut i = 0usize;
+    while i + 4 <= n {
+      let dl = vsubq_s32(ql, vld1q_s32(l.as_ptr().add(i)));
+      let da = vsubq_s32(qa, vld1q_s32(a.as_ptr().add(i)));
+      let db = vsubq_s32(qb, vld1q_s32(b.as_ptr().add(i)));
+      let d = vaddq_s32(
+        vaddq_s32(vmulq_s32(dl, dl), vmulq_s32(da, da)),
+        vmulq_s32(db, db),
+      );
+      let cur_i = vaddq_s32(vdupq_n_s32(i as i32), lane_idx);
+      // lanes where d < min_d (STRICT: a later equal value does NOT replace -> lowest
+      // index kept within the lane, matching the scalar `<`).
+      let mask = vcltq_s32(d, min_d);
+      min_d = vbslq_s32(mask, d, min_d);
+      min_i = vbslq_s32(mask, cur_i, min_i);
+      i += 4;
+    }
+
+    // Reduce the 4 lanes: lowest d, tie -> lowest index.
+    let mut ld = [0i32; 4];
+    let mut li = [0i32; 4];
+    vst1q_s32(ld.as_mut_ptr(), min_d);
+    vst1q_s32(li.as_mut_ptr(), min_i);
+
+    let mut best_d = i64::MAX;
+    let mut best = 0usize;
+    for (&d_lane, &i_lane) in ld.iter().zip(li.iter()) {
+      if i_lane == i32::MAX {
+        continue; // lane saw no full block (n < 4)
+      }
+      let d = d_lane as i64;
+      let idx = i_lane as usize;
+      if d < best_d || (d == best_d && idx < best) {
+        best_d = d;
+        best = idx;
+      }
+    }
+    // Tail (n % 4): ascending, strict `<`, so a tail entry only wins on a STRICT
+    // improvement — preserving lowest-index-on-tie against the lower-indexed lane winners.
+    while i < n {
+      let dl = (q[0] - l[i]) as i64;
+      let da = (q[1] - a[i]) as i64;
+      let db = (q[2] - b[i]) as i64;
+      let d = dl * dl + da * da + db * db;
+      if d < best_d {
+        best_d = d;
+        best = i;
+      }
+      i += 1;
+    }
+    best
+  }
 }
 
 /// Test-only thread-local kernel override, so a single test process can run the same
@@ -241,5 +331,11 @@ mod tests {
     assert_kernel_matches_scalar("dispatch-scalar", |l, a, b, q| {
       opaque_argmin(OpaqueKernel::Scalar, l, a, b, q)
     });
+  }
+
+  #[cfg(target_arch = "aarch64")]
+  #[test]
+  fn kernel_matches_scalar_neon() {
+    assert_kernel_matches_scalar("neon", |l, a, b, q| unsafe { opaque_scan_neon(l, a, b, q) });
   }
 }
