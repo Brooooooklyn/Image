@@ -63,6 +63,15 @@ libwebp-sys = { version = "0.14", default-features = false, features = ["std", "
 [target.'cfg(all(target_os = "macos", target_arch = "x86_64"))'.dependencies]
 libwebp-sys = { version = "0.14", default-features = false, features = ["std", "parallel", "generate-bindings"] }
 
+# macOS-only HEIC decode via Apple's ImageIO/CoreGraphics. We ship no HEVC codec — Apple's OS holds
+# the patent license — so all HEIC decoding goes through these OS API bindings. macOS-gated, so
+# Linux/Windows/wasm builds never see objc2.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFBase", "CFData", "CFDictionary", "CFString", "CFNumber", "CFCGTypes"] }
+objc2-core-graphics   = { version = "0.3", default-features = false, features = ["std", "CGImage", "CGColorSpace", "CGContext", "CGBitmapContext"] }
+objc2-image-io        = { version = "0.3", default-features = false, features = ["std", "CGImageSource", "CGImageProperties", "objc2-core-graphics"] }
+
 [build-dependencies]
 napi-build = "2"
 

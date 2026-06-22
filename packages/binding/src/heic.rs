@@ -51,6 +51,32 @@ pub fn is_heic(buf: &[u8]) -> bool {
   false
 }
 
+/// Un-premultiply a single 8-bit color channel by its alpha, recovering straight alpha.
+///
+/// CoreGraphics bitmap contexts only render premultiplied alpha, but the rest of the pipeline
+/// (and `image::Rgba`) expects straight/un-associated alpha. For a fully-opaque pixel
+/// (`a == 255`) this is the identity, so opaque camera HEICs round-trip exactly. The
+/// `+ a/2` term rounds to nearest instead of truncating; the result is clamped to the channel max.
+#[inline]
+fn unpremultiply_u8(c: u8, a: u8) -> u8 {
+  if a == 0 {
+    0
+  } else {
+    ((c as u32 * 255 + a as u32 / 2) / a as u32).min(255) as u8
+  }
+}
+
+/// Un-premultiply a single 16-bit color channel by its alpha, recovering straight alpha.
+/// See [`unpremultiply_u8`]; identical logic scaled to the 16-bit channel max (65535).
+#[inline]
+fn unpremultiply_u16(c: u16, a: u16) -> u16 {
+  if a == 0 {
+    0
+  } else {
+    ((c as u32 * 65535 + a as u32 / 2) / a as u32).min(65535) as u16
+  }
+}
+
 /// Decode a HEIC/HEIF image to a `DynamicImage` plus EXIF orientation (1..8) if present.
 /// macOS-only (delegates to the OS ImageIO HEVC decoder); errors elsewhere.
 #[cfg(not(target_os = "macos"))]
@@ -61,13 +87,211 @@ pub(crate) fn decode_heic(_buf: &[u8]) -> Result<(DynamicImage, Option<u16>)> {
   ))
 }
 
+/// macOS HEIC decode via Apple's ImageIO + CoreGraphics. We ship no HEVC codec; Apple's OS holds
+/// the patent license, so all decoding goes through OS API calls.
+///
+/// Pipeline: input bytes -> `CFData` -> `CGImageSource` -> primary-image properties (bit depth and
+/// EXIF orientation) -> `CGImage` -> render into our own sRGB premultiplied `CGBitmapContext`
+/// (8-bit RGBA8 or 16-bit RGBA16) -> read the buffer back -> un-premultiply to straight alpha ->
+/// `DynamicImage`. Orientation is returned, not baked into pixels (the pipeline rotates later,
+/// same as JPEG). Every null/false OS result becomes a clean `napi::Error`; no `unwrap`/panic.
 #[cfg(target_os = "macos")]
-pub(crate) fn decode_heic(_buf: &[u8]) -> Result<(DynamicImage, Option<u16>)> {
-  // Implemented via ImageIO in Task 4.
-  Err(Error::new(
-    Status::GenericFailure,
-    "HEIC decoding not yet implemented".to_owned(),
-  ))
+pub(crate) fn decode_heic(buf: &[u8]) -> Result<(DynamicImage, Option<u16>)> {
+  use objc2::rc::autoreleasepool;
+  use objc2_core_foundation::{
+    CFData, CFDictionary, CFNumber, CFRetained, CGPoint, CGRect, CGSize,
+  };
+  use objc2_core_graphics::{
+    CGBitmapContextCreate, CGColorSpace, CGContext, CGImage, CGImageAlphaInfo,
+    CGImageByteOrderInfo, kCGColorSpaceSRGB,
+  };
+  use objc2_image_io::{CGImageSource, kCGImagePropertyDepth, kCGImagePropertyOrientation};
+
+  /// Look up a CFNumber-valued key in an ImageIO property dictionary and read it as `i32`.
+  /// Returns `None` when the key is absent or not a number. The borrowed key/dict outlive the call.
+  fn dict_i32(dict: &CFDictionary, key: &objc2_core_foundation::CFString) -> Option<i32> {
+    // The properties dictionary is opaque (`CFType` values); fetch the raw value pointer and
+    // downcast it to a concrete `CFNumber` before reading. The pointer is only borrowed for the
+    // duration of this function, while `dict` (and thus the value) is alive.
+    let value_ptr = unsafe { dict.value(key as *const _ as *const core::ffi::c_void) };
+    if value_ptr.is_null() {
+      return None;
+    }
+    let cf_type = unsafe { &*(value_ptr as *const objc2_core_foundation::CFType) };
+    let number = cf_type.downcast_ref::<CFNumber>()?;
+    number.as_i32()
+  }
+
+  autoreleasepool(|_pool| {
+    // 1. bytes -> CFData (copies the input; the CFData owns its own buffer).
+    let data = CFData::from_bytes(buf);
+
+    // 2. CFData -> CGImageSource.
+    let source = unsafe { CGImageSource::with_data(&data, None) }.ok_or_else(|| {
+      Error::new(
+        Status::InvalidArg,
+        "HEIC: not a decodable HEIC (CGImageSource::with_data returned null)".to_owned(),
+      )
+    })?;
+
+    // 3. Primary-image properties: bit depth (8 vs >8) and EXIF orientation (1..8).
+    let mut depth: i32 = 8;
+    let mut orientation: Option<u16> = None;
+    if let Some(props) = unsafe { source.properties_at_index(0, None) } {
+      if let Some(d) = dict_i32(&props, unsafe { kCGImagePropertyDepth }) {
+        depth = d;
+      }
+      if let Some(o) = dict_i32(&props, unsafe { kCGImagePropertyOrientation })
+        && (1..=8).contains(&o)
+      {
+        orientation = Some(o as u16);
+      }
+    }
+    let sixteen_bit = depth > 8;
+
+    // 4. CGImageSource -> primary CGImage.
+    let image = unsafe { source.image_at_index(0, None) }.ok_or_else(|| {
+      Error::new(
+        Status::InvalidArg,
+        "HEIC: failed to create image (CGImageSource::image_at_index returned null)".to_owned(),
+      )
+    })?;
+    let width = CGImage::width(Some(&image));
+    let height = CGImage::height(Some(&image));
+    if width == 0 || height == 0 {
+      return Err(Error::new(
+        Status::InvalidArg,
+        "HEIC: decoded image has zero dimensions".to_owned(),
+      ));
+    }
+
+    // 5. sRGB colorspace for both depths. CG color-matches wide-gamut (e.g. Display-P3) down to
+    //    sRGB when drawing; 16-bit preserves precision, not gamut. Matches v1 documented behavior.
+    let color_space: CFRetained<CGColorSpace> =
+      CGColorSpace::with_name(Some(unsafe { kCGColorSpaceSRGB })).ok_or_else(|| {
+        Error::new(
+          Status::GenericFailure,
+          "HEIC: failed to create sRGB color space".to_owned(),
+        )
+      })?;
+
+    // Guard against width*height*channels overflow on absurd dimensions.
+    let pixels = width
+      .checked_mul(height)
+      .and_then(|p| p.checked_mul(4))
+      .ok_or_else(|| {
+        Error::new(
+          Status::InvalidArg,
+          "HEIC: image dimensions overflow".to_owned(),
+        )
+      })?;
+
+    let rect = CGRect::new(
+      CGPoint::new(0.0, 0.0),
+      CGSize::new(width as f64, height as f64),
+    );
+
+    // 6 + 7. Render premultiplied into our own buffer, then un-premultiply to straight alpha and
+    //        build the DynamicImage. CGBitmapContext is premultiplied-only.
+    if sixteen_bit {
+      // 16-bit RGBA, native-endian (ByteOrder16Host) so the buffer reads back as `u16` directly.
+      let mut pixel_buf: Vec<u16> = vec![0u16; pixels];
+      let bytes_per_row = width
+        .checked_mul(8)
+        .ok_or_else(|| Error::new(Status::InvalidArg, "HEIC: bytesPerRow overflow".to_owned()))?;
+      // "Host" byte order: pick the variant matching the target endianness so the rendered buffer
+      // reads back directly as native-endian `u16` (every Apple platform is little-endian today).
+      let host_16: CGImageByteOrderInfo = if cfg!(target_endian = "little") {
+        CGImageByteOrderInfo::Order16Little
+      } else {
+        CGImageByteOrderInfo::Order16Big
+      };
+      let bitmap_info: u32 = CGImageAlphaInfo::PremultipliedLast.0 | host_16.0;
+      {
+        let context = unsafe {
+          CGBitmapContextCreate(
+            pixel_buf.as_mut_ptr() as *mut core::ffi::c_void,
+            width,
+            height,
+            16,
+            bytes_per_row,
+            Some(&color_space),
+            bitmap_info,
+          )
+        }
+        .ok_or_else(|| {
+          Error::new(
+            Status::GenericFailure,
+            "HEIC: failed to create 16-bit bitmap context".to_owned(),
+          )
+        })?;
+        // `image` and `pixel_buf` both outlive this draw; the context is dropped before we move
+        // `pixel_buf`, flushing all pixels into the buffer.
+        CGContext::draw_image(Some(&context), rect, Some(&image));
+      }
+      // Un-premultiply R,G,B by A in place; leave A untouched.
+      for px in pixel_buf.chunks_exact_mut(4) {
+        let a = px[3];
+        px[0] = unpremultiply_u16(px[0], a);
+        px[1] = unpremultiply_u16(px[1], a);
+        px[2] = unpremultiply_u16(px[2], a);
+      }
+      let img =
+        image::ImageBuffer::<image::Rgba<u16>, _>::from_raw(width as u32, height as u32, pixel_buf)
+          .map(DynamicImage::ImageRgba16)
+          .ok_or_else(|| {
+            Error::new(
+              Status::GenericFailure,
+              "HEIC: buffer size mismatch (16-bit)".to_owned(),
+            )
+          })?;
+      Ok((img, orientation))
+    } else {
+      // 8-bit RGBA, ByteOrder32Big so the memory layout is R,G,B,A.
+      let mut pixel_buf: Vec<u8> = vec![0u8; pixels];
+      let bytes_per_row = width
+        .checked_mul(4)
+        .ok_or_else(|| Error::new(Status::InvalidArg, "HEIC: bytesPerRow overflow".to_owned()))?;
+      let bitmap_info: u32 =
+        CGImageAlphaInfo::PremultipliedLast.0 | CGImageByteOrderInfo::Order32Big.0;
+      {
+        let context = unsafe {
+          CGBitmapContextCreate(
+            pixel_buf.as_mut_ptr() as *mut core::ffi::c_void,
+            width,
+            height,
+            8,
+            bytes_per_row,
+            Some(&color_space),
+            bitmap_info,
+          )
+        }
+        .ok_or_else(|| {
+          Error::new(
+            Status::GenericFailure,
+            "HEIC: failed to create 8-bit bitmap context".to_owned(),
+          )
+        })?;
+        CGContext::draw_image(Some(&context), rect, Some(&image));
+      }
+      for px in pixel_buf.chunks_exact_mut(4) {
+        let a = px[3];
+        px[0] = unpremultiply_u8(px[0], a);
+        px[1] = unpremultiply_u8(px[1], a);
+        px[2] = unpremultiply_u8(px[2], a);
+      }
+      let img =
+        image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(width as u32, height as u32, pixel_buf)
+          .map(DynamicImage::ImageRgba8)
+          .ok_or_else(|| {
+            Error::new(
+              Status::GenericFailure,
+              "HEIC: buffer size mismatch (8-bit)".to_owned(),
+            )
+          })?;
+      Ok((img, orientation))
+    }
+  })
 }
 
 #[cfg(test)]
@@ -129,7 +353,12 @@ mod tests {
   #[test]
   fn compatible_brand_after_filler_is_heic() {
     // `heic` is the second compatible brand, exercising the bounded scan loop.
-    assert!(is_heic(&ftyp(b"abcd", b"\0\0\0\0", &[b"wxyz", b"heic"], None)));
+    assert!(is_heic(&ftyp(
+      b"abcd",
+      b"\0\0\0\0",
+      &[b"wxyz", b"heic"],
+      None
+    )));
   }
 
   // --- Negative: AVIF must not be treated as HEIC ---
@@ -183,7 +412,12 @@ mod tests {
   #[test]
   fn huge_box_size_does_not_panic() {
     // Box size claims far more bytes than the buffer holds; scan must clamp to buf.len().
-    assert!(is_heic(&ftyp(b"abcd", b"\0\0\0\0", &[b"heic"], Some(u32::MAX))));
+    assert!(is_heic(&ftyp(
+      b"abcd",
+      b"\0\0\0\0",
+      &[b"heic"],
+      Some(u32::MAX)
+    )));
   }
 
   #[test]
@@ -200,12 +434,106 @@ mod tests {
     assert!(!is_heic(&buf));
   }
 
-  // --- decode_heic stub (Task 4 fills in the macOS impl) ---
+  // --- decode_heic: non-macOS stub still errors (macOS now decodes real fixtures) ---
 
+  #[cfg(not(target_os = "macos"))]
   #[test]
-  fn decode_heic_stub_errors() {
-    // The signature/symbol exists; both stubs currently return an error.
+  fn decode_heic_stub_errors_off_macos() {
+    // Off macOS the stub returns an error (no OS HEVC decoder to delegate to).
     let buf = ftyp(b"heic", b"\0\0\0\0", &[], None);
     assert!(super::decode_heic(&buf).is_err());
+  }
+
+  #[cfg(target_os = "macos")]
+  #[test]
+  fn decode_heic_rejects_garbage_on_macos() {
+    // A bare ftyp box with no HEVC payload is not a decodable image; the OS returns null and we
+    // surface a clean error rather than panicking.
+    let buf = ftyp(b"heic", b"\0\0\0\0", &[], None);
+    assert!(super::decode_heic(&buf).is_err());
+  }
+
+  #[cfg(target_os = "macos")]
+  #[test]
+  fn decode_heic_8bit_fixture_is_rgba8() {
+    // Real ImageIO decode of the committed 8-bit fixture: dimensions match and the 8-bit depth
+    // branch yields an RGBA8 DynamicImage. Fixtures live at the repo root (two dirs up).
+    let bytes = std::fs::read(concat!(
+      env!("CARGO_MANIFEST_DIR"),
+      "/../../un-optimized.heic"
+    ))
+    .expect("read 8-bit heic fixture");
+    let (img, _orientation) = super::decode_heic(&bytes).expect("decode 8-bit heic");
+    assert_eq!(img.width(), 1024);
+    assert_eq!(img.height(), 681);
+    assert!(matches!(img, DynamicImage::ImageRgba8(_)));
+  }
+
+  #[cfg(target_os = "macos")]
+  #[test]
+  fn decode_heic_10bit_fixture_is_rgba16() {
+    // Real ImageIO decode of the committed genuine 10-bit fixture: `kCGImagePropertyDepth` reports
+    // > 8, so the 16-bit branch yields an RGBA16 DynamicImage.
+    let bytes = std::fs::read(concat!(
+      env!("CARGO_MANIFEST_DIR"),
+      "/../../un-optimized-10bit.heic"
+    ))
+    .expect("read 10-bit heic fixture");
+    let (img, _orientation) = super::decode_heic(&bytes).expect("decode 10-bit heic");
+    assert_eq!(img.width(), 256);
+    assert_eq!(img.height(), 256);
+    assert!(matches!(img, DynamicImage::ImageRgba16(_)));
+  }
+
+  // --- Un-premultiply helpers (pure, the trickiest logic) ---
+
+  #[test]
+  fn unpremultiply_u8_opaque_is_noop() {
+    // Fully opaque (a == 255) must be the identity so opaque camera HEICs are exact.
+    assert_eq!(super::unpremultiply_u8(200, 255), 200);
+    assert_eq!(super::unpremultiply_u8(0, 255), 0);
+    assert_eq!(super::unpremultiply_u8(255, 255), 255);
+  }
+
+  #[test]
+  fn unpremultiply_u8_half_alpha_doubles() {
+    // A premultiplied 50 at ~half alpha (128) recovers to ~100 (rounded).
+    assert_eq!(super::unpremultiply_u8(50, 128), 100);
+  }
+
+  #[test]
+  fn unpremultiply_u8_zero_alpha_is_zero() {
+    assert_eq!(super::unpremultiply_u8(0, 0), 0);
+    assert_eq!(super::unpremultiply_u8(200, 0), 0);
+  }
+
+  #[test]
+  fn unpremultiply_u8_clamps_at_max() {
+    // A nonsensical premultiplied value larger than alpha would overflow 255; it must clamp.
+    assert_eq!(super::unpremultiply_u8(200, 100), 255);
+  }
+
+  #[test]
+  fn unpremultiply_u16_opaque_is_noop() {
+    assert_eq!(super::unpremultiply_u16(50000, 65535), 50000);
+    assert_eq!(super::unpremultiply_u16(0, 65535), 0);
+    assert_eq!(super::unpremultiply_u16(65535, 65535), 65535);
+  }
+
+  #[test]
+  fn unpremultiply_u16_half_alpha_doubles() {
+    // ~half alpha (32768) doubles the premultiplied channel (rounded to nearest).
+    assert_eq!(super::unpremultiply_u16(10000, 32768), 20000);
+  }
+
+  #[test]
+  fn unpremultiply_u16_zero_alpha_is_zero() {
+    assert_eq!(super::unpremultiply_u16(0, 0), 0);
+    assert_eq!(super::unpremultiply_u16(40000, 0), 0);
+  }
+
+  #[test]
+  fn unpremultiply_u16_clamps_at_max() {
+    assert_eq!(super::unpremultiply_u16(40000, 20000), 65535);
   }
 }
