@@ -624,7 +624,7 @@ export function losslessCompressPngSync(input: Buffer, options?: PNGLosslessOpti
 
 ### Lossy compression
 
-Powered by [pngquant](https://github.com/ImageOptim/libimagequant), converts RGBA images to palette-based 8-bit indexed images, _including_ alpha component.
+Built-in quantizer (MIT) — median-cut + k-means + Floyd–Steinberg dithering. Converts RGBA images to palette-based 8-bit indexed images, _including_ the alpha component.
 
 **PngQuantOptions**:
 

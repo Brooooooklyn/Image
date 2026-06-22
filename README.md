@@ -75,7 +75,7 @@ You can clone this repo and run the following command to taste the example below
 | Optimization                                                                                            | Raw                                          | Raw Size | Optimized Size |
 | ------------------------------------------------------------------------------------------------------- | -------------------------------------------- | -------- | -------------- |
 | `losslessCompressPng()` <br/>**Lossless**                                                               | <img src="./un-optimized.png" width="400" /> | `1.2M`   | `876K`         |
-| `pngQuantize({ maxQuality: 75 })` <br/>**Lossy**                                                        | <img src="./un-optimized.png" width="400" /> | `1.2M`   | `228K`         |
+| `pngQuantize({ maxQuality: 75 })` <br/>**Lossy**                                                        | <img src="./un-optimized.png" width="400" /> | `1.2M`   | `244K`         |
 | `compressJpeg()` <br/>**Lossless**                                                                      | <img src="./un-optimized.jpg" width="400" /> | `192K`   | `184K`         |
 | `compressJpeg(75)` <br/>**Lossy**                                                                       | <img src="./un-optimized.jpg" width="400" /> | `192K`   | `104K`         |
 | `new Transformer(PNG).webpLossless()`<br/>**Lossless**                                                  | <img src="./un-optimized.png" width="400" /> | `1.2M`   | `676K`         |

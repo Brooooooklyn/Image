@@ -548,6 +548,51 @@ jobs:
         env:
           NAPI_RS_FORCE_WASI: '1'
 
+  benchmark:
+    name: Benchmark pngQuantize (CodSpeed)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # OIDC auth for the CodSpeed upload (no token secret needed)
+    steps:
+      - uses: actions/checkout@v7
+      # nasm is still needed: `--no-default-features` drops the `#[napi]` modules but
+      # the C-dep crates (aom/mozjpeg/webp) remain non-optional and still compile.
+      - name: Setup nasm
+        uses: ilammy/setup-nasm@v1
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - name: Cache cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: codspeed-cargo-cache
+      - name: Install cargo-codspeed
+        uses: taiki-e/install-action@v2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          tool: cargo-codspeed
+      # `--no-default-features` drops the `binding` feature, so the bench links only the
+      # pure quantizer core -- no `napi_*` symbols (the CodSpeed runner is Valgrind, which
+      # binds eagerly and cannot resolve them). No RUSTFLAGS override here, so the repo's
+      # `.cargo/config.toml` `[target.x86_64-unknown-linux-gnu]` `+avx2` applies as usual.
+      - name: Build benchmarks
+        run: cargo codspeed build -p napi_rs_image --bench quantize --no-default-features
+      - name: Run benchmarks
+        # Auth via OIDC (the job's `id-token: write` permission) -- CodSpeed's
+        # recommended method, so no long-lived `CODSPEED_TOKEN` secret is needed.
+        uses: CodSpeedHQ/action@v4
+        with:
+          mode: simulation
+          run: cargo codspeed run -p napi_rs_image
+
   publish:
     name: Publish
     runs-on: ubuntu-latest
