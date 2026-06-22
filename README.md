@@ -24,6 +24,7 @@ This library support encode/decode these formats:
 See [index.d.ts](./packages/binding/index.d.ts) for API reference.
 
 ![CI](https://github.com/Brooooooklyn/image/workflows/CI/badge.svg)
+[![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://app.codspeed.io/Brooooooklyn/Image?utm_source=badge)
 
 ## Performance
 
