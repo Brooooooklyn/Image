@@ -17,6 +17,7 @@ use resvg::{
 use crate::{
   avif::{AvifConfig, encode_avif_inner},
   fast_resize::{FastResizeOptions, ResizeFit, fast_resize},
+  heic::HeicConfig,
   png::PngEncodeOptions,
 };
 
@@ -28,6 +29,7 @@ pub enum EncodeOptions {
   Webp(u32),
   WebpLossless,
   Avif(Option<AvifConfig>),
+  Heic(Option<HeicConfig>),
   Bmp,
   Ico,
   Tiff,
@@ -622,9 +624,8 @@ impl Task for EncodeTask {
     let height = dynamic_image.height();
     let format = match self.options {
       EncodeOptions::Webp(quality_factor) => {
-        let (output_buf, size) = unsafe {
-          crate::webp::encode_webp_inner(dynamic_image, quality_factor, width, height)
-        }?;
+        let (output_buf, size) =
+          unsafe { crate::webp::encode_webp_inner(dynamic_image, quality_factor, width, height) }?;
         return Ok(EncodeOutput::Raw(output_buf, size));
       }
       EncodeOptions::WebpLossless => {
@@ -644,6 +645,10 @@ impl Task for EncodeTask {
       EncodeOptions::Avif(ref options) => {
         let output = encode_avif_inner(options.clone(), dynamic_image)?;
         return Ok(EncodeOutput::Avif(output));
+      }
+      EncodeOptions::Heic(ref options) => {
+        let buf = crate::heic::encode_heic(dynamic_image, options.clone())?;
+        return Ok(EncodeOutput::Buffer(buf));
       }
       EncodeOptions::Png(ref options) => {
         let mut output: Cursor<Vec<u8>> = Cursor::new(Vec::with_capacity(
@@ -1085,6 +1090,37 @@ impl Transformer {
     let mut encoder = EncodeTask {
       image: self.dynamic_image.clone(),
       options: EncodeOptions::Avif(options),
+      image_transform_args: self.image_transform_args.clone(),
+    };
+    let output = encoder.compute()?;
+    encoder.resolve(env, output)
+  }
+
+  #[napi]
+  /// Encode to HEIC using the OS-native ImageIO HEVC encoder (macOS only).
+  /// Rejects on non-macOS platforms.
+  pub fn heic(
+    &mut self,
+    options: Option<HeicConfig>,
+    signal: Option<AbortSignal>,
+  ) -> AsyncTask<EncodeTask> {
+    AsyncTask::with_optional_signal(
+      EncodeTask {
+        image: self.dynamic_image.clone(),
+        options: EncodeOptions::Heic(options),
+        image_transform_args: self.image_transform_args.clone(),
+      },
+      signal,
+    )
+  }
+
+  #[napi]
+  /// Encode to HEIC using the OS-native ImageIO HEVC encoder (macOS only).
+  /// Rejects on non-macOS platforms.
+  pub fn heic_sync(&mut self, env: Env, options: Option<HeicConfig>) -> Result<Buffer> {
+    let mut encoder = EncodeTask {
+      image: self.dynamic_image.clone(),
+      options: EncodeOptions::Heic(options),
       image_transform_args: self.image_transform_args.clone(),
     };
     let output = encoder.compute()?;

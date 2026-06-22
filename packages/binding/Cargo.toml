@@ -69,8 +69,8 @@ libwebp-sys = { version = "0.14", default-features = false, features = ["std", "
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFBase", "CFData", "CFDictionary", "CFString", "CFNumber", "CFCGTypes"] }
-objc2-core-graphics   = { version = "0.3", default-features = false, features = ["std", "CGImage", "CGColorSpace", "CGContext", "CGBitmapContext"] }
-objc2-image-io        = { version = "0.3", default-features = false, features = ["std", "CGImageSource", "CGImageProperties", "objc2-core-graphics"] }
+objc2-core-graphics   = { version = "0.3", default-features = false, features = ["std", "CGImage", "CGColorSpace", "CGContext", "CGBitmapContext", "CGDataProvider"] }
+objc2-image-io        = { version = "0.3", default-features = false, features = ["std", "CGImageSource", "CGImageProperties", "CGImageDestination", "objc2-core-graphics"] }
 
 [build-dependencies]
 napi-build = "2"

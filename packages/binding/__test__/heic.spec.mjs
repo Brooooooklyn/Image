@@ -19,6 +19,8 @@ const offMac = os.platform() !== 'darwin' ? test : test.skip
 const HEIC = await fs.readFile(join(ROOT_DIR, 'un-optimized.heic'))
 // Genuine 10-bit fixture (HEVC Main10), generated via ImageIO from a 16-bit Display-P3 source.
 const HEIC_10BIT = await fs.readFile(join(ROOT_DIR, 'un-optimized-10bit.heic'))
+// 8-bit RGBA PNG source for the encode round-trip (1024x681).
+const PNG = await fs.readFile(join(ROOT_DIR, 'un-optimized.png'))
 
 onMac('decodes heic metadata', async (t) => {
   const metadata = await new Transformer(HEIC).metadata()
@@ -62,5 +64,46 @@ onMac('10-bit heic re-encodes to png', async (t) => {
 offMac('heic rejected off macOS', async (t) => {
   await t.throwsAsync(() => new Transformer(HEIC).metadata(), {
     message: /only supported on macOS/,
+  })
+})
+
+// --- HEIC encode (macOS-only, via CGImageDestination "public.heic") ---
+
+onMac('encodes png -> heic (round-trip)', async (t) => {
+  const buf = await new Transformer(PNG).heic()
+  t.true(Buffer.isBuffer(buf))
+  t.true(buf.length > 0)
+  // The encoded bytes must re-decode as a HEIC with the source dimensions.
+  const meta = await new Transformer(Buffer.from(buf)).metadata()
+  t.is(meta.format, 'heic')
+  t.is(meta.width, 1024)
+  t.is(meta.height, 681)
+})
+
+onMac('heic lossless', async (t) => {
+  const buf = new Transformer(PNG).heicSync({ lossless: true })
+  t.true(Buffer.isBuffer(buf))
+  t.true(buf.length > 0)
+  const meta = await new Transformer(Buffer.from(buf)).metadata()
+  t.is(meta.format, 'heic')
+  t.is(meta.width, 1024)
+  t.is(meta.height, 681)
+})
+
+onMac('heic 10-bit round-trip', async (t) => {
+  // Decode the committed 10-bit HEIC (-> RGBA16 source), re-encode at 10-bit, and confirm the
+  // re-decoded output is still RGBA16 (`kCGImagePropertyDepth` > 8).
+  const buf = new Transformer(HEIC_10BIT).heicSync({ bitDepth: 10 })
+  t.true(Buffer.isBuffer(buf))
+  t.true(buf.length > 0)
+  const meta = await new Transformer(Buffer.from(buf)).metadata()
+  t.is(meta.format, 'heic')
+  // `colorType` is the numeric `JsColorType` enum; a 10-bit decode yields RGBA16.
+  t.is(meta.colorType, JsColorType.Rgba16)
+})
+
+offMac('heic encode rejected off macOS', async (t) => {
+  await t.throwsAsync(() => new Transformer(PNG).heic(), {
+    message: /only available on macOS/,
   })
 })

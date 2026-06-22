@@ -94,6 +94,16 @@ export declare class Transformer {
   webpLosslessSync(): Buffer
   avif(options?: AvifConfig | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>
   avifSync(options?: AvifConfig | undefined | null): Buffer
+  /**
+   * Encode to HEIC using the OS-native ImageIO HEVC encoder (macOS only).
+   * Rejects on non-macOS platforms.
+   */
+  heic(options?: HeicConfig | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>
+  /**
+   * Encode to HEIC using the OS-native ImageIO HEVC encoder (macOS only).
+   * Rejects on non-macOS platforms.
+   */
+  heicSync(options?: HeicConfig | undefined | null): Buffer
   png(options?: PngEncodeOptions | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>
   pngSync(options?: PngEncodeOptions | undefined | null): Buffer
   /** default `quality` is 90 */
@@ -249,6 +259,24 @@ export declare enum FilterType {
    * scanline rather than one filter for the entire image
    */
   Adaptive = 5
+}
+
+/**
+ * Options for HEIC encoding via Apple's `CGImageDestination` (macOS only).
+ *
+ * Ungated so the napi signature and generated `index.d.ts` stay identical on every platform;
+ * only the encode *implementation* ([`encode_heic`]) is macOS-gated.
+ */
+export interface HeicConfig {
+  /**
+   * Lossy quality 0-100 (maps to `kCGImageDestinationLossyCompressionQuality` 0.0-1.0).
+   * Ignored when `lossless` is true. Default 80 (matches AVIF).
+   */
+  quality?: number
+  /** Write a lossless HEIC (compression quality = 1.0). Default false. */
+  lossless?: boolean
+  /** Output bit depth, 8 or 10. Default: follow the source (16-bit `DynamicImage` -> 10, else 8). */
+  bitDepth?: number
 }
 
 export interface JpegCompressOptions {

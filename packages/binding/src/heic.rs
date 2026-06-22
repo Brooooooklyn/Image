@@ -1,5 +1,22 @@
 use image::DynamicImage;
 use napi::bindgen_prelude::*;
+use napi_derive::napi;
+
+/// Options for HEIC encoding via Apple's `CGImageDestination` (macOS only).
+///
+/// Ungated so the napi signature and generated `index.d.ts` stay identical on every platform;
+/// only the encode *implementation* ([`encode_heic`]) is macOS-gated.
+#[napi(object)]
+#[derive(Default, Clone)]
+pub struct HeicConfig {
+  /// Lossy quality 0-100 (maps to `kCGImageDestinationLossyCompressionQuality` 0.0-1.0).
+  /// Ignored when `lossless` is true. Default 80 (matches AVIF).
+  pub quality: Option<u32>,
+  /// Write a lossless HEIC (compression quality = 1.0). Default false.
+  pub lossless: Option<bool>,
+  /// Output bit depth, 8 or 10. Default: follow the source (16-bit `DynamicImage` -> 10, else 8).
+  pub bit_depth: Option<u8>,
+}
 
 /// Brands that mark an ISOBMFF/HEIF container as HEVC-coded image content (HEIC/HEIF).
 const HEIF_BRANDS: [&[u8; 4]; 11] = [
@@ -291,6 +308,200 @@ pub(crate) fn decode_heic(buf: &[u8]) -> Result<(DynamicImage, Option<u16>)> {
           })?;
       Ok((img, orientation))
     }
+  })
+}
+
+/// Encode a `DynamicImage` to HEIC. macOS-only (delegates to Apple's `CGImageDestination` HEVC
+/// encoder); errors elsewhere. We ship no HEVC codec — Apple's OS holds the patent license.
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn encode_heic(_img: &DynamicImage, _opts: Option<HeicConfig>) -> Result<Vec<u8>> {
+  Err(Error::new(
+    Status::GenericFailure,
+    "HEIC encoding is only available on macOS".to_owned(),
+  ))
+}
+
+/// macOS HEIC encode via Apple's `CGImageDestination` (UTI `public.heic`). We ship no HEVC codec;
+/// Apple's OS holds the patent license, so all encoding goes through OS API calls.
+///
+/// Pipeline: `DynamicImage` -> RGBA pixel bytes (8- or 16-bit, STRAIGHT alpha — `CGImage` accepts
+/// non-premultiplied `kCGImageAlphaLast`, so no premultiply is needed unlike the decode-side bitmap
+/// context) -> `CFData` -> CF-backed `CGDataProvider` (keeps the bytes alive for the image's
+/// lifetime) -> `CGImage` -> `CGImageDestination("public.heic")` with a lossy-quality property ->
+/// finalize into a `CFMutableData` -> copy out to `Vec<u8>`. Orientation is NOT tagged: the
+/// pipeline already produced upright pixels, so tagging would double-rotate. Every null/false OS
+/// result becomes a clean `napi::Error`; no `unwrap`/panic.
+#[cfg(target_os = "macos")]
+pub(crate) fn encode_heic(img: &DynamicImage, opts: Option<HeicConfig>) -> Result<Vec<u8>> {
+  use objc2::rc::autoreleasepool;
+  use objc2_core_foundation::{
+    CFData, CFDictionary, CFMutableData, CFNumber, CFRetained, CFString,
+  };
+  use objc2_core_graphics::{
+    CGBitmapInfo, CGColorRenderingIntent, CGColorSpace, CGDataProvider, CGImage, CGImageAlphaInfo,
+    CGImageByteOrderInfo, kCGColorSpaceSRGB,
+  };
+  use objc2_image_io::{CGImageDestination, kCGImageDestinationLossyCompressionQuality};
+
+  let opts = opts.unwrap_or_default();
+  let quality = opts.quality.unwrap_or(80);
+  let lossless = opts.lossless.unwrap_or(false);
+  // Resolve output depth: explicit bit_depth wins; otherwise follow a 16-bit source.
+  let sixteen_bit = match opts.bit_depth {
+    Some(8) => false,
+    Some(10) => true,
+    _ => matches!(
+      img,
+      DynamicImage::ImageRgba16(_)
+        | DynamicImage::ImageRgb16(_)
+        | DynamicImage::ImageLuma16(_)
+        | DynamicImage::ImageLumaA16(_)
+    ),
+  };
+
+  let width = img.width() as usize;
+  let height = img.height() as usize;
+  if width == 0 || height == 0 {
+    return Err(Error::new(
+      Status::InvalidArg,
+      "HEIC: image has zero dimensions".to_owned(),
+    ));
+  }
+
+  autoreleasepool(|_pool| {
+    // sRGB colorspace (same as decode); 16-bit preserves precision, not gamut.
+    let color_space: CFRetained<CGColorSpace> =
+      CGColorSpace::with_name(Some(unsafe { kCGColorSpaceSRGB })).ok_or_else(|| {
+        Error::new(
+          Status::GenericFailure,
+          "HEIC: failed to create sRGB color space".to_owned(),
+        )
+      })?;
+
+    // 1. Build STRAIGHT-alpha RGBA pixel bytes + the matching CGImage layout parameters.
+    //    The `pixel_bytes` Vec is copied into a CFData below, so it only needs to live until then.
+    let (pixel_bytes, bits_per_component, bits_per_pixel, bytes_per_row, bitmap_info): (
+      Vec<u8>,
+      usize,
+      usize,
+      usize,
+      CGBitmapInfo,
+    ) = if sixteen_bit {
+      let bytes_per_row = width
+        .checked_mul(8)
+        .ok_or_else(|| Error::new(Status::InvalidArg, "HEIC: bytesPerRow overflow".to_owned()))?;
+      // 16-bit RGBA as native-endian u16s; view as little-endian bytes (every Apple platform is LE).
+      let rgba = img.to_rgba16();
+      let mut bytes = Vec::with_capacity(rgba.len() * 2);
+      for &component in rgba.as_raw() {
+        bytes.extend_from_slice(&component.to_le_bytes());
+      }
+      let host_16: CGImageByteOrderInfo = if cfg!(target_endian = "little") {
+        CGImageByteOrderInfo::Order16Little
+      } else {
+        CGImageByteOrderInfo::Order16Big
+      };
+      (
+        bytes,
+        16,
+        64,
+        bytes_per_row,
+        CGBitmapInfo(CGImageAlphaInfo::Last.0 | host_16.0),
+      )
+    } else {
+      let bytes_per_row = width
+        .checked_mul(4)
+        .ok_or_else(|| Error::new(Status::InvalidArg, "HEIC: bytesPerRow overflow".to_owned()))?;
+      // 8-bit RGBA; Order32Big gives the memory layout R,G,B,A.
+      let rgba = img.to_rgba8();
+      (
+        rgba.into_raw(),
+        8,
+        32,
+        bytes_per_row,
+        CGBitmapInfo(CGImageAlphaInfo::Last.0 | CGImageByteOrderInfo::Order32Big.0),
+      )
+    };
+
+    // 2. Wrap the pixel bytes in a CFData (copy) and a CF-backed CGDataProvider so the bytes live
+    //    as long as the provider/image (the source `pixel_bytes` Vec may be freed after this).
+    let data = CFData::from_bytes(&pixel_bytes);
+    let provider = CGDataProvider::with_cf_data(Some(&data)).ok_or_else(|| {
+      Error::new(
+        Status::GenericFailure,
+        "HEIC: failed to create CGDataProvider".to_owned(),
+      )
+    })?;
+
+    // 3. CGImage from the provider. `decode` map = null, no interpolation flag, default intent.
+    let image = unsafe {
+      CGImage::new(
+        width,
+        height,
+        bits_per_component,
+        bits_per_pixel,
+        bytes_per_row,
+        Some(&color_space),
+        bitmap_info,
+        Some(&provider),
+        std::ptr::null(),
+        false,
+        CGColorRenderingIntent::RenderingIntentDefault,
+      )
+    }
+    .ok_or_else(|| {
+      Error::new(
+        Status::GenericFailure,
+        "HEIC: failed to create CGImage".to_owned(),
+      )
+    })?;
+
+    // 4. Empty growable CFMutableData to receive the encoded bytes.
+    let out_data = CFMutableData::new(None, 0).ok_or_else(|| {
+      Error::new(
+        Status::GenericFailure,
+        "HEIC: failed to allocate output buffer".to_owned(),
+      )
+    })?;
+
+    // 5. CGImageDestination targeting UTI "public.heic" for a single image.
+    let uti = CFString::from_static_str("public.heic");
+    let dest =
+      unsafe { CGImageDestination::with_data(&out_data, &uti, 1, None) }.ok_or_else(|| {
+        Error::new(
+          Status::GenericFailure,
+          "HEIC: encoder unavailable (CGImageDestination)".to_owned(),
+        )
+      })?;
+
+    // 6. Properties: lossy compression quality (1.0 when lossless, else quality/100).
+    let quality_value = if lossless {
+      1.0
+    } else {
+      (quality.min(100) as f64) / 100.0
+    };
+    let quality_number = CFNumber::new_f64(quality_value);
+    let quality_key: &CFString = unsafe { kCGImageDestinationLossyCompressionQuality };
+    // `from_slices` yields a typed `CFDictionary<CFString, CFNumber>`; `add_image` wants the
+    // type-erased `CFDictionary<Opaque, Opaque>`. The key/value are CFTypes, so the cast is sound.
+    let typed_props: CFRetained<CFDictionary<CFString, CFNumber>> =
+      CFDictionary::from_slices(&[quality_key], &[&*quality_number]);
+    let props: CFRetained<CFDictionary> =
+      unsafe { CFRetained::cast_unchecked::<CFDictionary>(typed_props) };
+
+    // 7. Add the image with the quality properties and finalize.
+    unsafe { CGImageDestination::add_image(&dest, &image, Some(&props)) };
+    let finalized = unsafe { CGImageDestination::finalize(&dest) };
+    if !finalized {
+      return Err(Error::new(
+        Status::GenericFailure,
+        "HEIC: finalize failed".to_owned(),
+      ));
+    }
+
+    // 8. Copy the encoded bytes out of the CF data (it is freed at scope end).
+    let cf_data: &CFData = &out_data;
+    Ok(unsafe { cf_data.as_bytes_unchecked() }.to_vec())
   })
 }
 
