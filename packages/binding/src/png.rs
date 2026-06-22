@@ -358,6 +358,19 @@ fn png_quantize_inner(input: &[u8], options: &PngQuantOptions) -> Result<Vec<u8>
     Ok(optimized) if optimized.len() < output.len() => optimized,
     _ => output,
   };
+
+  // pngQuantize is a size optimizer, so it must NEVER hand back a file at least as
+  // large as the caller gave us. For an already-optimized / already-indexed input
+  // (classically a smooth truecolor gradient whose PAETH-filtered DEFLATE stream is
+  // tiny), re-quantizing to an indexed palette + Floyd-Steinberg dither injects
+  // incompressible noise that can exceed the original. In that case the original
+  // bytes are both smaller AND higher-fidelity, so return them verbatim. The caller
+  // then receives the un-quantized original rather than a larger palette PNG — a
+  // deliberate trade-off (Codex P2): pngQuantize never grows a file. `>=` (not `>`)
+  // also keeps the lossless original when the sizes merely tie.
+  if final_png.len() >= input.len() {
+    return Ok(input.to_vec());
+  }
   Ok(final_png)
 }
 
@@ -728,5 +741,73 @@ mod tests {
       decode_rgba8(&bytes).is_err(),
       "non-PNG (JPEG) input must be rejected"
     );
+  }
+
+  #[test]
+  fn never_grows_an_already_optimized_png() {
+    // Codex P2: pngQuantize is a size optimizer, so it must NEVER return a file at
+    // least as large as the input. The adversarial case is an ALREADY-OPTIMIZED PNG:
+    // a smooth gradient stored as truecolor with PAETH filtering compresses to a few
+    // hundred bytes, but re-quantizing it to an indexed palette + Floyd-Steinberg
+    // dither injects incompressible noise that is many times larger. The guard in
+    // png_quantize_inner returns the original bytes whenever the quantized result is
+    // not strictly smaller.
+    //
+    // PROVE-FAIL: drop the `final_png.len() >= input.len()` guard and this returns
+    // the ~9x-larger quantized PNG, so BOTH asserts below fail (output is larger AND
+    // differs from the input bytes).
+    let opts = PngQuantOptions {
+      max_quality: Some(75),
+      min_quality: Some(0),
+      ..Default::default()
+    };
+
+    // The "already-optimized" input: a smooth gradient recompressed as truecolor (no
+    // palette/colortype reduction) with the same level-12 deflater the pipeline uses,
+    // so it is genuinely tight — not a weak-encoder strawman. ~455 B for 96x96.
+    let raw = multicolor_rgba_png(96, 96);
+    let tc_opts = oxipng::Options {
+      filters: oxipng::IndexSet::from_iter([
+        oxipng::FilterStrategy::NONE,
+        oxipng::FilterStrategy::SUB,
+        oxipng::FilterStrategy::UP,
+        oxipng::FilterStrategy::AVERAGE,
+        oxipng::FilterStrategy::PAETH,
+      ]),
+      color_type_reduction: false,
+      palette_reduction: false,
+      grayscale_reduction: false,
+      bit_depth_reduction: false,
+      deflater: oxipng::Deflater::Libdeflater { compression: 12 },
+      ..Default::default()
+    };
+    let input = oxipng::optimize_from_memory(&raw, &tc_opts).expect("pre-optimize input");
+
+    // The fixture genuinely grows under quantization: even the bare lodepng encode
+    // (before the pipeline's oxipng recompress, which only shrinks it further) is far
+    // larger than this tight truecolor input — so the guard is doing real work, not a
+    // vacuous `<=` on an input we would have shrunk anyway.
+    let bare = quantize_bare_lodepng(&input, &opts);
+    assert!(
+      bare.len() > input.len(),
+      "fixture must actually grow under quantization: bare {} vs input {}",
+      bare.len(),
+      input.len()
+    );
+
+    let out = png_quantize_inner(&input, &opts).expect("quantize");
+    assert!(
+      out.len() <= input.len(),
+      "pngQuantize must never grow a file: out {} vs input {}",
+      out.len(),
+      input.len()
+    );
+    assert_eq!(
+      out, input,
+      "when quantization would not shrink, the original input bytes are returned verbatim"
+    );
+    // The fallback path still returns a valid PNG (it is the input, but assert the
+    // container contract holds here too).
+    assert_valid_png(&out);
   }
 }
