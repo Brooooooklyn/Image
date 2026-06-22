@@ -3,6 +3,20 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+# [1.13.0](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.12.1...@napi-rs/image@1.13.0) (2026-06-22)
+
+### Bug Fixes
+
+- `detect_gamma_from_png_info()` ([#207](https://github.com/Brooooooklyn/Image/issues/207)) ([2d29ec1](https://github.com/Brooooooklyn/Image/commit/2d29ec111b566a97cf3802dc55d0f8815eb83f8d))
+
+### Features
+
+- **png:** clean-room MIT pngQuantize, drop GPL imagequant ([#208](https://github.com/Brooooooklyn/Image/issues/208)) ([7133c48](https://github.com/Brooooooklyn/Image/commit/7133c481e8d537223c264c5e15b1865497b19428))
+
+### Performance Improvements
+
+- **binding:** runtime-dispatched 4-lane SIMD for the pngQuantize nearest-palette argmin ([#211](https://github.com/Brooooooklyn/Image/issues/211)) ([62346df](https://github.com/Brooooooklyn/Image/commit/62346dfc769391998076420d2c3ed29a3e9b4b9c))
+
 ## [1.12.1](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.12.0...@napi-rs/image@1.12.1) (2026-06-16)
 
 ### Bug Fixes
