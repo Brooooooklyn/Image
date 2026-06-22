@@ -117,19 +117,29 @@ and *what we did with it*.
 | **Engine** | Clean-room MIT, from papers | License (drop GPL libimagequant); Celebi fn9 |
 | **Color space for *mapping*** | CIELAB | Celebi fn14, CQ100; perceptual win is in mapping (`median-cut-lab`) |
 | **Color space for *splitting*** | RGBA8 (not Lab) | `median-cut-lab`: Lab splits don't beat RGB; cheaper |
-| **Numeric model** | Pure-integer fixed-point everywhere on the decision path | **Determinism is sacred** — byte-identical across x86/arm/wasm. Celebi fn17 names integer as the fast/lower-precision side; we take it deliberately |
+| **Numeric model** | Integer fixed-point for the **distance metric + opaque argmin** (the dither's error diffusion is deterministic f32, not integer) | **Determinism is sacred** — byte-identical across x86/arm/wasm. Celebi fn17 names integer as the fast/lower-precision side; we take it deliberately |
 | **Distance metric** | Squared **CIE76** ΔE (`dl²+da²+db²`), alpha-weighted | Celebi fn18's simpler option; HyAB rejected (needs median centroids); CIEDE2000 is the future lever |
 | **Palette init** | **Wu** variance-minimizing median-cut | Wu 1991: split the box that reduces SSE most |
 | **Refinement** | Lloyd k-means + k-means++ reseed + **keep-best guard** | Lloyd is local (fn66) & non-monotone under the alpha-weighted metric |
 | **Dither** | Floyd-Steinberg, **selective**, serpentine, linear-light | Floyd-Steinberg 1976; "dither dominates" (`hyab-kmeans`) |
 | **Alpha** | Reserved transparent slot + premultiplied moments + vanish penalties | Porter-Duff 1984; PNG `tRNS` semantics |
 
-Why integer math is non-negotiable: integer add/mul are **exact and associative**, so a
-sum like `dl²+da²+db²` is the same value regardless of SIMD lane order or CPU. Float
-`powf`/`cbrt` are not bit-identical across backends, and float addition is
+Why integer math is non-negotiable for the metric: integer add/mul are **exact and
+associative**, so a sum like `dl²+da²+db²` is the same value regardless of SIMD lane order
+or CPU. Float `powf`/`cbrt` are not bit-identical across backends, and float addition is
 non-associative — a different reduction order can flip a nearest-color tie and silently
-change a pixel's palette index. Integer math removes that entire failure class, which is
-what later made the SIMD work (§5) safe.
+change a pixel's palette index. Keeping the CIELAB conversion + distance integer removes
+that entire failure class, which is what later made the SIMD work (§5) safe.
+
+**One honest exception — the default dither path is *not* integer.** `remap_dither` keeps
+f32 Floyd-Steinberg error rows and builds each pixel's query color `want` in linear light
+(`srgb_to_linear_f` → f32 error add → `linear_to_srgb8`) *before* the integer `rgb_to_lab`
+lookup, so those floats do influence the chosen index (and, via diffusion, later pixels').
+Output is still **byte-identical across platforms** because that f32 is only plain,
+correctly-rounded IEEE-754 add/mul/div + table lookups — no `powf`, no fast-math, no
+FMA-contractable `mul_add` — run under a fixed, data-independent serpentine scan. So the
+accurate framing is *deterministic everywhere, integer-exact only for the metric and the
+opaque argmin* — not "pure-integer everywhere."
 
 ---
 
@@ -162,7 +172,8 @@ RGBA8 pixels
   │  canonicalize: sort palette so non-opaque entries are FRONT (shortest tRNS)
   │  lodepng encode (PLTE + tRNS)  →  oxipng StripChunks::Safe recompress (keeps tRNS)
   ▼
-indexed PNG   (never larger than input — original returned verbatim if it would grow)
+PNG output    (never larger than input — indexed when quantizing wins; else the original
+               returned verbatim, or an oxipng-reduced color type; see §7)
 ```
 
 ### Public API (`index.d.ts`, frozen)
@@ -346,12 +357,19 @@ aarch64 (local Apple Silicon, NEON vs pre-SIMD):
   platform's integer math diverges.
 - **Equivalence:** `opaque_fast_path_equals_general`, `kernel_matches_scalar_<isa>`,
   `neon_matches_scalar_end_to_end`.
-- **Determinism:** run1 == run2 SHA; cross-arch byte-identity follows from pure-integer math.
+- **Determinism:** run1 == run2 SHA; cross-arch byte-identity follows from the integer-exact
+  metric/argmin **plus** deterministic IEEE-754 in the dither (no `powf`/FMA/fast-math, fixed
+  serpentine scan).
 - **Quantizer-specific:** keep-best guard never worsens objective; visible pixel never maps
   to the reserved transparent slot; dithered visible pixel never vanishes; true-population
   (not capped) weights drive centroids.
-- **PNG correctness:** color-type 3, legal indexed bit depth, `tRNS ≤ PLTE`, valid CRCs,
-  round-trip decode.
+- **PNG correctness** (of the intermediate lodepng indexed encode): color-type 3, legal
+  indexed bit depth, `tRNS ≤ PLTE`, valid CRCs, round-trip decode. **Caveat — not an
+  invariant of the final returned bytes:** the oxipng pass runs with color/grayscale/palette
+  reduction *enabled* (it may losslessly re-emit a smaller non-indexed type), and the
+  never-grow guard returns the **original input verbatim** when quantizing wouldn't shrink it
+  (which may itself be truecolor). The actual output guarantee is *a valid, never-larger,
+  round-tripping PNG of some legal color type* — not necessarily indexed.
 
 ---
 
