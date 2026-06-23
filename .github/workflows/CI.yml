@@ -192,10 +192,6 @@ jobs:
         run: ${{ matrix.settings.setup }}
         if: ${{ matrix.settings.setup }}
         shell: bash
-      - name: Force fresh wasm build (the static target/ cache key serves a stale binary)
-        if: ${{ matrix.settings.target == 'wasm32-wasip1-threads' }}
-        run: rm -rf target/wasm32-wasip1-threads
-        shell: bash
       - name: Install LLVM and Clang
         uses: KyleMayes/install-llvm-action@v2
         if: ${{ matrix.settings.target == 'armv7-unknown-linux-gnueabihf' }}
@@ -554,11 +550,6 @@ jobs:
       - name: Drop published @napi-rs/image-wasm32-wasi so the fresh local wasm is used
         run: find . -type d -path '*@napi-rs/image-wasm32-wasi' -prune -print -exec rm -rf {} +
         shell: bash
-      - name: x86 wasm SVG loader probe (diagnostic)
-        run: node packages/binding/__test__/x86-svg-probe.mjs
-        env:
-          NAPI_RS_FORCE_WASI: 'true'
-          NAPI_IMAGE_SVG_DEBUG: '1'
       - name: Run tests
         run: yarn test -s
         env:

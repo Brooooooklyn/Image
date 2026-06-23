@@ -4,12 +4,6 @@ export declare class Transformer {
   constructor(input: Uint8Array)
   /** Support CSS3 color, e.g. rgba(255, 255, 255, .8) */
   static fromSvg(input: string | Uint8Array, background?: string | undefined | null): Transformer
-  /**
-   * DIAGNOSTIC (temporary): identical code path to `from_svg`, but returns a trace string of the
-   * scale/size/transform/render values instead of a Transformer — so the x86-wasi miscompile is
-   * visible via JS (node's WASI does not surface the wasm's stderr). Remove with the upstream fix.
-   */
-  static fromSvgDebug(input: string | Uint8Array): string
   static fromRgbaPixels(input: Uint8Array | Uint8ClampedArray, width: number, height: number): Transformer
   metadata(withExif?: boolean | undefined | null, signal?: AbortSignal | undefined | null): Promise<Metadata>
   metadataSync(withExif?: boolean | undefined | null): Metadata

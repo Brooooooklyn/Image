@@ -772,8 +772,6 @@ impl Transformer {
     .map_err(|err| Error::from_reason(format!("{err}")))?;
     let svg_width = tree.size().width();
     let svg_height = tree.size().height();
-    // DIAGNOSTIC (env-gated, no-op unless NAPI_IMAGE_SVG_DEBUG is set): trace the x86-wasi miscompile.
-    let svg_dbg = std::env::var_os("NAPI_IMAGE_SVG_DEBUG").is_some();
     // (usvg's `Size` is `NonZeroPositiveF32`, so both are > 0 and finite here.)
     const MIN_SVG_SIZE: f32 = 1000.0;
     // Upper bound on the rasterized SVG area (~1 GiB of RGBA). Bounds memory for adversarial or
@@ -796,14 +794,6 @@ impl Transformer {
     // axis is caught here rather than silently saturating an `as u32` cast.
     let target_width = (svg_width as f64 * scale as f64).round();
     let target_height = (svg_height as f64 * scale as f64).round();
-    if svg_dbg {
-      eprintln!(
-        "[SVGDBG] post-loop: svg_w={svg_width} (bits {:#010x}) svg_h={svg_height} (bits {:#010x}) scale={scale} (bits {:#010x}) target_w={target_width} target_h={target_height}",
-        svg_width.to_bits(),
-        svg_height.to_bits(),
-        scale.to_bits(),
-      );
-    }
     // Reject degenerate sizes instead of corrupting output: a non-finite product, a sub-pixel axis
     // that rounds to 0 (rendering it would be an invisible blank), a dimension past u32, or an area
     // over the budget (tiny-skia's `Pixmap::new` bounds only row width, not total pixels, on 64-bit,
@@ -822,12 +812,6 @@ impl Transformer {
     }
     let target_width = target_width as u32;
     let target_height = target_height as u32;
-    if svg_dbg {
-      eprintln!(
-        "[SVGDBG] pre-render: pixmap target {target_width}x{target_height}, scale passed to Transform::from_scale = {scale} (bits {:#010x})",
-        scale.to_bits(),
-      );
-    }
     let mut pix_map = tiny_skia::Pixmap::new(target_width, target_height).ok_or_else(|| {
       Error::from_reason(format!("Failed to rasterize SVG at {target_width}x{target_height}"))
     })?;
@@ -853,23 +837,6 @@ impl Transformer {
     // an `RgbaImage`, otherwise semi-transparent pixels (rgba backgrounds and antialiased edges) are
     // darkened. `take_demultiplied` still returns the owned buffer, so the handoff stays copy-free.
     let data = pix_map.take_demultiplied();
-    if svg_dbg {
-      let (mut max_x, mut max_y) = (0u32, 0u32);
-      for y in 0..height {
-        for x in 0..width {
-          if data[((y * width + x) * 4 + 3) as usize] > 10 {
-            if x > max_x {
-              max_x = x;
-            }
-            if y > max_y {
-              max_y = y;
-            }
-          }
-        }
-      }
-      eprintln!("[SVGDBG] post-render: pixmap {width}x{height} content max_x={max_x} max_y={max_y} (corner-speck if max_x << width)");
-    }
-
     let image = RgbaImage::from_vec(width, height, data).ok_or_else(|| {
       Error::new(
         Status::InvalidArg,
@@ -877,92 +844,6 @@ impl Transformer {
       )
     })?;
     Ok(transformer_from_rgba8(image))
-  }
-
-  #[napi]
-  /// DIAGNOSTIC (temporary): identical code path to `from_svg`, but returns a trace string of the
-  /// scale/size/transform/render values instead of a Transformer — so the x86-wasi miscompile is
-  /// visible via JS (node's WASI does not surface the wasm's stderr). Remove with the upstream fix.
-  pub fn from_svg_debug(input: Either<String, &[u8]>) -> Result<String> {
-    let font_db = FONT_DB
-      .get_or_init(|| {
-        let mut fontdb = Database::new();
-        fontdb.load_system_fonts();
-        Arc::new(fontdb)
-      })
-      .clone();
-    let options = Options::<'_> {
-      fontdb: font_db,
-      ..Default::default()
-    };
-    let tree = match input {
-      Either::A(a) => usvg::Tree::from_str(a.as_str(), &options),
-      Either::B(b) => usvg::Tree::from_data(b, &options),
-    }
-    .map_err(|err| Error::from_reason(format!("{err}")))?;
-    let svg_width = tree.size().width();
-    let svg_height = tree.size().height();
-    let mut out = String::new();
-    const MIN_SVG_SIZE: f32 = 1000.0;
-    const MAX_SVG_PIXELS: u64 = 1 << 28;
-    let mut scale = 1.0_f32;
-    while scale.is_finite()
-      && (svg_width * scale).round() < MIN_SVG_SIZE
-      && (svg_height * scale).round() < MIN_SVG_SIZE
-    {
-      scale *= 2.0;
-    }
-    out.push_str(&format!(
-      "svg={svg_width}x{svg_height} | post-loop scale={scale} (bits {:#010x}) | ",
-      scale.to_bits()
-    ));
-    let target_width = (svg_width as f64 * scale as f64).round();
-    let target_height = (svg_height as f64 * scale as f64).round();
-    out.push_str(&format!("target={target_width}x{target_height} | "));
-    if !(target_width.is_finite() && target_height.is_finite())
-      || target_width < 1.0
-      || target_height < 1.0
-      || target_width > u32::MAX as f64
-      || target_height > u32::MAX as f64
-      || (target_width as u64).saturating_mul(target_height as u64) > MAX_SVG_PIXELS
-    {
-      out.push_str("GUARD=reject");
-      return Ok(out);
-    }
-    let target_width = target_width as u32;
-    let target_height = target_height as u32;
-    let mut pix_map = tiny_skia::Pixmap::new(target_width, target_height)
-      .ok_or_else(|| Error::from_reason("pixmap new failed".to_owned()))?;
-    let transform = tiny_skia::Transform::from_scale(scale, scale);
-    out.push_str(&format!(
-      "pre-render scale={scale} (bits {:#010x}) | transform.sx={} transform.sy={} | pixmap={}x{} | ",
-      scale.to_bits(),
-      transform.sx,
-      transform.sy,
-      pix_map.width(),
-      pix_map.height(),
-    ));
-    resvg::render(&tree, transform, &mut pix_map.as_mut());
-    let width = pix_map.width();
-    let height = pix_map.height();
-    let data = pix_map.take_demultiplied();
-    let (mut max_x, mut max_y) = (0u32, 0u32);
-    for y in 0..height {
-      for x in 0..width {
-        if data[((y * width + x) * 4 + 3) as usize] > 10 {
-          if x > max_x {
-            max_x = x;
-          }
-          if y > max_y {
-            max_y = y;
-          }
-        }
-      }
-    }
-    out.push_str(&format!(
-      "post-render content max_x={max_x} max_y={max_y} (of {width}x{height})"
-    ));
-    Ok(out)
   }
 
   #[napi]
