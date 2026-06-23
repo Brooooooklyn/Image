@@ -156,6 +156,31 @@ test('degenerate sub-pixel SVG does not silently render blank (issue #159)', asy
   }
 })
 
+// Regression for https://github.com/Brooooooklyn/Image/issues/159 (adversarial-review finding 3):
+// a thin, high-aspect-ratio SVG must not explode the raster. Previously the >=1000px upscale scaled
+// the larger axis by the factor needed to lift the smaller axis to 1000 (1x2000 -> ~8 GB raster).
+// Now the upscale targets the larger axis, so the raster stays bounded and keeps its aspect ratio.
+test('thin high-aspect-ratio SVG renders without exploding the raster (issue #159)', async (t) => {
+  const svg = Buffer.from(
+    `<svg width="10" height="4000" viewBox="0 0 10 4000" xmlns="http://www.w3.org/2000/svg"><rect width="10" height="4000" fill="black"/></svg>`,
+  )
+  const png = await Transformer.fromSvg(svg).png()
+  const { width, height } = await new Transformer(png).metadata()
+  t.true(width * height < 5_000_000, `raster ${width}x${height} should stay bounded, not exploded`)
+  t.true(height > width * 100, `aspect ratio ${width}x${height} should be preserved as tall/thin`)
+})
+
+// Regression for https://github.com/Brooooooklyn/Image/issues/159 (adversarial-review finding 3):
+// an adversarially oversized SVG must fail with a clean error rather than aborting the process with
+// a multi-terabyte allocation inside tiny_skia::Pixmap::new.
+test('adversarially oversized SVG errors cleanly instead of OOM (issue #159)', async (t) => {
+  const svg = Buffer.from(
+    `<svg width="100000" height="100000" viewBox="0 0 100000 100000" xmlns="http://www.w3.org/2000/svg"><rect width="100000" height="100000" fill="black"/></svg>`,
+  )
+  const err = t.throws(() => Transformer.fromSvg(svg))
+  t.truthy(err)
+})
+
 // Regression test for https://github.com/Brooooooklyn/Image/issues/199
 // Each fixture stores the inverse of a canonical upright scene tagged with its EXIF
 // orientation, so a correct `.rotate()` must reproduce the same upright scene:

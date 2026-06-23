@@ -755,23 +755,41 @@ impl Transformer {
     let original_size = tree.size();
     let svg_width = original_size.width();
     let svg_height = original_size.height();
-    // Rasterize at >= `min_svg_size` px per side for quality, using a single uniform
-    // power-of-two scale so the SVG's aspect ratio is preserved exactly. Rounding each
-    // axis to an integer independently (as `to_int_size` did) before scaling distorts
-    // fractional / sub-pixel-sized SVGs into stretched ellipses.
+    // Rasterize at >= `min_svg_size` px on the LONGER side for quality, using a single uniform
+    // power-of-two scale so the SVG's aspect ratio is preserved exactly. The loop stops as soon as
+    // the larger axis reaches `min_svg_size`: doubling until *both* axes reach it would multiply a
+    // thin, high-aspect-ratio SVG (e.g. 1x2000) into a multi-gigabyte raster.
     let min_svg_size = 1000.0_f32;
     let mut scale = 1.0_f32;
     while scale.is_finite()
-      && (svg_width * scale < min_svg_size || svg_height * scale < min_svg_size)
+      && svg_width * scale < min_svg_size
+      && svg_height * scale < min_svg_size
     {
       scale *= 2.0;
     }
-    let target_width = (svg_width * scale).round() as u32;
-    let target_height = (svg_height * scale).round() as u32;
+    // Compute the target size in f64 so an f32 overflow (sub-normal or astronomically large
+    // intrinsic size) cannot silently saturate the dimensions, and reject sizes that are not
+    // finite/positive or that exceed the pixel budget. This returns a clean error instead of
+    // letting `tiny_skia::Pixmap::new` attempt (and abort the process on) a huge allocation:
+    // tiny-skia only bounds the row width, not the total pixel count, on 64-bit.
+    let target_width_f = svg_width as f64 * scale as f64;
+    let target_height_f = svg_height as f64 * scale as f64;
+    // Upper bound on the rasterized SVG area (~1 GiB of RGBA). Bounds memory for adversarial or
+    // degenerate intrinsic SVG sizes; tune if you need larger native-size SVG rasters.
+    const MAX_SVG_PIXELS: f64 = (1u64 << 28) as f64; // 268_435_456 px
+    if !(target_width_f.is_finite() && target_height_f.is_finite())
+      || target_width_f < 1.0
+      || target_height_f < 1.0
+      || target_width_f * target_height_f > MAX_SVG_PIXELS
+    {
+      return Err(Error::from_reason(format!(
+        "SVG raster size out of range: source {svg_width}x{svg_height} scaled by {scale}"
+      )));
+    }
+    let target_width = target_width_f.round() as u32;
+    let target_height = target_height_f.round() as u32;
     let mut pix_map = tiny_skia::Pixmap::new(target_width, target_height).ok_or_else(|| {
-      Error::from_reason(format!(
-        "Failed to rasterize SVG: invalid render size {target_width}x{target_height} (source {svg_width}x{svg_height})"
-      ))
+      Error::from_reason(format!("Failed to rasterize SVG at {target_width}x{target_height}"))
     })?;
 
     // Inspired by [resvg-js/src/options.rs/fn create_pixmap](https://github.com/yisibl/resvg-js/blob/475ed45c091ef101f62f274b8a30883440bdfd89/src/options.rs#L185)
