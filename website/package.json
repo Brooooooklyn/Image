@@ -16,7 +16,7 @@
     "@fontsource-variable/jetbrains-mono": "^5.2.8",
     "@fontsource-variable/space-grotesk": "^5.2.10",
     "@napi-rs/image": "1.12.1",
-    "@napi-rs/image-wasm32-wasi": "1.12.1",
+    "@napi-rs/image-wasm32-wasi": "1.13.0",
     "@void/md": "0.9.3",
     "@void/react": "0.9.3",
     "buffer": "^6.0.0",
