@@ -53,9 +53,6 @@
     ],
     "timeout": "10m",
     "workerThreads": false,
-    "nodeArguments": [
-      "--liftoff-only"
-    ],
     "environmentVariables": {
       "NODE_ENV": "ava"
     }

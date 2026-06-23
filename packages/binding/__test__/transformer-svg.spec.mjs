@@ -23,11 +23,13 @@ const SVG = await fs.readFile(join(ROOT_DIR, 'input-debian.svg'))
 // the corruption reproduces with pure sync SVG renders alone). Root cause is not yet pinned — it does
 // not reproduce on arm64, only on the x86 wasi runner — and is tracked separately; until it is fixed
 // these run native-only. transformer.spec.mjs keeps a jpegSync SVG smoke test that does run on wasi.
-// EXPERIMENT (CI flag-bisect): run on wasi too. The wasi lane now forces V8 baseline wasm via
-// `--liftoff-only` (root package.json ava nodeArguments). If these pass on the x86 wasi runner with
-// that flag — having FAILED without it (commit 93c9c6d) — the corruption is V8's optimizing-JIT
-// (TurboFan) wasm tier-up on real x86, and --liftoff-only is the fix (keep it, drop the skip).
-const svgTest = test
+// Disproven hypotheses (do not re-try without new evidence): the corruption is NOT the codec worker
+// (this file has none), NOT wasm simd128 arithmetic codegen (the exact CI binary renders 30/30 correct
+// under BOTH Rosetta SSE and qemu -cpu max AVX2 emulation), and NOT V8 TurboFan tier-up (forcing
+// `--liftoff-only` on the wasi lane still failed identically). It reproduces ONLY on the real x86 wasi
+// runner, never on arm64 or any local x86 emulation — a V8/runtime fault on real x86 hardware, outside
+// this binding's Rust. Until it is root-caused upstream these run native-only.
+const svgTest = process.env.NAPI_RS_FORCE_WASI === '1' ? test.skip : test
 
 // Regression test for https://github.com/Brooooooklyn/Image/issues/159
 // from_svg() upscales the raster pixmap to >=1000px. The SVG content must be SCALED to fill that
