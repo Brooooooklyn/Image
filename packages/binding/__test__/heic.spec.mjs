@@ -10,10 +10,26 @@ import { JsColorType, Transformer } from '../index.js'
 const __DIRNAME = join(fileURLToPath(import.meta.url), '..')
 const ROOT_DIR = join(__DIRNAME, '..', '..', '..')
 
-// HEIC decode is macOS-only (it delegates to the OS ImageIO HEVC decoder; we ship no codec).
-// Gate so the same `yarn test` passes on Linux/Windows CI too.
-const onMac = os.platform() === 'darwin' ? test : test.skip
-const offMac = os.platform() !== 'darwin' ? test : test.skip
+// HEIC delegates to the OS ImageIO HEVC codec, so it works ONLY with the native macOS binding. Gate
+// on the host platform (and, off macOS, the loaded binding) — NOT on an env var.
+//   - native macOS (darwin)  → onMac: run the real decode/encode tests UNCONDITIONALLY. HEIC MUST
+//     work here, so a regression that drops the native `.heic`/`.heicSync` registration (or breaks
+//     decode/encode) FAILS these tests instead of silently skipping — that is the whole point of the
+//     suite. The explicit API-presence test below makes a missing method a clear, named failure.
+//   - non-macOS WITH the method (native linux/windows, or a wasm shipping the macOS-only stub)
+//                            → offMac: assert the documented "only ... on macOS" rejection.
+//   - non-macOS WITHOUT the method (a pre-HEIC wasm)
+//                            → skip; there is nothing to assert and HEIC can never run in the wasm
+//                              sandbox. The moment a wasm ships the stub, `offMac` lights up on it.
+// `hasHeic` is used ONLY for that off-macOS skip — never to gate macOS, so it can't hide a macOS
+// regression. Why not key on NAPI_RS_FORCE_WASI: the loader only forces WASI for the literal
+// 'true'/'error' (packages/binding/index.js), yet the CI wasi job sets '1', so the env var does NOT
+// reliably indicate which binding loaded — the method's presence does. The wasi CI job runs on Linux,
+// so `onMac` never runs against a wasm in CI.
+const hasHeic = typeof Transformer.prototype.heicSync === 'function'
+const isMac = os.platform() === 'darwin'
+const onMac = isMac ? test : test.skip
+const offMac = !isMac && hasHeic ? test : test.skip
 
 // 8-bit fixture: `sips -s format heic un-optimized.png --out un-optimized.heic` (1024x681).
 const HEIC = await fs.readFile(join(ROOT_DIR, 'un-optimized.heic'))
@@ -21,6 +37,12 @@ const HEIC = await fs.readFile(join(ROOT_DIR, 'un-optimized.heic'))
 const HEIC_10BIT = await fs.readFile(join(ROOT_DIR, 'un-optimized-10bit.heic'))
 // 8-bit RGBA PNG source for the encode round-trip (1024x681).
 const PNG = await fs.readFile(join(ROOT_DIR, 'un-optimized.png'))
+
+onMac('native macOS exposes the HEIC API surface', (t) => {
+  // A native-API regression that drops the `.heic`/`.heicSync` registration must FAIL here (not skip).
+  t.is(typeof Transformer.prototype.heic, 'function')
+  t.is(typeof Transformer.prototype.heicSync, 'function')
+})
 
 onMac('decodes heic metadata', async (t) => {
   const metadata = await new Transformer(HEIC).metadata()
@@ -61,6 +83,38 @@ onMac('10-bit heic re-encodes to png', async (t) => {
   t.true(png.length > 0)
 })
 
+onMac('decode preserves orientation (not vertically flipped)', (t) => {
+  // `un-optimized.heic` was produced from `un-optimized.png`, so the PNG (decoded via the trusted
+  // image-rs path) is the upright ground truth. A CoreGraphics bitmap context flip would invert the
+  // rows while keeping the dimensions, so dims can't catch it — compare row order against the source.
+  const heicRaw = new Transformer(HEIC).rawPixelsSync() // our ImageIO decode (RGBA8, top-down)
+  const pngRaw = new Transformer(PNG).rawPixelsSync() // trusted upright reference (RGBA8)
+  const W = 1024
+  const H = 681
+  t.is(heicRaw.length, W * H * 4)
+  t.is(pngRaw.length, W * H * 4)
+  // Mean abs RGB diff between our decode and the source, comparing same-row vs reversed-row order.
+  const meanAbsDiff = (flip) => {
+    let sum = 0
+    for (let y = 0; y < H; y++) {
+      const srcY = flip ? H - 1 - y : y
+      for (let x = 0; x < W; x++) {
+        const h = (y * W + x) * 4
+        const p = (srcY * W + x) * 4
+        sum += Math.abs(heicRaw[h] - pngRaw[p])
+        sum += Math.abs(heicRaw[h + 1] - pngRaw[p + 1])
+        sum += Math.abs(heicRaw[h + 2] - pngRaw[p + 2])
+      }
+    }
+    return sum / (W * H * 3)
+  }
+  const upright = meanAbsDiff(false)
+  const flipped = meanAbsDiff(true)
+  // HEVC is lossy so `upright` is small but nonzero; a vertical flip makes `flipped` far larger.
+  t.true(upright < flipped, `decode looks vertically flipped (upright=${upright}, flipped=${flipped})`)
+  t.true(upright < 10, `decode differs too much from its source image (upright=${upright})`)
+})
+
 offMac('heic rejected off macOS', async (t) => {
   await t.throwsAsync(() => new Transformer(HEIC).metadata(), {
     message: /only supported on macOS/,
@@ -81,8 +135,11 @@ onMac('encodes png -> heic (round-trip)', async (t) => {
 })
 
 onMac('heic max quality (quality 100)', async (t) => {
-  // ImageIO HEIC has no truly-lossless mode; `quality: 100` maps to compression quality 1.0, the
-  // maximum the OS encoder offers (a ~1-3/255 residual remains). Just confirm it round-trips.
+  // ImageIO HEIC has no truly-lossless mode; the encoder CLAMPS its compression quality to 0.9 (see
+  // encode_heic), because compression 1.0 engages a near-lossless path the OS *software* HEVC encoder
+  // rejects on hosts without a hardware media engine. So `quality: 100` maps to 0.9 deterministically
+  // on every host (no runtime fallback) — this must not throw and must round-trip; we assert only
+  // format/dims, never fidelity (a ~1-3/255 residual remains regardless).
   const buf = new Transformer(PNG).heicSync({ quality: 100 })
   t.true(Buffer.isBuffer(buf))
   t.true(buf.length > 0)

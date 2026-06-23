@@ -9,9 +9,11 @@ use napi_derive::napi;
 #[napi(object)]
 #[derive(Default, Clone)]
 pub struct HeicConfig {
-  /// Lossy quality 0-100 (maps to `kCGImageDestinationLossyCompressionQuality` 0.0-1.0).
-  /// Use `quality: 100` for maximum quality (HEIC/HEVC via ImageIO has no truly-lossless mode,
-  /// so expect a ~1-3/255 residual even on flat color). Default 80 (matches AVIF).
+  /// Lossy quality 0-100 (default 80, matches AVIF). Mapped to ImageIO's
+  /// `kCGImageDestinationLossyCompressionQuality`, but the compression ceiling is CLAMPED to 0.9:
+  /// HEIC/HEVC via ImageIO has no truly-lossless mode, and compression 1.0 engages a near-lossless
+  /// path the OS software encoder rejects on hosts without a hardware media engine. So `quality`
+  /// 90-100 all map to 0.9 (a ~1-3/255 residual remains regardless). See `encode_heic`.
   pub quality: Option<u32>,
   /// Output bit depth, 8 or 10. Default: follow the source (16-bit `DynamicImage` -> 10, else 8).
   pub bit_depth: Option<u8>,
@@ -108,6 +110,19 @@ fn unpremultiply_u16(c: u16, a: u16) -> u16 {
   } else {
     ((c as u32 * 65535 + a as u32 / 2) / a as u32).min(65535) as u16
   }
+}
+
+/// Reinterpret a native-endian `u16` framebuffer as raw bytes with no copy, for feeding a 16-bit
+/// CGImage in [`encode_heic`]. macOS is always little-endian, so the native bytes already match the
+/// `Order16Little` byte order we declare. `align_to::<u8>()` is sound here (every `u16` bit pattern
+/// is a valid pair of `u8`s) and never splits: `u8` has alignment 1 and `size_of::<u16>()` is a
+/// multiple of `size_of::<u8>()`, so head/tail are always empty (asserted in debug).
+#[cfg(target_os = "macos")]
+#[inline]
+fn u16_slice_as_native_bytes(slice: &[u16]) -> &[u8] {
+  let (head, bytes, tail) = unsafe { slice.align_to::<u8>() };
+  debug_assert!(head.is_empty() && tail.is_empty());
+  bytes
 }
 
 /// Decode a HEIC/HEIF image to a `DynamicImage` plus EXIF orientation (1..8) if present.
@@ -349,6 +364,8 @@ pub(crate) fn encode_heic(_img: &DynamicImage, _opts: Option<HeicConfig>) -> Res
 /// result becomes a clean `napi::Error`; no `unwrap`/panic.
 #[cfg(target_os = "macos")]
 pub(crate) fn encode_heic(img: &DynamicImage, opts: Option<HeicConfig>) -> Result<Vec<u8>> {
+  use std::borrow::Cow;
+
   use objc2::rc::autoreleasepool;
   use objc2_core_foundation::{
     CFData, CFDictionary, CFMutableData, CFNumber, CFRetained, CFString,
@@ -360,9 +377,15 @@ pub(crate) fn encode_heic(img: &DynamicImage, opts: Option<HeicConfig>) -> Resul
   use objc2_image_io::{CGImageDestination, kCGImageDestinationLossyCompressionQuality};
 
   let opts = opts.unwrap_or_default();
-  // Compression quality 0.0-1.0; `quality: 100` -> 1.0 (maximum). ImageIO HEIC has no truly-lossless
-  // mode, so 1.0 is as close as the OS encoder gets (a ~1-3/255 residual remains even on flat color).
-  let quality_value = (opts.quality.unwrap_or(80).min(100) as f64) / 100.0;
+  // Compression quality 0.0-1.0. We CLAMP the maximum to 0.9: ImageIO HEIC has no truly-lossless
+  // mode, and compression 1.0 engages a near-lossless path that the OS *software* HEVC encoder
+  // (used on hosts without a hardware media engine, e.g. paravirtualized CI VMs) cannot satisfy, so
+  // `CGImageDestinationFinalize` returns false there. 0.9 is visually indistinguishable from 1.0
+  // (a ~1-3/255 residual remains either way) yet encodes on every host, so `quality: 90..=100` all
+  // map to 0.9 deterministically — no runtime fallback, no host-dependent behavior to mask failures.
+  const MAX_COMPRESSION_QUALITY: f64 = 0.9;
+  let quality_value =
+    ((opts.quality.unwrap_or(80).min(100) as f64) / 100.0).min(MAX_COMPRESSION_QUALITY);
   // Resolve output depth: explicit bit_depth wins; otherwise follow a 16-bit source.
   // 10-bit HEIC is produced purely by feeding a 16-bpc CGImage below: ImageIO infers HEVC Main10
   // from the source bit depth (we set no explicit depth property). The `heic.spec.mjs` 10-bit
@@ -400,9 +423,12 @@ pub(crate) fn encode_heic(img: &DynamicImage, opts: Option<HeicConfig>) -> Resul
       })?;
 
     // 1. Build STRAIGHT-alpha RGBA pixel bytes + the matching CGImage layout parameters.
-    //    The `pixel_bytes` Vec is copied into a CFData below, so it only needs to live until then.
+    //    `pixel_bytes` is borrowed straight from the source `DynamicImage` when it is already the
+    //    target RGBA layout (the common decode->encode round-trip), and only converted/owned when a
+    //    pixel format change is genuinely needed. Either way it is copied into a CFData below, so it
+    //    only needs to live until then.
     let (pixel_bytes, bits_per_component, bits_per_pixel, bytes_per_row, bitmap_info): (
-      Vec<u8>,
+      Cow<[u8]>,
       usize,
       usize,
       usize,
@@ -411,19 +437,21 @@ pub(crate) fn encode_heic(img: &DynamicImage, opts: Option<HeicConfig>) -> Resul
       let bytes_per_row = width
         .checked_mul(8)
         .ok_or_else(|| Error::new(Status::InvalidArg, "HEIC: bytesPerRow overflow".to_owned()))?;
-      // 16-bit RGBA as native-endian u16s; view as little-endian bytes (every Apple platform is LE).
-      let rgba = img.to_rgba16();
-      let mut bytes = Vec::with_capacity(rgba.len() * 2);
-      for &component in rgba.as_raw() {
-        bytes.extend_from_slice(&component.to_le_bytes());
-      }
+      // 16-bit RGBA as native-endian u16s, reinterpreted as bytes with no copy (macOS is LE, so this
+      // matches Order16Little). Borrow the source buffer directly when it is already Rgba16; convert
+      // only otherwise. (`to_rgba16()` clones even when the variant already matches, so the borrow
+      // avoids a full-framebuffer clone plus the old per-component byte-build loop.)
+      let pixels: Cow<[u8]> = match img {
+        DynamicImage::ImageRgba16(buf) => Cow::Borrowed(u16_slice_as_native_bytes(buf.as_raw())),
+        other => Cow::Owned(u16_slice_as_native_bytes(other.to_rgba16().as_raw()).to_vec()),
+      };
       let host_16: CGImageByteOrderInfo = if cfg!(target_endian = "little") {
         CGImageByteOrderInfo::Order16Little
       } else {
         CGImageByteOrderInfo::Order16Big
       };
       (
-        bytes,
+        pixels,
         16,
         64,
         bytes_per_row,
@@ -433,10 +461,14 @@ pub(crate) fn encode_heic(img: &DynamicImage, opts: Option<HeicConfig>) -> Resul
       let bytes_per_row = width
         .checked_mul(4)
         .ok_or_else(|| Error::new(Status::InvalidArg, "HEIC: bytesPerRow overflow".to_owned()))?;
-      // 8-bit RGBA; Order32Big gives the memory layout R,G,B,A.
-      let rgba = img.to_rgba8();
+      // 8-bit RGBA; Order32Big gives the memory layout R,G,B,A. Borrow the source buffer directly
+      // when it is already Rgba8 (avoids `to_rgba8()`'s clone-when-already-Rgba8); convert otherwise.
+      let pixels: Cow<[u8]> = match img {
+        DynamicImage::ImageRgba8(buf) => Cow::Borrowed(buf.as_raw().as_slice()),
+        other => Cow::Owned(other.to_rgba8().into_raw()),
+      };
       (
-        rgba.into_raw(),
+        pixels,
         8,
         32,
         bytes_per_row,
@@ -445,7 +477,7 @@ pub(crate) fn encode_heic(img: &DynamicImage, opts: Option<HeicConfig>) -> Resul
     };
 
     // 2. Wrap the pixel bytes in a CFData (copy) and a CF-backed CGDataProvider so the bytes live
-    //    as long as the provider/image (the source `pixel_bytes` Vec may be freed after this).
+    //    as long as the provider/image (the borrowed/owned `pixel_bytes` may be freed after this).
     let data = CFData::from_bytes(&pixel_bytes);
     let provider = CGDataProvider::with_cf_data(Some(&data)).ok_or_else(|| {
       Error::new(
@@ -495,7 +527,7 @@ pub(crate) fn encode_heic(img: &DynamicImage, opts: Option<HeicConfig>) -> Resul
         )
       })?;
 
-    // 6. Properties: lossy compression quality (quality/100; `quality: 100` -> 1.0 = max quality).
+    // 6. Properties: lossy compression quality (0.0-1.0, already clamped to MAX_COMPRESSION_QUALITY).
     let quality_number = CFNumber::new_f64(quality_value);
     let quality_key: &CFString = unsafe { kCGImageDestinationLossyCompressionQuality };
     // `from_slices` yields a typed `CFDictionary<CFString, CFNumber>`; `add_image` wants the
@@ -505,10 +537,11 @@ pub(crate) fn encode_heic(img: &DynamicImage, opts: Option<HeicConfig>) -> Resul
     let props: CFRetained<CFDictionary> =
       unsafe { CFRetained::cast_unchecked::<CFDictionary>(typed_props) };
 
-    // 7. Add the image with the quality properties and finalize.
+    // 7. Add the image with the quality properties and finalize. With the quality clamp above there is
+    //    no near-lossless path to reject, so a `finalize` failure here is a genuine error (bad input,
+    //    allocation failure, no HEVC encoder at all) — surface it rather than silently retrying.
     unsafe { CGImageDestination::add_image(&dest, &image, Some(&props)) };
-    let finalized = unsafe { CGImageDestination::finalize(&dest) };
-    if !finalized {
+    if !unsafe { CGImageDestination::finalize(&dest) } {
       return Err(Error::new(
         Status::GenericFailure,
         "HEIC: finalize failed".to_owned(),
