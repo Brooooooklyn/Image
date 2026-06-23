@@ -774,20 +774,37 @@ impl Transformer {
     // tiny-skia only bounds the row width, not the total pixel count, on 64-bit.
     let target_width_f = svg_width as f64 * scale as f64;
     let target_height_f = svg_height as f64 * scale as f64;
-    // Upper bound on the rasterized SVG area (~1 GiB of RGBA). Bounds memory for adversarial or
-    // degenerate intrinsic SVG sizes; tune if you need larger native-size SVG rasters.
-    const MAX_SVG_PIXELS: f64 = (1u64 << 28) as f64; // 268_435_456 px
+    // Reject non-finite / non-positive sizes (e.g. a sub-normal intrinsic size scaled to +inf)
+    // before converting to integer pixels.
     if !(target_width_f.is_finite() && target_height_f.is_finite())
-      || target_width_f < 1.0
-      || target_height_f < 1.0
-      || target_width_f * target_height_f > MAX_SVG_PIXELS
+      || target_width_f <= 0.0
+      || target_height_f <= 0.0
     {
       return Err(Error::from_reason(format!(
         "SVG raster size out of range: source {svg_width}x{svg_height} scaled by {scale}"
       )));
     }
-    let target_width = target_width_f.round() as u32;
-    let target_height = target_height_f.round() as u32;
+    // Round to integer pixels, clamping a positive sub-pixel axis up to 1px (matching the historical
+    // `to_int_size` behavior) so a legitimately thin SVG (e.g. width 0.5) still renders. `f64 as u64`
+    // saturates, so an astronomically large axis becomes u64::MAX and is caught by the budget check.
+    let target_width = (target_width_f.round() as u64).max(1);
+    let target_height = (target_height_f.round() as u64).max(1);
+    // Upper bound on the rasterized SVG area (~1 GiB of RGBA). Validated against the ACTUAL integer
+    // allocation dimensions so rounding can never push the real pixmap over the cap. Bounds memory
+    // for adversarial or degenerate intrinsic SVG sizes; tune if you need larger native rasters.
+    // (Note: the pixmap is copied once more during the `from_rgba_pixels` handoff, so transient peak
+    // memory is ~2x this budget.)
+    const MAX_SVG_PIXELS: u64 = 1 << 28; // 268_435_456 px
+    if target_width > u32::MAX as u64
+      || target_height > u32::MAX as u64
+      || target_width.saturating_mul(target_height) > MAX_SVG_PIXELS
+    {
+      return Err(Error::from_reason(format!(
+        "SVG raster size out of range: {target_width}x{target_height} (source {svg_width}x{svg_height})"
+      )));
+    }
+    let target_width = target_width as u32;
+    let target_height = target_height as u32;
     let mut pix_map = tiny_skia::Pixmap::new(target_width, target_height).ok_or_else(|| {
       Error::from_reason(format!("Failed to rasterize SVG at {target_width}x{target_height}"))
     })?;

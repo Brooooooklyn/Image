@@ -181,6 +181,31 @@ test('adversarially oversized SVG errors cleanly instead of OOM (issue #159)', a
   t.truthy(err)
 })
 
+// Regression for https://github.com/Brooooooklyn/Image/issues/159 (adversarial-review finding 4):
+// a legitimately thin SVG with a sub-pixel axis must render (clamped to >=1px), not be rejected by
+// the size guard. Previously `0.5` failed the `< 1.0` float check and threw.
+test('SVG with a sub-pixel axis renders instead of being rejected (issue #159)', async (t) => {
+  const svg = Buffer.from(
+    `<svg width="0.5" height="2000" viewBox="0 0 0.5 2000" xmlns="http://www.w3.org/2000/svg"><rect width="0.5" height="2000" fill="black"/></svg>`,
+  )
+  const png = await Transformer.fromSvg(svg).png()
+  const { width, height } = await new Transformer(png).metadata()
+  t.true(width >= 1, `sub-pixel width should clamp to >=1px, got ${width}`)
+  t.is(height, 2000)
+})
+
+// Regression for https://github.com/Brooooooklyn/Image/issues/159 (adversarial-review finding 4):
+// the pixel budget must be enforced on the ROUNDED integer dimensions, not the pre-rounded floats.
+// 1.5 x 178955968 slips under the float-area cap but rounds to 2 x 178955968 (~1.33 GiB), which the
+// guard must reject before allocating.
+test('SVG size guard cannot be bypassed by rounding (issue #159)', async (t) => {
+  const svg = Buffer.from(
+    `<svg width="1.5" height="178955968" viewBox="0 0 1.5 178955968" xmlns="http://www.w3.org/2000/svg"><rect width="1.5" height="178955968" fill="black"/></svg>`,
+  )
+  const err = t.throws(() => Transformer.fromSvg(svg))
+  t.truthy(err)
+})
+
 // Regression test for https://github.com/Brooooooklyn/Image/issues/199
 // Each fixture stores the inverse of a canonical upright scene tagged with its EXIF
 // orientation, so a correct `.rotate()` must reproduce the same upright scene:
