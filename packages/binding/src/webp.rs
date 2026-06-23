@@ -131,8 +131,8 @@ mod tests {
   /// A solid 4x4 16-bit RGBA image. WebP is 8-bit, so the encoder must normalize this down to
   /// RGBA8 instead of rejecting it (the pre-existing bug this task fixes).
   fn rgba16_4x4() -> DynamicImage {
-    let buf =
-      ImageBuffer::<Rgba<u16>, _>::from_raw(4, 4, vec![32768u16; 4 * 4 * 4]).expect("rgba16 buffer");
+    let buf = ImageBuffer::<Rgba<u16>, _>::from_raw(4, 4, vec![32768u16; 4 * 4 * 4])
+      .expect("rgba16 buffer");
     DynamicImage::ImageRgba16(buf)
   }
 
@@ -163,9 +163,8 @@ mod tests {
   #[test]
   fn lossless_encode_webp_inner_normalizes_rgb16() {
     let image = rgb16_4x4();
-    let (ptr, len) =
-      unsafe { lossless_encode_webp_inner(&image, image.width(), image.height()) }
-        .expect("encode ok");
+    let (ptr, len) = unsafe { lossless_encode_webp_inner(&image, image.width(), image.height()) }
+      .expect("encode ok");
     assert!(!ptr.is_null(), "output buffer must not be null");
     assert!(len > 0, "output length must be > 0");
     unsafe { libwebp_sys::WebPFree(ptr as *mut _) };
@@ -184,9 +183,8 @@ mod tests {
   #[test]
   fn lossless_encode_webp_inner_rgba8_fast_path_unaffected() {
     let image = rgba8_4x4();
-    let (ptr, len) =
-      unsafe { lossless_encode_webp_inner(&image, image.width(), image.height()) }
-        .expect("encode ok");
+    let (ptr, len) = unsafe { lossless_encode_webp_inner(&image, image.width(), image.height()) }
+      .expect("encode ok");
     assert!(!ptr.is_null(), "output buffer must not be null");
     assert!(len > 0, "output length must be > 0");
     unsafe { libwebp_sys::WebPFree(ptr as *mut _) };
