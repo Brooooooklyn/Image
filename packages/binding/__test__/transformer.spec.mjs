@@ -108,6 +108,54 @@ test('SVG content fills the canvas, not just a corner (issue #159)', async (t) =
   t.true(maxY > height * 0.6, `content bottom edge ${maxY} should reach past 60% of height ${height}`)
 })
 
+// Regression for https://github.com/Brooooooklyn/Image/issues/159 (adversarial-review finding 1):
+// a fractional, non-square SVG must keep its aspect ratio. A circle drawn in square user units must
+// rasterize with a (near-)square bounding box. Rounding each axis independently before scaling
+// stretched it into an ellipse (bbox aspect ~1.66).
+test('SVG with fractional non-square size keeps aspect ratio (issue #159)', async (t) => {
+  const svg = Buffer.from(
+    `<svg width="0.6" height="1" viewBox="0 0 0.6 1" xmlns="http://www.w3.org/2000/svg"><circle cx="0.3" cy="0.5" r="0.3" fill="black"/></svg>`,
+  )
+  const png = await Transformer.fromSvg(svg).png()
+  const { width, height } = await new Transformer(png).metadata()
+  const raw = await Transformer.fromSvg(svg).rawPixels()
+
+  let minX = width, minY = height, maxX = -1, maxY = -1
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (raw[(y * width + x) * 4 + 3] > 10) {
+        if (x < minX) minX = x
+        if (x > maxX) maxX = x
+        if (y < minY) minY = y
+        if (y > maxY) maxY = y
+      }
+    }
+  }
+  const bw = maxX - minX + 1
+  const bh = maxY - minY + 1
+  const aspect = bw / bh
+  t.true(aspect > 0.9 && aspect < 1.1, `circle bbox ${bw}x${bh} aspect ${aspect} should be ~1.0 (not a stretched ellipse)`)
+})
+
+// Regression for https://github.com/Brooooooklyn/Image/issues/159 (adversarial-review finding 2):
+// a degenerate sub-pixel SVG must not silently rasterize to a fully-transparent (blank) image.
+// Acceptable outcomes: throw an error, or render real content — but never a silent blank.
+test('degenerate sub-pixel SVG does not silently render blank (issue #159)', async (t) => {
+  const svg = Buffer.from(
+    `<svg width="1e-39" height="1e-39" viewBox="0 0 1 1" xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1" fill="black"/></svg>`,
+  )
+  try {
+    const raw = await Transformer.fromSvg(svg).rawPixels()
+    let hasContent = false
+    for (let i = 3; i < raw.length; i += 4) {
+      if (raw[i] > 10) { hasContent = true; break }
+    }
+    t.true(hasContent, 'render must not be fully blank/transparent')
+  } catch {
+    t.pass('errored on degenerate size (acceptable)')
+  }
+})
+
 // Regression test for https://github.com/Brooooooklyn/Image/issues/199
 // Each fixture stores the inverse of a canonical upright scene tagged with its EXIF
 // orientation, so a correct `.rotate()` must reproduce the same upright scene:

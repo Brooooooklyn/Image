@@ -753,12 +753,26 @@ impl Transformer {
     }
     .map_err(|err| Error::from_reason(format!("{err}")))?;
     let original_size = tree.size();
-    let mut size = original_size.to_int_size();
-    let min_svg_size = 1000;
-    while size.width() < min_svg_size || size.height() < min_svg_size {
-      size = resvg::tiny_skia::IntSize::from_wh(size.width() * 2, size.height() * 2).unwrap();
+    let svg_width = original_size.width();
+    let svg_height = original_size.height();
+    // Rasterize at >= `min_svg_size` px per side for quality, using a single uniform
+    // power-of-two scale so the SVG's aspect ratio is preserved exactly. Rounding each
+    // axis to an integer independently (as `to_int_size` did) before scaling distorts
+    // fractional / sub-pixel-sized SVGs into stretched ellipses.
+    let min_svg_size = 1000.0_f32;
+    let mut scale = 1.0_f32;
+    while scale.is_finite()
+      && (svg_width * scale < min_svg_size || svg_height * scale < min_svg_size)
+    {
+      scale *= 2.0;
     }
-    let mut pix_map = tiny_skia::Pixmap::new(size.width(), size.height()).unwrap();
+    let target_width = (svg_width * scale).round() as u32;
+    let target_height = (svg_height * scale).round() as u32;
+    let mut pix_map = tiny_skia::Pixmap::new(target_width, target_height).ok_or_else(|| {
+      Error::from_reason(format!(
+        "Failed to rasterize SVG: invalid render size {target_width}x{target_height} (source {svg_width}x{svg_height})"
+      ))
+    })?;
 
     // Inspired by [resvg-js/src/options.rs/fn create_pixmap](https://github.com/yisibl/resvg-js/blob/475ed45c091ef101f62f274b8a30883440bdfd89/src/options.rs#L185)
     let background = background
@@ -769,11 +783,9 @@ impl Transformer {
       let color = tiny_skia::Color::from_rgba8(bg.red, bg.green, bg.blue, bg.alpha);
       pix_map.fill(color);
     }
-    let scale_x = size.width() as f32 / original_size.width();
-    let scale_y = size.height() as f32 / original_size.height();
     resvg::render(
       &tree,
-      tiny_skia::Transform::from_scale(scale_x, scale_y),
+      tiny_skia::Transform::from_scale(scale, scale),
       &mut pix_map.as_mut(),
     );
 
