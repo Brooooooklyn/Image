@@ -53,9 +53,6 @@
     ],
     "timeout": "10m",
     "workerThreads": false,
-    "nodeArguments": [
-      "--single-threaded"
-    ],
     "environmentVariables": {
       "NODE_ENV": "ava"
     }

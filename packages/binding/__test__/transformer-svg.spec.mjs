@@ -23,13 +23,14 @@ const SVG = await fs.readFile(join(ROOT_DIR, 'input-debian.svg'))
 // the corruption reproduces with pure sync SVG renders alone). Root cause is not yet pinned — it does
 // not reproduce on arm64, only on the x86 wasi runner — and is tracked separately; until it is fixed
 // these run native-only. transformer.spec.mjs keeps a jpegSync SVG smoke test that does run on wasi.
-// EXPERIMENT (CI flag-bisect, V8 background-thread hypothesis): run on wasi too, with the wasi lane
-// forcing V8 fully single-threaded (`--single-threaded`, root package.json ava nodeArguments). App code
-// here is single-threaded (0 workers spawned) but V8 is not (background GC/compile threads). If these
-// pass on the x86 wasi runner with that flag — having FAILED with both JIT tiers (--liftoff-only, 9809cf1)
-// — a V8 background-thread interaction corrupts the shared wasm memory on real x86, and --single-threaded
-// is the fix. If still RED, threading is ruled out too; revert to the native-only skip.
-const svgTest = test
+// Disproven hypotheses (do NOT re-try without new evidence): the corruption is NOT the codec worker
+// (this file has none), NOT wasm simd128 arithmetic codegen (the exact CI binary renders 30/30 correct
+// under BOTH Rosetta SSE and qemu -cpu max AVX2 emulation), NOT V8 TurboFan tier-up (--liftoff-only
+// still failed, 9809cf1), NOT V8's baseline tier either (same), and NOT a V8 background-thread race
+// (--single-threaded still failed, b75cab6). It reproduces ONLY on the real x86 wasi runner — never on
+// arm64 or any local x86 emulation — a V8/runtime fault on real x86 hardware, outside this binding's
+// Rust. Tracked upstream; until root-caused these run native-only.
+const svgTest = process.env.NAPI_RS_FORCE_WASI === '1' ? test.skip : test
 
 // Regression test for https://github.com/Brooooooklyn/Image/issues/159
 // from_svg() upscales the raster pixmap to >=1000px. The SVG content must be SCALED to fill that
