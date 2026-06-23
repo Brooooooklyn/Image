@@ -833,7 +833,10 @@ impl Transformer {
 
     let width = pix_map.width();
     let height = pix_map.height();
-    let data = pix_map.take();
+    // tiny_skia stores premultiplied RGBA; demultiply to straight RGBA before treating the buffer as
+    // an `RgbaImage`, otherwise semi-transparent pixels (rgba backgrounds and antialiased edges) are
+    // darkened. `take_demultiplied` still returns the owned buffer, so the handoff stays copy-free.
+    let data = pix_map.take_demultiplied();
 
     let image = RgbaImage::from_vec(width, height, data).ok_or_else(|| {
       Error::new(

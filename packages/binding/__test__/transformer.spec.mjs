@@ -231,6 +231,19 @@ test('near-1000 fractional SVG is not needlessly upscaled (issue #159)', async (
   t.is(height, 1000)
 })
 
+// Regression for https://github.com/Brooooooklyn/Image/issues/159 (adversarial-review finding 6):
+// tiny_skia renders into a PREMULTIPLIED buffer; it must be demultiplied to straight RGBA before
+// being treated as an RgbaImage, otherwise a semi-transparent rgba() background (and antialiased
+// edges) come out darkened. rgba(10,20,30,.8) must round-trip as ~[10,20,30,204], not [8,16,24,204].
+test('semi-transparent SVG background is straight (demultiplied) RGBA (issue #159)', (t) => {
+  const svg = Buffer.from('<svg width="2" height="2" xmlns="http://www.w3.org/2000/svg"></svg>')
+  const px = Transformer.fromSvg(svg, 'rgba(10, 20, 30, .8)').rawPixelsSync().slice(0, 4)
+  t.is(px[3], 204) // alpha 0.8 * 255
+  t.true(Math.abs(px[0] - 10) <= 1, `R should be straight ~10, got ${px[0]} (8 = premultiplied bug)`)
+  t.true(Math.abs(px[1] - 20) <= 1, `G should be straight ~20, got ${px[1]}`)
+  t.true(Math.abs(px[2] - 30) <= 1, `B should be straight ~30, got ${px[2]}`)
+})
+
 // Regression test for https://github.com/Brooooooklyn/Image/issues/199
 // Each fixture stores the inverse of a canonical upright scene tagged with its EXIF
 // orientation, so a correct `.rotate()` must reproduce the same upright scene:
