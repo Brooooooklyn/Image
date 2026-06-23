@@ -543,17 +543,21 @@ jobs:
       - name: List packages
         run: ls -R packages
         shell: bash
-      # Force the loader onto the freshly-built local wasm. NAPI_RS_FORCE_WASI=true makes index.js
-      # load ./image.wasi.cjs first, but it then re-loads the published @napi-rs/image-wasm32-wasi on
-      # top (forceWasi re-enters the fallback branch), so a pre-#159 published binding would shadow
-      # the fresh build. Remove every installed copy so the loader can only resolve ./image.wasi.cjs.
+      # Force the loader onto the freshly-built local wasm. Two things are needed (see
+      # packages/binding/index.js): (1) remove the published @napi-rs/image-wasm32-wasi — under
+      # forceWasi the loader loads ./image.wasi.cjs first but then re-loads the published package on
+      # top, so a pre-#159 published binding would shadow the fresh build; (2) use FORCE_WASI=error,
+      # not 'true'. Both force WASI, but 'true' is fail-OPEN: native is loaded first, so if the fresh
+      # ./image.wasi.cjs ever fails to load the lane silently falls back to the native binding and
+      # stops proving the wasm. 'error' is fail-CLOSED — it throws when no WASI binding loads, so a
+      # wasm regression fails the job loudly instead of masking an x86 wasm fault.
       - name: Drop published @napi-rs/image-wasm32-wasi so the fresh local wasm is used
         run: find . -type d -path '*@napi-rs/image-wasm32-wasi' -prune -print -exec rm -rf {} +
         shell: bash
       - name: Run tests
         run: yarn test -s
         env:
-          NAPI_RS_FORCE_WASI: 'true'
+          NAPI_RS_FORCE_WASI: 'error'
 
   benchmark:
     name: Benchmark pngQuantize (CodSpeed)

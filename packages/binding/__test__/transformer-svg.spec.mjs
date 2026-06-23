@@ -15,8 +15,9 @@ const SVG = await fs.readFile(join(ROOT_DIR, 'input-debian.svg'))
 // assertions isolated from the codec tests. They run on every binding — native (x86_64 + arm64) and
 // wasm32-wasip1-threads alike: the from_svg() fix is platform-independent and the freshly-built wasm
 // renders them correctly (verified directly on the x86 wasi CI runner). The wasi CI lane must load the
-// fresh local wasm (NAPI_RS_FORCE_WASI=true with the published @napi-rs/image-wasm32-wasi removed so the
-// loader cannot shadow ./image.wasi.cjs); loading a pre-#159 published binding makes these fail.
+// fresh local wasm (NAPI_RS_FORCE_WASI=error with the published @napi-rs/image-wasm32-wasi removed so the
+// loader cannot shadow ./image.wasi.cjs and fails loudly rather than silently falling back to native);
+// loading a pre-#159 published binding makes these fail.
 
 // Regression test for https://github.com/Brooooooklyn/Image/issues/159
 // from_svg() upscales the raster pixmap to >=1000px. The SVG content must be SCALED to fill that
