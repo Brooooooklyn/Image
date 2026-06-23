@@ -23,7 +23,11 @@ const SVG = await fs.readFile(join(ROOT_DIR, 'input-debian.svg'))
 // the corruption reproduces with pure sync SVG renders alone). Root cause is not yet pinned — it does
 // not reproduce on arm64, only on the x86 wasi runner — and is tracked separately; until it is fixed
 // these run native-only. transformer.spec.mjs keeps a jpegSync SVG smoke test that does run on wasi.
-const svgTest = process.env.NAPI_RS_FORCE_WASI === '1' ? test.skip : test
+// EXPERIMENT (CI flag-bisect): run on wasi too. The wasi lane now forces V8 baseline wasm via
+// `--liftoff-only` (root package.json ava nodeArguments). If these pass on the x86 wasi runner with
+// that flag — having FAILED without it (commit 93c9c6d) — the corruption is V8's optimizing-JIT
+// (TurboFan) wasm tier-up on real x86, and --liftoff-only is the fix (keep it, drop the skip).
+const svgTest = test
 
 // Regression test for https://github.com/Brooooooklyn/Image/issues/159
 // from_svg() upscales the raster pixmap to >=1000px. The SVG content must be SCALED to fill that
