@@ -723,6 +723,24 @@ pub struct Transformer {
   image_transform_args: ImageTransformArgs,
 }
 
+fn transformer_from_rgba8(image: RgbaImage) -> Transformer {
+  let image_meta = Box::new(Some(ImageMetaData {
+    color_type: ColorType::Rgba8,
+    orientation: None,
+    image: DynamicImage::ImageRgba8(image),
+    exif: HashMap::new(),
+    format: DetectedFormat::Standard(ImageFormat::Png),
+    has_parsed_exif: true,
+  }));
+  Transformer {
+    dynamic_image: Arc::new(ThreadsafeDynamicImage {
+      raw: Arc::new(vec![0].into()),
+      image: Box::into_raw(image_meta),
+    }),
+    image_transform_args: Default::default(),
+  }
+}
+
 #[napi]
 impl Transformer {
   #[napi(constructor)]
@@ -752,55 +770,44 @@ impl Transformer {
       Either::B(b) => usvg::Tree::from_data(b, &options),
     }
     .map_err(|err| Error::from_reason(format!("{err}")))?;
-    let original_size = tree.size();
-    let svg_width = original_size.width();
-    let svg_height = original_size.height();
-    // Rasterize at >= `min_svg_size` px on the LONGER side for quality, using a single uniform
-    // power-of-two scale so the SVG's aspect ratio is preserved exactly. The loop stops as soon as
-    // the larger axis reaches `min_svg_size`: doubling until *both* axes reach it would multiply a
-    // thin, high-aspect-ratio SVG (e.g. 1x2000) into a multi-gigabyte raster.
-    let min_svg_size = 1000.0_f32;
+    let svg_width = tree.size().width();
+    let svg_height = tree.size().height();
+    // (usvg's `Size` is `NonZeroPositiveF32`, so both are > 0 and finite here.)
+    const MIN_SVG_SIZE: f32 = 1000.0;
+    // Upper bound on the rasterized SVG area (~1 GiB of RGBA). Bounds memory for adversarial or
+    // degenerate intrinsic SVG sizes; tune if you need larger native-size SVG rasters.
+    const MAX_SVG_PIXELS: u64 = 1 << 28; // 268_435_456 px
+    // Smallest uniform power-of-two scale whose ROUNDED longer axis reaches `MIN_SVG_SIZE`, for
+    // resize quality. Thresholding on the rounded dimension (not the raw float) avoids needlessly
+    // doubling a value like 999.6 -> 1000. Targeting only the longer axis keeps a thin, high-aspect
+    // SVG (e.g. 1x2000) from exploding into a huge raster. `scale` stays f32 (the render transform
+    // is f32); for an intrinsic size so tiny that `scale` would overflow f32, the loop exits at +inf
+    // and the size is rejected below rather than rendered with a broken transform.
     let mut scale = 1.0_f32;
     while scale.is_finite()
-      && svg_width * scale < min_svg_size
-      && svg_height * scale < min_svg_size
+      && (svg_width * scale).round() < MIN_SVG_SIZE
+      && (svg_height * scale).round() < MIN_SVG_SIZE
     {
       scale *= 2.0;
     }
-    // Compute the target size in f64 so an f32 overflow (sub-normal or astronomically large
-    // intrinsic size) cannot silently saturate the dimensions, and reject sizes that are not
-    // finite/positive or that exceed the pixel budget. This returns a clean error instead of
-    // letting `tiny_skia::Pixmap::new` attempt (and abort the process on) a huge allocation:
-    // tiny-skia only bounds the row width, not the total pixel count, on 64-bit.
-    let target_width_f = svg_width as f64 * scale as f64;
-    let target_height_f = svg_height as f64 * scale as f64;
-    // Reject non-finite / non-positive sizes (e.g. a sub-normal intrinsic size scaled to +inf)
-    // before converting to integer pixels.
-    if !(target_width_f.is_finite() && target_height_f.is_finite())
-      || target_width_f <= 0.0
-      || target_height_f <= 0.0
+    // Final integer dimensions, computed in f64 so an f32-overflowed scale or an astronomically large
+    // axis is caught here rather than silently saturating an `as u32` cast.
+    let target_width = (svg_width as f64 * scale as f64).round();
+    let target_height = (svg_height as f64 * scale as f64).round();
+    // Reject degenerate sizes instead of corrupting output: a non-finite product, a sub-pixel axis
+    // that rounds to 0 (rendering it would be an invisible blank), a dimension past u32, or an area
+    // over the budget (tiny-skia's `Pixmap::new` bounds only row width, not total pixels, on 64-bit,
+    // so a huge size aborts the process). NB: 0.5 rounds to 1 and still renders; 0.1 rounds to 0 and
+    // is rejected.
+    if !(target_width.is_finite() && target_height.is_finite())
+      || target_width < 1.0
+      || target_height < 1.0
+      || target_width > u32::MAX as f64
+      || target_height > u32::MAX as f64
+      || (target_width as u64).saturating_mul(target_height as u64) > MAX_SVG_PIXELS
     {
       return Err(Error::from_reason(format!(
         "SVG raster size out of range: source {svg_width}x{svg_height} scaled by {scale}"
-      )));
-    }
-    // Round to integer pixels, clamping a positive sub-pixel axis up to 1px (matching the historical
-    // `to_int_size` behavior) so a legitimately thin SVG (e.g. width 0.5) still renders. `f64 as u64`
-    // saturates, so an astronomically large axis becomes u64::MAX and is caught by the budget check.
-    let target_width = (target_width_f.round() as u64).max(1);
-    let target_height = (target_height_f.round() as u64).max(1);
-    // Upper bound on the rasterized SVG area (~1 GiB of RGBA). Validated against the ACTUAL integer
-    // allocation dimensions so rounding can never push the real pixmap over the cap. Bounds memory
-    // for adversarial or degenerate intrinsic SVG sizes; tune if you need larger native rasters.
-    // (Note: the pixmap is copied once more during the `from_rgba_pixels` handoff, so transient peak
-    // memory is ~2x this budget.)
-    const MAX_SVG_PIXELS: u64 = 1 << 28; // 268_435_456 px
-    if target_width > u32::MAX as u64
-      || target_height > u32::MAX as u64
-      || target_width.saturating_mul(target_height) > MAX_SVG_PIXELS
-    {
-      return Err(Error::from_reason(format!(
-        "SVG raster size out of range: {target_width}x{target_height} (source {svg_width}x{svg_height})"
       )));
     }
     let target_width = target_width as u32;
@@ -828,7 +835,13 @@ impl Transformer {
     let height = pix_map.height();
     let data = pix_map.take();
 
-    Transformer::from_rgba_pixels(Either::A(data.as_slice()), width, height)
+    let image = RgbaImage::from_vec(width, height, data).ok_or_else(|| {
+      Error::new(
+        Status::InvalidArg,
+        "Rendered SVG pixel buffer does not match its dimensions".to_owned(),
+      )
+    })?;
+    Ok(transformer_from_rgba8(image))
   }
 
   #[napi]
@@ -837,7 +850,7 @@ impl Transformer {
     width: u32,
     height: u32,
   ) -> Result<Transformer> {
-    if let Some(image) = image::RgbaImage::from_vec(
+    if let Some(image) = RgbaImage::from_vec(
       width,
       height,
       match input {
@@ -845,21 +858,7 @@ impl Transformer {
         Either::B(b) => b.to_vec(),
       },
     ) {
-      let image_meta = Box::new(Some(ImageMetaData {
-        color_type: ColorType::Rgba8,
-        orientation: None,
-        image: DynamicImage::ImageRgba8(image),
-        exif: HashMap::new(),
-        format: DetectedFormat::Standard(ImageFormat::Png),
-        has_parsed_exif: true,
-      }));
-      Ok(Self {
-        dynamic_image: Arc::new(ThreadsafeDynamicImage {
-          raw: Arc::new(vec![0].into()),
-          image: Box::into_raw(image_meta),
-        }),
-        image_transform_args: Default::default(),
-      })
+      Ok(transformer_from_rgba8(image))
     } else {
       Err(Error::new(
         Status::InvalidArg,

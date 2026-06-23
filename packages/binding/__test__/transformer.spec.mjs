@@ -206,6 +206,31 @@ test('SVG size guard cannot be bypassed by rounding (issue #159)', async (t) => 
   t.truthy(err)
 })
 
+// Regression for https://github.com/Brooooooklyn/Image/issues/159 (adversarial-review finding 5a):
+// an SVG with a sub-pixel SHORT axis (rounds to 0) must error, not silently render a blank raster.
+// Previously `2000x0.1` clamped the short axis to 1px and rendered a fully-transparent 2000x1 image.
+test('SVG with a sub-pixel short axis errors instead of rendering blank (issue #159)', async (t) => {
+  const svg = Buffer.from(
+    `<svg width="2000" height="0.1" viewBox="0 0 2000 0.1" xmlns="http://www.w3.org/2000/svg"><rect width="2000" height="0.1" fill="black"/></svg>`,
+  )
+  const err = t.throws(() => Transformer.fromSvg(svg))
+  t.truthy(err)
+})
+
+// Regression for https://github.com/Brooooooklyn/Image/issues/159 (adversarial-review finding 5b):
+// a fractional size that rounds to >= the 1000px quality floor must not be needlessly upscaled.
+// Previously `999.6x999.6` was doubled to 1999x1999 (~4x the pixels) because the loop thresholded on
+// the raw float instead of the rounded dimension.
+test('near-1000 fractional SVG is not needlessly upscaled (issue #159)', async (t) => {
+  const svg = Buffer.from(
+    `<svg width="999.6" height="999.6" viewBox="0 0 999.6 999.6" xmlns="http://www.w3.org/2000/svg"><rect width="999.6" height="999.6" fill="black"/></svg>`,
+  )
+  const png = await Transformer.fromSvg(svg).png()
+  const { width, height } = await new Transformer(png).metadata()
+  t.is(width, 1000)
+  t.is(height, 1000)
+})
+
 // Regression test for https://github.com/Brooooooklyn/Image/issues/199
 // Each fixture stores the inverse of a canonical upright scene tagged with its EXIF
 // orientation, so a correct `.rotate()` must reproduce the same upright scene:
