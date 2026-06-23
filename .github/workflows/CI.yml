@@ -547,15 +547,22 @@ jobs:
       - name: List packages
         run: ls -R packages
         shell: bash
-      - name: x86 wasm SVG miscompile probe (diagnostic)
+      # Force the loader onto the freshly-built local wasm. NAPI_RS_FORCE_WASI=true makes index.js
+      # load ./image.wasi.cjs first, but it then re-loads the published @napi-rs/image-wasm32-wasi on
+      # top (forceWasi re-enters the fallback branch), so a pre-#159 published binding would shadow
+      # the fresh build. Remove every installed copy so the loader can only resolve ./image.wasi.cjs.
+      - name: Drop published @napi-rs/image-wasm32-wasi so the fresh local wasm is used
+        run: find . -type d -path '*@napi-rs/image-wasm32-wasi' -prune -print -exec rm -rf {} +
+        shell: bash
+      - name: x86 wasm SVG loader probe (diagnostic)
         run: node packages/binding/__test__/x86-svg-probe.mjs
         env:
-          NAPI_RS_FORCE_WASI: '1'
+          NAPI_RS_FORCE_WASI: 'true'
           NAPI_IMAGE_SVG_DEBUG: '1'
       - name: Run tests
         run: yarn test -s
         env:
-          NAPI_RS_FORCE_WASI: '1'
+          NAPI_RS_FORCE_WASI: 'true'
 
   benchmark:
     name: Benchmark pngQuantize (CodSpeed)
