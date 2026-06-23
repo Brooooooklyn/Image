@@ -75,6 +75,39 @@ test('should be able to create transformer from SVG', (t) => {
   t.notThrows(() => Transformer.fromSvg(SVG).jpegSync())
 })
 
+// Regression test for https://github.com/Brooooooklyn/Image/issues/159
+// from_svg() upscales the raster pixmap to >=1000px. The SVG content must be SCALED to fill that
+// pixmap, not drawn at its native size in the top-left corner. Before the fix the Debian logo
+// occupied only ~5% of the canvas (a corner speck); after the fix it spans most of the canvas.
+test('SVG content fills the canvas, not just a corner (issue #159)', async (t) => {
+  // Native render dimensions (no resize) come from a PNG metadata round-trip.
+  const png = await Transformer.fromSvg(SVG).png()
+  const { width, height } = await new Transformer(png).metadata()
+
+  // Raw RGBA pixels of the same native render.
+  const raw = await Transformer.fromSvg(SVG).rawPixels()
+
+  // Bounding box of non-transparent (opaque-enough) pixels.
+  let minX = width, minY = height, maxX = -1, maxY = -1
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const alpha = raw[(y * width + x) * 4 + 3]
+      if (alpha > 10) {
+        if (x < minX) minX = x
+        if (x > maxX) maxX = x
+        if (y < minY) minY = y
+        if (y > maxY) maxY = y
+      }
+    }
+  }
+
+  // The content must extend into the far (lower-right) region of the canvas.
+  // Buggy behavior: maxX/maxY ~ 5% of the canvas (top-left speck).
+  // Fixed behavior: content spans to >60% of width and height.
+  t.true(maxX > width * 0.6, `content right edge ${maxX} should reach past 60% of width ${width}`)
+  t.true(maxY > height * 0.6, `content bottom edge ${maxY} should reach past 60% of height ${height}`)
+})
+
 // Regression test for https://github.com/Brooooooklyn/Image/issues/199
 // Each fixture stores the inverse of a canonical upright scene tagged with its EXIF
 // orientation, so a correct `.rotate()` must reproduce the same upright scene:

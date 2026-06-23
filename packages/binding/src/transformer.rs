@@ -752,7 +752,8 @@ impl Transformer {
       Either::B(b) => usvg::Tree::from_data(b, &options),
     }
     .map_err(|err| Error::from_reason(format!("{err}")))?;
-    let mut size = tree.size().to_int_size();
+    let original_size = tree.size();
+    let mut size = original_size.to_int_size();
     let min_svg_size = 1000;
     while size.width() < min_svg_size || size.height() < min_svg_size {
       size = resvg::tiny_skia::IntSize::from_wh(size.width() * 2, size.height() * 2).unwrap();
@@ -768,9 +769,11 @@ impl Transformer {
       let color = tiny_skia::Color::from_rgba8(bg.red, bg.green, bg.blue, bg.alpha);
       pix_map.fill(color);
     }
+    let scale_x = size.width() as f32 / original_size.width();
+    let scale_y = size.height() as f32 / original_size.height();
     resvg::render(
       &tree,
-      tiny_skia::Transform::identity(),
+      tiny_skia::Transform::from_scale(scale_x, scale_y),
       &mut pix_map.as_mut(),
     );
 
