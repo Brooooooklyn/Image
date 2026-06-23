@@ -29,6 +29,8 @@ function bbox(raw, width, height) {
 // Case 1 FIRST (the headline corner-speck) so its logs print before any later SIGABRT.
 try {
   const SVG = await fs.readFile(join(ROOT_DIR, 'input-debian.svg'))
+  // The Rust-side trace (scale/transform.sx/render-bbox), returned as a string so it's JS-visible.
+  console.log('[probe] debian.svg TRACE:', Transformer.fromSvgDebug(SVG))
   const png = Transformer.fromSvg(SVG).pngSync()
   const { width, height } = new Transformer(png).metadataSync()
   const raw = Transformer.fromSvg(SVG).rawPixelsSync()
@@ -42,6 +44,7 @@ try {
 // Case 2: oversized SVG must throw (size-guard). x86 CI let it through.
 try {
   const svg = Buffer.from(`<svg width="20000" height="20000" viewBox="0 0 20000 20000" xmlns="http://www.w3.org/2000/svg"><rect width="20000" height="20000" fill="black"/></svg>`)
+  console.log('[probe] oversized 20000x20000 TRACE:', Transformer.fromSvgDebug(svg))
   Transformer.fromSvg(svg)
   console.log('[probe] oversized 20000x20000: did NOT throw -> guard BYPASSED (corrupt)')
 } catch (e) {
