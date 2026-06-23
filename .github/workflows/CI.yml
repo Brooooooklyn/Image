@@ -543,6 +543,11 @@ jobs:
       - name: List packages
         run: ls -R packages
         shell: bash
+      - name: x86 wasm SVG miscompile probe (diagnostic)
+        run: node packages/binding/__test__/x86-svg-probe.mjs
+        env:
+          NAPI_RS_FORCE_WASI: '1'
+          NAPI_IMAGE_SVG_DEBUG: '1'
       - name: Run tests
         run: yarn test -s
         env:
