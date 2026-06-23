@@ -14,6 +14,7 @@ This library support encode/decode these formats:
 | TIFF      | Baseline(no fax support) + LZW + PackBits | Rgb8, Rgba8, Gray8                      |
 | WebP      | No                                        | ✅                                      |
 | AVIF      | No                                        | ✅                                      |
+| HEIC      | ✅ (macOS only)                           | ✅ (macOS only)                         |
 | PNM       | PBM, PGM, PPM, standard PAM               | ✅                                      |
 | DDS       | DXT1, DXT3, DXT5                          | No                                      |
 | TGA       | ✅                                        | Rgb8, Rgba8, Bgr8, Bgra8, Gray8, GrayA8 |
@@ -24,6 +25,38 @@ This library support encode/decode these formats:
 See [index.d.ts](./packages/binding/index.d.ts) for API reference.
 
 ![CI](https://github.com/Brooooooklyn/image/workflows/CI/badge.svg)
+
+## HEIC support (macOS only)
+
+HEIC decode **and** encode are **macOS-only**. Both delegate to the operating system's **ImageIO**
+framework, which holds the HEVC patent license. This means the package **ships no HEVC/HEIC codec**
+and incurs no codec licensing. On non-macOS platforms, HEIC decode and `.heic()` / `.heicSync()`
+reject with a clear error.
+
+- **Decode:** reads `.heic` / `.heif` (HEVC-in-HEIF, e.g. iPhone photos). 8-bit sources decode to
+  RGBA8; 10-bit sources decode to RGBA16 (precision preserved). Wide-gamut input (e.g. Display-P3)
+  is color-matched to **sRGB** — v1 normalizes everything to sRGB and carries no ICC profile. EXIF
+  orientation is honored just like JPEG.
+- **Encode:** `new Transformer(input).heic({ quality, bitDepth })` / `.heicSync(...)`.
+  `quality` is `0-100` (default `80`). ImageIO has no truly-lossless HEIC mode, and compression `1.0`
+  engages a near-lossless path the OS *software* HEVC encoder rejects on hosts without a hardware
+  media engine (e.g. some virtualized CI runners), so the encoder clamps its internal compression
+  quality to `0.9`: `quality: 90`–`100` all map to that ceiling. It is visually indistinguishable
+  from `1.0` (a ~1-3/255 residual remains either way) and encodes deterministically on every host.
+  `bitDepth` is `8` or `10` (default follows the source — 16-bit images write 10-bit HEVC Main10).
+- **Out of scope (v1):** Apple/ISO HDR **gain-map** reconstruction. The base image is decoded at
+  full bit depth, but the auxiliary gain map (the iPhone "HDR look") is not composited. Windows
+  support is a future phase.
+
+```js
+import { Transformer } from '@napi-rs/image'
+
+// decode HEIC -> JPEG (macOS)
+const jpeg = await new Transformer(heicBuffer).jpeg(80)
+
+// encode -> HEIC (macOS)
+const heic = await new Transformer(pngBuffer).heic({ quality: 80 })
+```
 
 ## Performance
 

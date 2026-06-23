@@ -10,6 +10,8 @@ pub mod avif;
 #[cfg(feature = "binding")]
 mod fast_resize;
 #[cfg(feature = "binding")]
+pub mod heic;
+#[cfg(feature = "binding")]
 pub mod jpeg;
 // P3: deterministic integer sRGB->CIELAB + CIE76 ΔE, wired into the quantizer's
 // perceptual color ASSIGNMENT metric (`pdist` in `quantize.rs`).

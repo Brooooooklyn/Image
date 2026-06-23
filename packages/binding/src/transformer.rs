@@ -17,6 +17,7 @@ use resvg::{
 use crate::{
   avif::{AvifConfig, encode_avif_inner},
   fast_resize::{FastResizeOptions, ResizeFit, fast_resize},
+  heic::HeicConfig,
   png::PngEncodeOptions,
 };
 
@@ -28,6 +29,7 @@ pub enum EncodeOptions {
   Webp(u32),
   WebpLossless,
   Avif(Option<AvifConfig>),
+  Heic(Option<HeicConfig>),
   Bmp,
   Ico,
   Tiff,
@@ -174,12 +176,40 @@ impl From<ResizeFilterType> for FilterType {
   }
 }
 
+/// A decoded image's format. Wraps the `image` crate's `#[non_exhaustive]` `ImageFormat`
+/// (which has no HEIC variant) so HEIC can be represented alongside the standard formats.
+#[derive(Clone, Copy)]
+pub enum DetectedFormat {
+  Standard(image::ImageFormat),
+  Heic,
+}
+
+impl DetectedFormat {
+  /// The underlying `image` crate format, if any. `None` for HEIC (decoded outside the
+  /// `image` crate, and not parseable by `rexif`).
+  pub(crate) fn image_format(&self) -> Option<image::ImageFormat> {
+    match self {
+      DetectedFormat::Standard(f) => Some(*f),
+      DetectedFormat::Heic => None,
+    }
+  }
+
+  /// Lowercase format name for `Metadata.format` (must match the previous output for
+  /// existing formats, e.g. `Standard(Png)` → "png"; `Heic` → "heic").
+  pub(crate) fn as_str(&self) -> String {
+    match self {
+      DetectedFormat::Standard(f) => format!("{f:?}").to_lowercase(),
+      DetectedFormat::Heic => "heic".to_owned(),
+    }
+  }
+}
+
 pub(crate) struct ImageMetaData {
   pub(crate) image: DynamicImage,
   pub(crate) color_type: ColorType,
   pub(crate) exif: HashMap<String, String>,
   pub(crate) orientation: Option<u16>,
-  pub(crate) format: ImageFormat,
+  pub(crate) format: DetectedFormat,
   pub(crate) has_parsed_exif: bool,
 }
 
@@ -213,56 +243,77 @@ impl ThreadsafeDynamicImage {
     match image {
       None => {
         let input_buf = self.raw.as_ref();
-        let image_format = image::guess_format(input_buf).map_err(|err| {
-          Error::new(
-            Status::InvalidArg,
-            format!("Guess format from input image failed {err}"),
-          )
-        })?;
-        if with_exif && let Some((_exif, _orientation)) = parse_exif(input_buf, &image_format) {
+        // Sniff HEIC first: it shares the ISOBMFF container with AVIF but `image`'s
+        // `guess_format` can't tell them apart and has no HEIC variant. A HEIC input is
+        // routed to the OS decoder (`decode_heic`); everything else keeps the existing path.
+        let (dynamic_image, detected_format, heic_orientation) = if crate::heic::is_heic(input_buf)
+        {
+          let (img, orient) = crate::heic::decode_heic(input_buf)?;
+          (img, DetectedFormat::Heic, orient)
+        } else {
+          let image_format = image::guess_format(input_buf).map_err(|err| {
+            Error::new(
+              Status::InvalidArg,
+              format!("Guess format from input image failed {err}"),
+            )
+          })?;
+          let img = if image_format == ImageFormat::Avif {
+            let avif = libavif::decode_rgb(input_buf).map_err(|err| {
+              Error::new(
+                Status::InvalidArg,
+                format!("Decode avif image failed {err}"),
+              )
+            })?;
+            let decoded_rgb = avif.to_vec();
+            let decoded_length = decoded_rgb.len();
+            let width = avif.width();
+            let height = avif.height();
+            if (width * height * 3) as usize == decoded_length {
+              ImageBuffer::from_raw(width, height, decoded_rgb)
+                .map(DynamicImage::ImageRgb8)
+                .ok_or_else(|| {
+                  Error::new(Status::InvalidArg, "Decode avif image failed".to_owned())
+                })?
+            } else if (width * height * 4) as usize == decoded_length {
+              ImageBuffer::from_raw(width, height, decoded_rgb)
+                .map(DynamicImage::ImageRgba8)
+                .ok_or_else(|| {
+                  Error::new(Status::InvalidArg, "Decode avif image failed".to_owned())
+                })?
+            } else {
+              ImageBuffer::from_raw(width, height, decoded_rgb)
+                .map(DynamicImage::ImageLuma8)
+                .ok_or_else(|| {
+                  Error::new(Status::InvalidArg, "Decode avif image failed".to_owned())
+                })?
+            }
+          } else {
+            image::load_from_memory_with_format(input_buf, image_format)
+              .map_err(|err| Error::new(Status::InvalidArg, format!("Decode image failed {err}")))?
+          };
+          (img, DetectedFormat::Standard(image_format), None)
+        };
+
+        // HEIC orientation comes from ImageIO (Task 4); store it unconditionally so a later
+        // `get(true)`/`.rotate()` keeps it even if the first `get()` had `with_exif = false`.
+        if let Some(o) = heic_orientation {
+          orientation = Some(o);
+        }
+        // rexif EXIF only applies to image-crate formats (Jpeg/Tiff); skip for HEIC, whose
+        // `image_format()` is `None`.
+        if with_exif
+          && let Some(fmt) = detected_format.image_format()
+          && let Some((_exif, _orientation)) = parse_exif(input_buf, &fmt)
+        {
           exif = _exif;
           orientation = _orientation;
         }
-        let dynamic_image = if image_format == ImageFormat::Avif {
-          let avif = libavif::decode_rgb(input_buf).map_err(|err| {
-            Error::new(
-              Status::InvalidArg,
-              format!("Decode avif image failed {err}"),
-            )
-          })?;
-          let decoded_rgb = avif.to_vec();
-          let decoded_length = decoded_rgb.len();
-          let width = avif.width();
-          let height = avif.height();
-          if (width * height * 3) as usize == decoded_length {
-            ImageBuffer::from_raw(width, height, decoded_rgb)
-              .map(DynamicImage::ImageRgb8)
-              .ok_or_else(|| {
-                Error::new(Status::InvalidArg, "Decode avif image failed".to_owned())
-              })?
-          } else if (width * height * 4) as usize == decoded_length {
-            ImageBuffer::from_raw(width, height, decoded_rgb)
-              .map(DynamicImage::ImageRgba8)
-              .ok_or_else(|| {
-                Error::new(Status::InvalidArg, "Decode avif image failed".to_owned())
-              })?
-          } else {
-            ImageBuffer::from_raw(width, height, decoded_rgb)
-              .map(DynamicImage::ImageLuma8)
-              .ok_or_else(|| {
-                Error::new(Status::InvalidArg, "Decode avif image failed".to_owned())
-              })?
-          }
-        } else {
-          image::load_from_memory_with_format(input_buf, image_format)
-            .map_err(|err| Error::new(Status::InvalidArg, format!("Decode image failed {err}")))?
-        };
         let color_type = dynamic_image.color();
         image.replace(ImageMetaData {
           image: dynamic_image,
           exif,
           orientation,
-          format: image_format,
+          format: detected_format,
           // Only mark EXIF as parsed when we actually attempted it. Otherwise a later
           // `get(true)` (e.g. from `.rotate()`) would see `has_parsed_exif == true`,
           // skip parsing, and silently drop the orientation. See issue #199.
@@ -272,8 +323,13 @@ impl ThreadsafeDynamicImage {
         Ok(image.as_mut().unwrap())
       }
       Some(res) => {
-        if !res.has_parsed_exif && with_exif {
-          if let Some((exif, orientation)) = parse_exif(self.raw.as_ref(), &res.format) {
+        // `parse_exif` only applies to image-crate formats; HEIC has no underlying
+        // `ImageFormat`, so skip it (and don't flip `has_parsed_exif`).
+        if !res.has_parsed_exif
+          && with_exif
+          && let Some(fmt) = res.format.image_format()
+        {
+          if let Some((exif, orientation)) = parse_exif(self.raw.as_ref(), &fmt) {
             res.exif = exif;
             res.orientation = orientation;
           }
@@ -354,7 +410,7 @@ impl Task for MetadataTask {
     u32,
     HashMap<String, String>,
     Option<u16>,
-    ImageFormat,
+    DetectedFormat,
     ColorType,
   );
   type JsValue = Metadata;
@@ -384,7 +440,7 @@ impl Task for MetadataTask {
       height: output.1,
       exif: (!output.2.is_empty()).then_some(output.2),
       orientation: output.3.map(|o| o as u32),
-      format: format!("{:?}", output.4).to_lowercase(),
+      format: output.4.as_str(),
       color_type: output.5.into(),
     })
   }
@@ -564,25 +620,17 @@ impl Task for EncodeTask {
     }
 
     let dynamic_image = &mut meta.image;
-    let color_type = &meta.color_type;
     let width = dynamic_image.width();
     let height = dynamic_image.height();
     let format = match self.options {
       EncodeOptions::Webp(quality_factor) => {
-        let (output_buf, size) = unsafe {
-          crate::webp::encode_webp_inner(dynamic_image, quality_factor, width, height, color_type)
-        }?;
+        let (output_buf, size) =
+          unsafe { crate::webp::encode_webp_inner(dynamic_image, quality_factor, width, height) }?;
         return Ok(EncodeOutput::Raw(output_buf, size));
       }
       EncodeOptions::WebpLossless => {
-        let (output_buf, size) = unsafe {
-          crate::webp::lossless_encode_webp_inner(
-            dynamic_image.as_bytes(),
-            width,
-            height,
-            color_type,
-          )
-        }?;
+        let (output_buf, size) =
+          unsafe { crate::webp::lossless_encode_webp_inner(dynamic_image, width, height) }?;
         if output_buf.is_null() {
           return Err(Error::new(
             Status::GenericFailure,
@@ -597,6 +645,10 @@ impl Task for EncodeTask {
       EncodeOptions::Avif(ref options) => {
         let output = encode_avif_inner(options.clone(), dynamic_image)?;
         return Ok(EncodeOutput::Avif(output));
+      }
+      EncodeOptions::Heic(ref options) => {
+        let buf = crate::heic::encode_heic(dynamic_image, options.clone())?;
+        return Ok(EncodeOutput::Buffer(buf));
       }
       EncodeOptions::Png(ref options) => {
         let mut output: Cursor<Vec<u8>> = Cursor::new(Vec::with_capacity(
@@ -748,7 +800,7 @@ impl Transformer {
         orientation: None,
         image: DynamicImage::ImageRgba8(image),
         exif: HashMap::new(),
-        format: ImageFormat::Png,
+        format: DetectedFormat::Standard(ImageFormat::Png),
         has_parsed_exif: true,
       }));
       Ok(Self {
@@ -1045,6 +1097,37 @@ impl Transformer {
   }
 
   #[napi]
+  /// Encode to HEIC using the OS-native ImageIO HEVC encoder (macOS only).
+  /// Rejects on non-macOS platforms.
+  pub fn heic(
+    &mut self,
+    options: Option<HeicConfig>,
+    signal: Option<AbortSignal>,
+  ) -> AsyncTask<EncodeTask> {
+    AsyncTask::with_optional_signal(
+      EncodeTask {
+        image: self.dynamic_image.clone(),
+        options: EncodeOptions::Heic(options),
+        image_transform_args: self.image_transform_args.clone(),
+      },
+      signal,
+    )
+  }
+
+  #[napi]
+  /// Encode to HEIC using the OS-native ImageIO HEVC encoder (macOS only).
+  /// Rejects on non-macOS platforms.
+  pub fn heic_sync(&mut self, env: Env, options: Option<HeicConfig>) -> Result<Buffer> {
+    let mut encoder = EncodeTask {
+      image: self.dynamic_image.clone(),
+      options: EncodeOptions::Heic(options),
+      image_transform_args: self.image_transform_args.clone(),
+    };
+    let output = encoder.compute()?;
+    encoder.resolve(env, output)
+  }
+
+  #[napi]
   pub fn png(
     &mut self,
     options: Option<PngEncodeOptions>,
@@ -1266,4 +1349,40 @@ fn parse_exif(
     _ => {}
   }
   None
+}
+
+#[cfg(test)]
+mod tests {
+  use super::DetectedFormat;
+  use image::ImageFormat;
+
+  #[test]
+  fn standard_as_str_matches_lowercase_debug() {
+    assert_eq!(DetectedFormat::Standard(ImageFormat::Png).as_str(), "png");
+    assert_eq!(DetectedFormat::Standard(ImageFormat::Jpeg).as_str(), "jpeg");
+    assert_eq!(DetectedFormat::Standard(ImageFormat::WebP).as_str(), "webp");
+    assert_eq!(DetectedFormat::Standard(ImageFormat::Avif).as_str(), "avif");
+  }
+
+  #[test]
+  fn heic_as_str_is_heic() {
+    assert_eq!(DetectedFormat::Heic.as_str(), "heic");
+  }
+
+  #[test]
+  fn standard_image_format_is_some() {
+    assert_eq!(
+      DetectedFormat::Standard(ImageFormat::Png).image_format(),
+      Some(ImageFormat::Png)
+    );
+    assert_eq!(
+      DetectedFormat::Standard(ImageFormat::Jpeg).image_format(),
+      Some(ImageFormat::Jpeg)
+    );
+  }
+
+  #[test]
+  fn heic_image_format_is_none() {
+    assert_eq!(DetectedFormat::Heic.image_format(), None);
+  }
 }
