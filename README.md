@@ -37,8 +37,9 @@ reject with a clear error.
   RGBA8; 10-bit sources decode to RGBA16 (precision preserved). Wide-gamut input (e.g. Display-P3)
   is color-matched to **sRGB** — v1 normalizes everything to sRGB and carries no ICC profile. EXIF
   orientation is honored just like JPEG.
-- **Encode:** `new Transformer(input).heic({ quality, lossless, bitDepth })` / `.heicSync(...)`.
-  `quality` is `0-100` (default `80`); `lossless: true` writes a lossless HEIC; `bitDepth` is `8` or
+- **Encode:** `new Transformer(input).heic({ quality, bitDepth })` / `.heicSync(...)`.
+  `quality` is `0-100` (default `80`); `quality: 100` is maximum quality (ImageIO has no
+  truly-lossless HEIC mode, so expect a ~1-3/255 residual even on flat color). `bitDepth` is `8` or
   `10` (default follows the source — 16-bit images write 10-bit HEVC Main10).
 - **Out of scope (v1):** Apple/ISO HDR **gain-map** reconstruction. The base image is decoded at
   full bit depth, but the auxiliary gain map (the iPhone "HDR look") is not composited. Windows

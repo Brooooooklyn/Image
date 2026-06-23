@@ -80,8 +80,10 @@ onMac('encodes png -> heic (round-trip)', async (t) => {
   t.is(meta.height, 681)
 })
 
-onMac('heic lossless', async (t) => {
-  const buf = new Transformer(PNG).heicSync({ lossless: true })
+onMac('heic max quality (quality 100)', async (t) => {
+  // ImageIO HEIC has no truly-lossless mode; `quality: 100` maps to compression quality 1.0, the
+  // maximum the OS encoder offers (a ~1-3/255 residual remains). Just confirm it round-trips.
+  const buf = new Transformer(PNG).heicSync({ quality: 100 })
   t.true(Buffer.isBuffer(buf))
   t.true(buf.length > 0)
   const meta = await new Transformer(Buffer.from(buf)).metadata()
@@ -92,7 +94,9 @@ onMac('heic lossless', async (t) => {
 
 onMac('heic 10-bit round-trip', async (t) => {
   // Decode the committed 10-bit HEIC (-> RGBA16 source), re-encode at 10-bit, and confirm the
-  // re-decoded output is still RGBA16 (`kCGImagePropertyDepth` > 8).
+  // re-decoded output is still RGBA16 (`kCGImagePropertyDepth` > 8). 10-bit HEIC comes purely from
+  // feeding a 16-bpc CGImage on the encode side (ImageIO infers HEVC Main10; no explicit depth
+  // property), so this RGBA16 re-decode assertion is the proof the encoded file is really >8-bit.
   const buf = new Transformer(HEIC_10BIT).heicSync({ bitDepth: 10 })
   t.true(Buffer.isBuffer(buf))
   t.true(buf.length > 0)

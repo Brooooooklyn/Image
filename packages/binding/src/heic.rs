@@ -10,10 +10,9 @@ use napi_derive::napi;
 #[derive(Default, Clone)]
 pub struct HeicConfig {
   /// Lossy quality 0-100 (maps to `kCGImageDestinationLossyCompressionQuality` 0.0-1.0).
-  /// Ignored when `lossless` is true. Default 80 (matches AVIF).
+  /// Use `quality: 100` for maximum quality (HEIC/HEVC via ImageIO has no truly-lossless mode,
+  /// so expect a ~1-3/255 residual even on flat color). Default 80 (matches AVIF).
   pub quality: Option<u32>,
-  /// Write a lossless HEIC (compression quality = 1.0). Default false.
-  pub lossless: Option<bool>,
   /// Output bit depth, 8 or 10. Default: follow the source (16-bit `DynamicImage` -> 10, else 8).
   pub bit_depth: Option<u8>,
 }
@@ -40,32 +39,49 @@ pub fn is_heic(buf: &[u8]) -> bool {
     return false;
   }
 
+  // AVIF shares the ISOBMFF container with HEIF. If `avif`/`avis` appears ANYWHERE in the brand
+  // list (major brand or any compatible brand) the file must defer to the existing libavif path,
+  // even when the major brand is a generic HEIF brand like `mif1`/`msf1`/`heif`. This AVIF veto is
+  // checked BEFORE any HEIF-positive, so a single pass collects both a HEIF hit and an AVIF veto and
+  // the veto wins.
   let major = &buf[8..12];
-  // AVIF shares the container; its major brand must defer to the existing AVIF path.
-  if AVIF_BRANDS.iter().any(|brand| major == *brand) {
+
+  // Box-size bound for the compatible-brand scan. The big-endian box size at [0..4] would normally
+  // bound the scan, but a single `box_size.min(len)` bound breaks size-0 ("to end of file"): a
+  // declared size of 0 collapses the bound to 0 and the major brand at [8..12] is never reached.
+  // So: only trust a declared size that is at least a full minimal ftyp (>= 16); otherwise scan to
+  // the end of the buffer. The major brand below is inspected unconditionally regardless of `end`.
+  let declared = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
+  let end = if declared >= 16 {
+    declared.min(buf.len())
+  } else {
+    buf.len()
+  };
+
+  // Single pass: inspect the major brand, then every compatible brand from offset 16 (after
+  // size + type + major + 4-byte minor version), stepping 4 bytes and ignoring a trailing partial
+  // (<4 byte) chunk. Record whether any HEIF brand was seen; bail immediately on any AVIF brand.
+  let is_avif = |brand: &[u8]| AVIF_BRANDS.iter().any(|b| brand == *b);
+  let is_heif = |brand: &[u8]| HEIF_BRANDS.iter().any(|b| brand == *b);
+
+  if is_avif(major) {
     return false;
   }
-  if HEIF_BRANDS.iter().any(|brand| major == *brand) {
-    return true;
-  }
-
-  // Compatible brands start at offset 16 (after size + type + major + 4-byte minor version).
-  // The big-endian box size at [0..4] bounds the scan; clamp it to the actual buffer length
-  // so an oversized/zero/garbage size can neither over-read nor underflow the loop.
-  let box_size = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
-  let end = box_size.min(buf.len());
+  let mut found_heif = is_heif(major);
 
   let mut offset = 16;
-  // Step 4 bytes per brand; a trailing partial (<4 byte) chunk is ignored.
   while offset + 4 <= end {
     let brand = &buf[offset..offset + 4];
-    if HEIF_BRANDS.iter().any(|b| brand == *b) {
-      return true;
+    if is_avif(brand) {
+      return false;
+    }
+    if is_heif(brand) {
+      found_heif = true;
     }
     offset += 4;
   }
 
-  false
+  found_heif
 }
 
 /// Un-premultiply a single 8-bit color channel by its alpha, recovering straight alpha.
@@ -344,9 +360,14 @@ pub(crate) fn encode_heic(img: &DynamicImage, opts: Option<HeicConfig>) -> Resul
   use objc2_image_io::{CGImageDestination, kCGImageDestinationLossyCompressionQuality};
 
   let opts = opts.unwrap_or_default();
-  let quality = opts.quality.unwrap_or(80);
-  let lossless = opts.lossless.unwrap_or(false);
+  // Compression quality 0.0-1.0; `quality: 100` -> 1.0 (maximum). ImageIO HEIC has no truly-lossless
+  // mode, so 1.0 is as close as the OS encoder gets (a ~1-3/255 residual remains even on flat color).
+  let quality_value = (opts.quality.unwrap_or(80).min(100) as f64) / 100.0;
   // Resolve output depth: explicit bit_depth wins; otherwise follow a 16-bit source.
+  // 10-bit HEIC is produced purely by feeding a 16-bpc CGImage below: ImageIO infers HEVC Main10
+  // from the source bit depth (we set no explicit depth property). The `heic.spec.mjs` 10-bit
+  // round-trip re-decodes the output and asserts `Rgba16`, which proves the encoded file is really
+  // >8-bit (our decoder yields Rgba16 only when the source depth > 8).
   let sixteen_bit = match opts.bit_depth {
     Some(8) => false,
     Some(10) => true,
@@ -474,12 +495,7 @@ pub(crate) fn encode_heic(img: &DynamicImage, opts: Option<HeicConfig>) -> Resul
         )
       })?;
 
-    // 6. Properties: lossy compression quality (1.0 when lossless, else quality/100).
-    let quality_value = if lossless {
-      1.0
-    } else {
-      (quality.min(100) as f64) / 100.0
-    };
+    // 6. Properties: lossy compression quality (quality/100; `quality: 100` -> 1.0 = max quality).
     let quality_number = CFNumber::new_f64(quality_value);
     let quality_key: &CFString = unsafe { kCGImageDestinationLossyCompressionQuality };
     // `from_slices` yields a typed `CFDictionary<CFString, CFNumber>`; `add_image` wants the
@@ -588,6 +604,25 @@ mod tests {
   fn avif_major_with_heif_compatible_is_not_heic() {
     // The major-brand AVIF guard must win even when `mif1` is listed as compatible.
     assert!(!is_heic(&ftyp(b"avif", b"\0\0\0\0", &[b"mif1"], None)));
+  }
+
+  #[test]
+  fn mif1_major_with_avif_compatible_is_not_heic() {
+    // THE FIX: a generic HEIF major brand (`mif1`) with `avif` ONLY in the compatible list must
+    // defer to the libavif path. Pre-fix this returned true (HEIF-positive on the major brand).
+    assert!(!is_heic(&ftyp(b"mif1", b"\0\0\0\0", &[b"avif"], None)));
+  }
+
+  #[test]
+  fn msf1_major_with_avis_compatible_is_not_heic() {
+    // THE FIX: `msf1` major with `avis` (animated AVIF) only as a compatible brand is AVIF, not HEIC.
+    assert!(!is_heic(&ftyp(b"msf1", b"\0\0\0\0", &[b"avis"], None)));
+  }
+
+  #[test]
+  fn mif1_major_with_heic_compatible_is_heic() {
+    // A generic HEIF major brand with a real HEIF compatible brand and no AVIF brand is HEIC.
+    assert!(is_heic(&ftyp(b"mif1", b"\0\0\0\0", &[b"heic"], None)));
   }
 
   // --- Negative: non-ISOBMFF / malformed inputs ---

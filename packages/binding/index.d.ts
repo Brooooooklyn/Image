@@ -270,11 +270,10 @@ export declare enum FilterType {
 export interface HeicConfig {
   /**
    * Lossy quality 0-100 (maps to `kCGImageDestinationLossyCompressionQuality` 0.0-1.0).
-   * Ignored when `lossless` is true. Default 80 (matches AVIF).
+   * Use `quality: 100` for maximum quality (HEIC/HEVC via ImageIO has no truly-lossless mode,
+   * so expect a ~1-3/255 residual even on flat color). Default 80 (matches AVIF).
    */
   quality?: number
-  /** Write a lossless HEIC (compression quality = 1.0). Default false. */
-  lossless?: boolean
   /** Output bit depth, 8 or 10. Default: follow the source (16-bit `DynamicImage` -> 10, else 8). */
   bitDepth?: number
 }
