@@ -192,6 +192,10 @@ jobs:
         run: ${{ matrix.settings.setup }}
         if: ${{ matrix.settings.setup }}
         shell: bash
+      - name: Force fresh wasm build (the static target/ cache key serves a stale binary)
+        if: ${{ matrix.settings.target == 'wasm32-wasip1-threads' }}
+        run: rm -rf target/wasm32-wasip1-threads
+        shell: bash
       - name: Install LLVM and Clang
         uses: KyleMayes/install-llvm-action@v2
         if: ${{ matrix.settings.target == 'armv7-unknown-linux-gnueabihf' }}
