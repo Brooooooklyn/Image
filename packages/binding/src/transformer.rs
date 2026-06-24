@@ -182,6 +182,7 @@ impl From<ResizeFilterType> for FilterType {
 pub enum DetectedFormat {
   Standard(image::ImageFormat),
   Heic,
+  Svg,
 }
 
 impl DetectedFormat {
@@ -191,6 +192,7 @@ impl DetectedFormat {
     match self {
       DetectedFormat::Standard(f) => Some(*f),
       DetectedFormat::Heic => None,
+      DetectedFormat::Svg => None,
     }
   }
 
@@ -200,6 +202,7 @@ impl DetectedFormat {
     match self {
       DetectedFormat::Standard(f) => format!("{f:?}").to_lowercase(),
       DetectedFormat::Heic => "heic".to_owned(),
+      DetectedFormat::Svg => "svg".to_owned(),
     }
   }
 }
@@ -773,13 +776,13 @@ pub struct Transformer {
   image_transform_args: ImageTransformArgs,
 }
 
-fn transformer_from_rgba8(image: RgbaImage) -> Transformer {
+fn transformer_from_rgba8(image: RgbaImage, format: DetectedFormat) -> Transformer {
   let image_meta = Box::new(Some(ImageMetaData {
     color_type: ColorType::Rgba8,
     orientation: None,
     image: DynamicImage::ImageRgba8(image),
     exif: HashMap::new(),
-    format: DetectedFormat::Standard(ImageFormat::Png),
+    format,
     has_parsed_exif: true,
   }));
   Transformer {
@@ -895,7 +898,7 @@ impl Transformer {
         "Rendered SVG pixel buffer does not match its dimensions".to_owned(),
       )
     })?;
-    Ok(transformer_from_rgba8(image))
+    Ok(transformer_from_rgba8(image, DetectedFormat::Svg))
   }
 
   #[napi]
@@ -912,7 +915,10 @@ impl Transformer {
         Either::B(b) => b.to_vec(),
       },
     ) {
-      Ok(transformer_from_rgba8(image))
+      Ok(transformer_from_rgba8(
+        image,
+        DetectedFormat::Standard(ImageFormat::Png),
+      ))
     } else {
       Err(Error::new(
         Status::InvalidArg,
@@ -1472,6 +1478,18 @@ mod tests {
   #[test]
   fn heic_as_str_is_heic() {
     assert_eq!(DetectedFormat::Heic.as_str(), "heic");
+  }
+
+  #[test]
+  fn svg_as_str_is_svg() {
+    assert_eq!(DetectedFormat::Svg.as_str(), "svg");
+    // Standard(Png) must still report "png" (raw rgba pixel path).
+    assert_eq!(DetectedFormat::Standard(ImageFormat::Png).as_str(), "png");
+  }
+
+  #[test]
+  fn svg_image_format_is_none() {
+    assert_eq!(DetectedFormat::Svg.image_format(), None);
   }
 
   #[test]

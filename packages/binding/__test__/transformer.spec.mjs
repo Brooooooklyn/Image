@@ -71,6 +71,14 @@ test('should be able to create transformer from raw rgba pixels', async (t) => {
   await t.notThrowsAsync(() => Transformer.fromRgbaPixels(pixels, 32, 32).webp())
 })
 
+// Regression for https://github.com/Brooooooklyn/Image/issues/158 (part 2):
+// raw RGBA pixel input keeps reporting format "png" even though SVG input now reports "svg".
+test('raw rgba pixels still report format "png" (#158)', (t) => {
+  const pixels = decode('LEHV6nWB2yk8pyo0adR*.7kCMdnj', 32, 32)
+  const meta = Transformer.fromRgbaPixels(pixels, 32, 32).metadataSync()
+  t.is(meta.format, 'png')
+})
+
 test('should be able to create transformer from SVG', (t) => {
   t.notThrows(() => Transformer.fromSvg(SVG).jpegSync())
 })
