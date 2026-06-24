@@ -559,6 +559,37 @@ jobs:
         env:
           NAPI_RS_FORCE_WASI: 'error'
 
+  test-rust-binding:
+    name: Unit test binding (cargo test)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      # nasm builds the aom/AVIF C deps; cmake/clang ship on the macOS runner image.
+      - name: Setup nasm
+        uses: ilammy/setup-nasm@v1
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: rust-unit-test-cargo-cache
+      # Runs the binding's pure-Rust unit tests (transformer/avif/etc.), which the AVA
+      # `yarn test` path cannot reach for 16-bit / float / HDR / grayscale color models.
+      - name: cargo test
+        run: cargo test -p napi_rs_image
+        env:
+          # The binding is a cdylib that resolves `napi_*` symbols from the host Node
+          # process at runtime; the unit-test binary has no host, so defer those symbols
+          # at link time (macOS linker) instead of failing on undefined references.
+          RUSTFLAGS: '-C link-arg=-undefined -C link-arg=dynamic_lookup'
+
   benchmark:
     name: Benchmark pngQuantize (CodSpeed)
     runs-on: ubuntu-latest
@@ -618,6 +649,7 @@ jobs:
       - test-linux-aarch64-gnu-binding
       - test-linux-arm-gnueabihf-binding
       - test-wasi-on-nodejs
+      - test-rust-binding
     steps:
       - uses: actions/checkout@v7
       - name: Setup node

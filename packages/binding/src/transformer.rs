@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use image::imageops::overlay;
 use image::{
-  ColorType, DynamicImage, ImageBuffer, ImageEncoder, ImageFormat, RgbaImage, imageops::FilterType,
+  ColorType, DynamicImage, ImageBuffer, ImageEncoder, ImageFormat, Pixel, RgbaImage,
+  imageops::FilterType,
 };
 use libavif::AvifData;
 use napi::bindgen_prelude::*;
@@ -512,13 +513,16 @@ struct ImageTransformArgs {
   orientation: Option<Orientation>,
   crop: Option<(u32, u32, u32, u32)>,
   overlay: Vec<(Arc<Uint8Array>, i64, i64)>,
+  /// Multiply the alpha channel by this factor (0.0..=1.0). Promotes the image to RGBA8.
+  opacity: Option<f32>,
 }
 
 impl ImageTransformArgs {
   /// Whether any staged transform changes the encoded image's dimensions or
   /// color type. Pure value-filters (invert/contrast/blur/unsharpen/filter3x3/
   /// brighten/huerotate) and the in-place overlay do not, so `metadata()` can
-  /// skip cloning + applying them.
+  /// skip cloning + applying them. `opacity` is included: it promotes the image
+  /// to RGBA8, so `metadata().colorType` must reflect it (like `grayscale`).
   fn changes_dimensions_or_color(&self) -> bool {
     self.rotate
       || self.orientation.is_some()
@@ -526,6 +530,7 @@ impl ImageTransformArgs {
       || self.fast_resize.is_some()
       || self.grayscale
       || self.crop.is_some()
+      || self.opacity.is_some()
   }
 
   /// No staged transform — the encode pipeline only reads the image, so it can borrow the
@@ -545,6 +550,7 @@ impl ImageTransformArgs {
       && self.huerotate.is_none()
       && self.crop.is_none()
       && self.overlay.is_empty()
+      && self.opacity.is_none()
   }
 }
 
@@ -634,11 +640,18 @@ fn apply_transforms(
     *image = image.grayscale();
   }
   if for_encode {
+    // Alpha invariant (#42): the value/color filters must leave alpha untouched so opacity
+    // scales the real transparency, while the SPATIAL filters (`blur`/`unsharpen`/
+    // `filter3x3`) feather alpha on purpose. `invert` (passes `rgba[3]` through) and
+    // `brighten` (`map_with_alpha(|a| a)`) already do; `apply_contrast` and
+    // `apply_huerotate` are depth-aware, alpha-preserving re-implementations of the crate
+    // filters (which otherwise scale/crush alpha as a side effect). Nothing here needs an
+    // alpha snapshot.
     if args.invert {
       image.invert();
     }
     if let Some(contrast) = args.contrast {
-      *image = image.adjust_contrast(contrast);
+      apply_contrast(image, contrast);
     }
     if let Some(blur) = args.blur {
       *image = image.blur(blur);
@@ -653,8 +666,15 @@ fn apply_transforms(
       *image = image.brighten(brighten);
     }
     if let Some(hue) = args.huerotate {
-      *image = image.huerotate(hue);
+      apply_huerotate(image, hue);
     }
+  }
+  // Multiply the alpha channel (issue #42), applied AFTER the value filters. The value
+  // filters leave alpha untouched and the spatial filters feather it on purpose, so the
+  // CURRENT alpha is exactly what opacity should scale. Unconditional (not gated on
+  // `for_encode`) so a pending opacity is reflected in `metadata().colorType`.
+  if let Some(factor) = args.opacity {
+    apply_opacity(image, factor);
   }
   if let Some((x, y, width, height)) = args.crop {
     *image = image.crop_imm(x, y, width, height);
@@ -1137,6 +1157,23 @@ impl Transformer {
   }
 
   #[napi]
+  /// Multiply the image's alpha channel by `factor` (clamped to `0.0..=1.0`),
+  /// like CSS `opacity`. `1.0` leaves the image unchanged; `0.0` makes it fully
+  /// transparent. Existing transparency is preserved (`new = old * factor`), and
+  /// the image is promoted to an alpha-capable type while keeping its bit depth
+  /// (RGBA8 / RGBA16 / RGBA32F). Out-of-range float (HDR) alpha is normalized into
+  /// `0.0..=1.0` before the factor is applied, so a requested fade is always effective.
+  ///
+  /// Like every other filter, this applies to *this* image's content; a later
+  /// `overlay` is composited on top afterward. To fade an image you are dropping
+  /// onto another, call `opacity` on that (top) image first, then pass it to the
+  /// bottom image's `overlay`. Handy for fade-out animation frames.
+  pub fn opacity(&mut self, factor: f64) -> &Self {
+    self.image_transform_args.opacity = Some(factor as f32);
+    self
+  }
+
+  #[napi]
   /// Crop a cut-out of this image delimited by the bounding rectangle.
   pub fn crop(&mut self, x: u32, y: u32, width: u32, height: u32) -> &Self {
     self.image_transform_args.crop = Some((x, y, width, height));
@@ -1490,6 +1527,210 @@ impl Transformer {
     output.into_buffer_slice(env)
   }
 }
+/// Adjust the contrast of `image`'s color/luma channels by `contrast`, preserving bit
+/// depth and the alpha channel.
+///
+/// `image`'s `adjust_contrast` maps EVERY channel with `pixel.map`, including alpha — so
+/// it scales transparency as an unwanted side effect (contrast is a luma/color op). This
+/// applies the identical per-channel curve `clamp(((c/max - 0.5) * percent + 0.5) * max)`
+/// using the real per-depth `max` (so color output is byte-identical to the crate) but
+/// via `map_with_alpha`, leaving the alpha channel untouched. Operates in place per native
+/// type — no full-image copy. See issue #42.
+fn apply_contrast(image: &mut DynamicImage, contrast: f32) {
+  let percent = ((100.0 + contrast) / 100.0).powi(2);
+  // The crate truncates (`NumCast`/`as`) after clamping, so we cast (not round) to match.
+  let curve = move |c: f32, max: f32| (((c / max - 0.5) * percent + 0.5) * max).clamp(0.0, max);
+  macro_rules! contrast_int {
+    ($buf:expr, $ty:ty, $max:expr) => {{
+      for pixel in $buf.pixels_mut() {
+        *pixel = pixel.map_with_alpha(|c| curve(c as f32, $max) as $ty, |a| a);
+      }
+    }};
+  }
+  match image {
+    DynamicImage::ImageLuma8(buf) => contrast_int!(buf, u8, 255.0),
+    DynamicImage::ImageLumaA8(buf) => contrast_int!(buf, u8, 255.0),
+    DynamicImage::ImageRgb8(buf) => contrast_int!(buf, u8, 255.0),
+    DynamicImage::ImageRgba8(buf) => contrast_int!(buf, u8, 255.0),
+    DynamicImage::ImageLuma16(buf) => contrast_int!(buf, u16, 65535.0),
+    DynamicImage::ImageLumaA16(buf) => contrast_int!(buf, u16, 65535.0),
+    DynamicImage::ImageRgb16(buf) => contrast_int!(buf, u16, 65535.0),
+    DynamicImage::ImageRgba16(buf) => contrast_int!(buf, u16, 65535.0),
+    DynamicImage::ImageRgb32F(buf) => {
+      for pixel in buf.pixels_mut() {
+        *pixel = pixel.map_with_alpha(|c| curve(c, 1.0), |a| a);
+      }
+    }
+    DynamicImage::ImageRgba32F(buf) => {
+      for pixel in buf.pixels_mut() {
+        *pixel = pixel.map_with_alpha(|c| curve(c, 1.0), |a| a);
+      }
+    }
+    _ => {}
+  }
+}
+
+/// Hue-rotate `image` by `degrees`, preserving bit depth and alpha.
+///
+/// `image` 0.25's `DynamicImage::huerotate` clamps EVERY output channel against a
+/// hardcoded `255`, which crushes >8-bit color to 8-bit and clamps alpha to 255 (it
+/// also treats grayscale luma/alpha as RGB, emitting garbage). This re-implements the
+/// same standard hue-rotation matrix (so 8-bit RGB/RGBA output stays byte-identical to
+/// the crate) but clamps each color channel to its real per-depth max — 255 (`u8`),
+/// 65535 (`u16`), 1.0 (`f32`) — and copies the alpha channel through untouched.
+/// Grayscale has no hue, so rotating it leaves luma (and alpha) unchanged.
+fn apply_huerotate(image: &mut DynamicImage, degrees: i32) {
+  // 0 and 360 degrees are documented no-ops. Short-circuit so the identity rotation is
+  // EXACTLY the input for every type (no float rounding, and NaN / HDR samples pass
+  // through untouched instead of being run through the matrix).
+  if degrees.rem_euclid(360) == 0 {
+    return;
+  }
+  let angle = (degrees as f64).to_radians();
+  let (cosv, sinv) = (angle.cos(), angle.sin());
+  // Same coefficients as `image`'s `imageops::huerotate` / CSS `hue-rotate()`; each row
+  // sums to 1.0, so a neutral gray maps to itself.
+  let m = [
+    0.213 + cosv * 0.787 - sinv * 0.213,
+    0.715 - cosv * 0.715 - sinv * 0.715,
+    0.072 - cosv * 0.072 + sinv * 0.928,
+    0.213 - cosv * 0.213 + sinv * 0.143,
+    0.715 + cosv * 0.285 + sinv * 0.140,
+    0.072 - cosv * 0.072 - sinv * 0.283,
+    0.213 - cosv * 0.213 - sinv * 0.787,
+    0.715 - cosv * 0.715 + sinv * 0.715,
+    0.072 + cosv * 0.928 + sinv * 0.072,
+  ];
+  let rotate = |r: f64, g: f64, b: f64| {
+    (
+      m[0] * r + m[1] * g + m[2] * b,
+      m[3] * r + m[4] * g + m[5] * b,
+      m[6] * r + m[7] * g + m[8] * b,
+    )
+  };
+  // Lower-clamp a float channel to 0 (no negative light) while PRESERVING NaN: `NaN < 0.0`
+  // is false, so NaN passes through instead of collapsing to 0 like `f32::max` would.
+  // HDR magnitudes above 1.0 are kept.
+  let clamp_lo = |v: f64| -> f32 {
+    let v = v as f32;
+    if v < 0.0 { 0.0 } else { v }
+  };
+  match image {
+    // Integer RGB(A): truncate toward zero after clamping to the real max, matching the
+    // crate's `NumCast::from` (`as` cast) so 8-bit output is identical.
+    DynamicImage::ImageRgb8(buf) => {
+      for p in buf.pixels_mut() {
+        let (r, g, b) = rotate(p[0] as f64, p[1] as f64, p[2] as f64);
+        p[0] = r.clamp(0.0, 255.0) as u8;
+        p[1] = g.clamp(0.0, 255.0) as u8;
+        p[2] = b.clamp(0.0, 255.0) as u8;
+      }
+    }
+    DynamicImage::ImageRgba8(buf) => {
+      for p in buf.pixels_mut() {
+        let (r, g, b) = rotate(p[0] as f64, p[1] as f64, p[2] as f64);
+        p[0] = r.clamp(0.0, 255.0) as u8;
+        p[1] = g.clamp(0.0, 255.0) as u8;
+        p[2] = b.clamp(0.0, 255.0) as u8;
+        // p[3] (alpha) left untouched.
+      }
+    }
+    DynamicImage::ImageRgb16(buf) => {
+      for p in buf.pixels_mut() {
+        let (r, g, b) = rotate(p[0] as f64, p[1] as f64, p[2] as f64);
+        p[0] = r.clamp(0.0, 65535.0) as u16;
+        p[1] = g.clamp(0.0, 65535.0) as u16;
+        p[2] = b.clamp(0.0, 65535.0) as u16;
+      }
+    }
+    DynamicImage::ImageRgba16(buf) => {
+      for p in buf.pixels_mut() {
+        let (r, g, b) = rotate(p[0] as f64, p[1] as f64, p[2] as f64);
+        p[0] = r.clamp(0.0, 65535.0) as u16;
+        p[1] = g.clamp(0.0, 65535.0) as u16;
+        p[2] = b.clamp(0.0, 65535.0) as u16;
+        // p[3] (alpha) left untouched.
+      }
+    }
+    // Float channels are HDR: clamp only the lower bound to 0 (no negative light) and
+    // preserve finite magnitudes above 1.0 instead of clipping them to SDR. `max(0.0)`
+    // also sanitizes NaN to 0.
+    DynamicImage::ImageRgb32F(buf) => {
+      for p in buf.pixels_mut() {
+        let (r, g, b) = rotate(p[0] as f64, p[1] as f64, p[2] as f64);
+        p[0] = clamp_lo(r);
+        p[1] = clamp_lo(g);
+        p[2] = clamp_lo(b);
+      }
+    }
+    DynamicImage::ImageRgba32F(buf) => {
+      for p in buf.pixels_mut() {
+        let (r, g, b) = rotate(p[0] as f64, p[1] as f64, p[2] as f64);
+        p[0] = clamp_lo(r);
+        p[1] = clamp_lo(g);
+        p[2] = clamp_lo(b);
+        // p[3] (alpha) left untouched.
+      }
+    }
+    // Grayscale (Luma / LumaA, any depth): no hue to rotate — leave luma and alpha as-is.
+    _ => {}
+  }
+}
+
+/// Multiply the alpha channel by `factor`, preserving the source bit depth.
+///
+/// `factor` is clamped to `0.0..=1.0`; a non-finite `factor` (NaN / ∞) is treated
+/// as `1.0` (identity) so bad input never silently zeroes the image. The image is
+/// promoted to the alpha-capable type *of its own depth* (RGBA8 / RGBA16 / RGBA32F)
+/// instead of always dropping to 8-bit, so 16-bit (e.g. 10-bit HEIC) and HDR float
+/// sources keep their precision. See issue #42 and the bit-depth regression tests.
+///
+/// Scales the image's CURRENT alpha. The value filters (`apply_contrast`,
+/// `apply_huerotate`, `invert`, `brighten`) leave alpha untouched and the spatial filters
+/// (`blur`/`unsharpen`/`filter3x3`) feather alpha on purpose, so the current alpha is
+/// always exactly what opacity should scale.
+fn apply_opacity(image: &mut DynamicImage, factor: f32) {
+  let factor = if factor.is_finite() {
+    factor.clamp(0.0, 1.0)
+  } else {
+    1.0
+  };
+  match image.color() {
+    ColorType::L16 | ColorType::La16 | ColorType::Rgb16 | ColorType::Rgba16 => {
+      let mut buf = image.to_rgba16();
+      for pixel in buf.pixels_mut() {
+        pixel[3] = (pixel[3] as f32 * factor).round().clamp(0.0, 65535.0) as u16;
+      }
+      *image = DynamicImage::ImageRgba16(buf);
+    }
+    ColorType::Rgb32F | ColorType::Rgba32F => {
+      let mut buf = image.to_rgba32f();
+      for pixel in buf.pixels_mut() {
+        // Normalize the SOURCE alpha into the unit range BEFORE applying the factor, so a
+        // requested fade is always effective. Clamping the *product* instead would let an
+        // out-of-range alpha swallow the fade (`4.0 * 0.5 = 2.0` -> clamp -> `1.0`, still
+        // fully opaque). Alpha is normalized `[0,1]` at every depth — the 8/16-bit paths
+        // can't exceed their max and the image crate's f32 `DEFAULT_MAX_VALUE` is 1.0. For
+        // external Rgba32F data `clamp` floors `-∞`/negatives to 0.0 and saturates `+∞`/
+        // values > 1 to 1.0; NaN is undefined under `clamp`, so sanitize it to 0.0. Both
+        // the normalized alpha and the factor are in `[0,1]`, so the product needs no
+        // further clamp.
+        let a = pixel[3];
+        let normalized = if a.is_nan() { 0.0 } else { a.clamp(0.0, 1.0) };
+        pixel[3] = normalized * factor;
+      }
+      *image = DynamicImage::ImageRgba32F(buf);
+    }
+    _ => {
+      let mut buf = image.to_rgba8();
+      for pixel in buf.pixels_mut() {
+        pixel[3] = (pixel[3] as f32 * factor).round().clamp(0.0, 255.0) as u8;
+      }
+      *image = DynamicImage::ImageRgba8(buf);
+    }
+  }
+}
+
 #[inline]
 fn parse_exif(
   buf: &[u8],
@@ -1565,5 +1806,464 @@ mod tests {
   #[test]
   fn heic_image_format_is_none() {
     assert_eq!(DetectedFormat::Heic.image_format(), None);
+  }
+
+  use super::{
+    ImageTransformArgs, apply_contrast, apply_huerotate, apply_opacity, apply_transforms,
+  };
+  use image::{ColorType, DynamicImage, ImageBuffer, RgbaImage};
+
+  #[test]
+  fn huerotate_preserves_16bit_color_through_pipeline() {
+    // `image` 0.25's `DynamicImage::huerotate` clamps every channel to a hardcoded 255,
+    // crushing 16-bit color to 8-bit. The pipeline must use a depth-aware hue rotation:
+    // `huerotate(0)` is the identity rotation, so a 16-bit color must return unchanged,
+    // never crushed to 255. Guards the Codex adversarial review on #42.
+    let mut img =
+      DynamicImage::ImageRgb16(ImageBuffer::from_raw(1, 1, vec![40000u16, 20000, 10000]).unwrap());
+    let args = ImageTransformArgs {
+      huerotate: Some(0),
+      ..Default::default()
+    };
+    apply_transforms(&mut img, &args, None, true).unwrap();
+    assert_eq!(img.color(), ColorType::Rgb16, "must stay 16-bit");
+    assert_eq!(
+      img.to_rgb16().get_pixel(0, 0).0,
+      [40000, 20000, 10000],
+      "16-bit color must survive huerotate, not crush to 255"
+    );
+  }
+
+  #[test]
+  fn huerotate_8bit_matches_image_crate() {
+    // The custom hue rotation must be byte-identical to the crate for 8-bit RGB/RGBA
+    // (where the crate's 255 max is already correct), so existing 8-bit output never
+    // changes. Alpha must pass through untouched.
+    let base = DynamicImage::ImageRgba8(
+      RgbaImage::from_raw(2, 1, vec![200, 50, 100, 255, 10, 220, 30, 128]).unwrap(),
+    );
+    // Non-zero angles must match the crate byte-for-byte. (0 / 360 are the identity
+    // fast-path, which is intentionally exact and may differ from the crate's matrix.)
+    for angle in [45, 90, 180, 270, -90] {
+      let mut mine = base.clone();
+      apply_huerotate(&mut mine, angle);
+      let theirs = base.huerotate(angle);
+      assert_eq!(
+        mine.to_rgba8(),
+        theirs.to_rgba8(),
+        "8-bit huerotate must match the image crate at {angle} deg"
+      );
+    }
+  }
+
+  #[test]
+  fn huerotate_identity_preserves_nan_and_hdr_for_float() {
+    // 0 / 360 are documented no-ops: the identity fast-path must return the input bit for
+    // bit, including NaN and HDR (>1.0) float samples. The matrix path would contaminate
+    // finite neighbors of a NaN channel and zero them. Codex adversarial review on #42.
+    let base = DynamicImage::ImageRgba32F(
+      ImageBuffer::from_raw(1, 1, vec![f32::NAN, 0.3, 2.5, 1.0]).unwrap(),
+    );
+    for angle in [0, 360, -360, 720] {
+      let mut img = base.clone();
+      apply_huerotate(&mut img, angle);
+      let p = img.to_rgba32f().get_pixel(0, 0).0;
+      assert!(p[0].is_nan(), "NaN preserved at {angle} deg");
+      assert_eq!(p[1], 0.3, "finite neighbor preserved at {angle} deg");
+      assert_eq!(p[2], 2.5, "HDR neighbor preserved at {angle} deg");
+      assert_eq!(p[3], 1.0, "alpha preserved at {angle} deg");
+    }
+  }
+
+  #[test]
+  fn huerotate_preserves_16bit_alpha_directly() {
+    // The depth-aware hue rotation keeps 16-bit alpha (the crate clamped it to 255) and
+    // keeps 16-bit color out of the 8-bit range.
+    let mut img = DynamicImage::ImageRgba16(
+      ImageBuffer::from_raw(1, 1, vec![40000u16, 20000, 10000, 50000]).unwrap(),
+    );
+    apply_huerotate(&mut img, 90);
+    let px = img.to_rgba16().get_pixel(0, 0).0;
+    assert_eq!(px[3], 50000, "16-bit alpha must pass through, not clamp to 255");
+    assert!(
+      px[0] as u32 + px[1] as u32 + px[2] as u32 > 1000,
+      "16-bit color must not be crushed to ~255; got {px:?}"
+    );
+  }
+
+  #[test]
+  fn opacity_noop_contrast_invisible_for_hdr_float_alpha() {
+    // For an Rgba32F image with alpha > 1.0, a no-op adjustContrast(0) must not change
+    // opacity output. `apply_contrast` never touches alpha, so the alpha that reaches
+    // `apply_opacity` is identical whether or not a no-op contrast is staged; opacity then
+    // normalizes it the same way in both paths. Codex adversarial review on #42.
+    let base = DynamicImage::ImageRgba32F(
+      ImageBuffer::from_raw(1, 1, vec![0.2f32, 0.3, 0.4, 4.0]).unwrap(),
+    );
+    let alpha_of = |contrast: Option<f32>| {
+      let mut img = base.clone();
+      let args = ImageTransformArgs {
+        contrast,
+        opacity: Some(0.5),
+        ..Default::default()
+      };
+      apply_transforms(&mut img, &args, None, true).unwrap();
+      img.to_rgba32f().get_pixel(0, 0).0[3]
+    };
+    let without = alpha_of(None);
+    let with_noop = alpha_of(Some(0.0));
+    assert!(
+      (without - with_noop).abs() < 1e-6,
+      "no-op contrast(0) changed HDR-alpha opacity output: {without} vs {with_noop}"
+    );
+  }
+
+  #[test]
+  fn huerotate_nonzero_preserves_nan_for_float() {
+    // A NaN sample must survive a real (non-zero) hue rotation rather than silently
+    // collapse to 0 (black). The rotation matrix contaminates the other color channels
+    // with NaN too — mathematically honest — but we must not turn NaN into valid black.
+    // Codex adversarial review on #42.
+    let mut img = DynamicImage::ImageRgba32F(
+      ImageBuffer::from_raw(1, 1, vec![f32::NAN, 0.3, 0.4, 0.9]).unwrap(),
+    );
+    apply_huerotate(&mut img, 90);
+    let p = img.to_rgba32f().get_pixel(0, 0).0;
+    assert!(
+      p[0].is_nan(),
+      "NaN must survive a non-zero hue rotation, not become 0; got {}",
+      p[0]
+    );
+    assert_eq!(p[3], 0.9, "alpha untouched");
+  }
+
+  #[test]
+  fn huerotate_preserves_hdr_float_above_one() {
+    // Float images can hold HDR values above 1.0. `huerotate(0)` is the identity rotation,
+    // so an HDR channel must survive — never clipped to 1.0. The crate clamped float to
+    // 255, so it preserved these; our depth-aware impl must not regress. Guards the Codex
+    // adversarial review on #42.
+    let mut img = DynamicImage::ImageRgba32F(
+      ImageBuffer::from_raw(1, 1, vec![2.5f32, 0.3, 1.8, 4.0]).unwrap(),
+    );
+    apply_huerotate(&mut img, 0);
+    if let DynamicImage::ImageRgba32F(buf) = &img {
+      let p = buf.get_pixel(0, 0).0;
+      assert!(
+        (p[0] - 2.5).abs() < 1e-4,
+        "HDR R must survive identity hue rotation; got {}",
+        p[0]
+      );
+      assert!((p[1] - 0.3).abs() < 1e-4, "G survives; got {}", p[1]);
+      assert!((p[2] - 1.8).abs() < 1e-4, "HDR B must survive; got {}", p[2]);
+      assert!((p[3] - 4.0).abs() < 1e-6, "alpha untouched; got {}", p[3]);
+    } else {
+      panic!("expected Rgba32F");
+    }
+  }
+
+  #[test]
+  fn huerotate_leaves_grayscale_luma_unchanged() {
+    // Grayscale has no hue, so rotating it is a no-op on luma (the crate emitted garbage
+    // by treating luma/alpha as RGB). Alpha is preserved too.
+    let mut img =
+      DynamicImage::ImageLumaA8(ImageBuffer::from_raw(1, 1, vec![120u8, 200]).unwrap());
+    apply_huerotate(&mut img, 90);
+    assert_eq!(img.color(), ColorType::La8, "grayscale stays grayscale");
+    if let DynamicImage::ImageLumaA8(buf) = &img {
+      assert_eq!(buf.get_pixel(0, 0).0, [120, 200], "luma and alpha unchanged");
+    } else {
+      panic!("expected LumaA8");
+    }
+  }
+
+  #[test]
+  fn contrast_alpha_is_independent_of_staged_opacity() {
+    // adjust_contrast must never change the alpha channel (it is a luma/color op), so
+    // staging a documented no-op opacity(1) must not change the result. Alpha
+    // preservation around contrast is UNCONDITIONAL, not coupled to opacity being staged.
+    // Codex adversarial review on #42.
+    let base =
+      DynamicImage::ImageRgba8(RgbaImage::from_raw(1, 1, vec![100, 120, 140, 200]).unwrap());
+    let alpha = |opacity: Option<f32>| {
+      let mut img = base.clone();
+      let args = ImageTransformArgs {
+        contrast: Some(50.0),
+        opacity,
+        ..Default::default()
+      };
+      apply_transforms(&mut img, &args, None, true).unwrap();
+      img.to_rgba8().get_pixel(0, 0).0[3]
+    };
+    assert_eq!(alpha(None), 200, "contrast alone must leave alpha untouched");
+    assert_eq!(alpha(Some(1.0)), 200, "opacity(1) must be a true no-op");
+    assert_eq!(
+      alpha(None),
+      alpha(Some(1.0)),
+      "a staged no-op opacity must not change contrast output"
+    );
+  }
+
+  #[test]
+  fn opacity_preserves_16bit_alpha_through_contrast_and_huerotate() {
+    // `huerotate` in image 0.25 clamps the 4th channel to 255, destroying 16-bit alpha,
+    // and it runs AFTER contrast in the pipeline. Value filters (contrast, huerotate)
+    // must leave the alpha that opacity scales untouched: a 16-bit alpha of 40000 scaled
+    // by 0.5 must land near 20000, never ~128 (255 * 0.5). Guards the Codex adversarial
+    // review on #42 (a regression of the contrast-only restore).
+    let mut img = DynamicImage::ImageRgba16(
+      ImageBuffer::from_raw(1, 1, vec![40000u16, 20000, 10000, 40000]).unwrap(),
+    );
+    let args = ImageTransformArgs {
+      contrast: Some(100.0),
+      huerotate: Some(90),
+      opacity: Some(0.5),
+      ..Default::default()
+    };
+    apply_transforms(&mut img, &args, None, true).unwrap();
+    assert_eq!(img.color(), ColorType::Rgba16, "must stay 16-bit");
+    let alpha = img.to_rgba16().get_pixel(0, 0).0[3];
+    assert!(
+      (19000..=21000).contains(&alpha),
+      "16-bit alpha 40000 * 0.5 ~= 20000 must survive contrast+huerotate; got {alpha}"
+    );
+  }
+
+  #[test]
+  fn opacity_rgba8_multiplies_alpha_and_keeps_8bit() {
+    let mut img =
+      DynamicImage::ImageRgba8(RgbaImage::from_raw(1, 1, vec![10, 20, 30, 200]).unwrap());
+    apply_opacity(&mut img, 0.5);
+    assert_eq!(img.color(), ColorType::Rgba8);
+    let px = img.to_rgba8();
+    // round(200 * 0.5) = 100; color channels untouched.
+    assert_eq!(px.get_pixel(0, 0).0, [10, 20, 30, 100]);
+  }
+
+  #[test]
+  fn opacity_preserves_16bit_depth() {
+    // The bug this guards (Codex review): a 16-bit source must NOT be silently
+    // down-converted to 8-bit. Even the identity factor must keep Rgba16.
+    let mut img = DynamicImage::ImageRgba16(
+      ImageBuffer::from_raw(1, 1, vec![1000u16, 2000, 3000, 40000]).unwrap(),
+    );
+    apply_opacity(&mut img, 1.0);
+    assert_eq!(
+      img.color(),
+      ColorType::Rgba16,
+      "identity opacity must not drop to 8-bit"
+    );
+
+    let mut img = DynamicImage::ImageRgba16(
+      ImageBuffer::from_raw(1, 1, vec![1000u16, 2000, 3000, 40000]).unwrap(),
+    );
+    apply_opacity(&mut img, 0.5);
+    assert_eq!(img.color(), ColorType::Rgba16);
+    if let DynamicImage::ImageRgba16(buf) = &img {
+      assert_eq!(buf.get_pixel(0, 0).0, [1000, 2000, 3000, 20000]);
+    } else {
+      panic!("expected Rgba16");
+    }
+  }
+
+  #[test]
+  fn opacity_promotes_rgb16_to_rgba16_not_rgba8() {
+    // RGB16 (no alpha) gains an alpha channel but stays 16-bit.
+    let mut img =
+      DynamicImage::ImageRgb16(ImageBuffer::from_raw(1, 1, vec![1000u16, 2000, 3000]).unwrap());
+    apply_opacity(&mut img, 0.5);
+    assert_eq!(img.color(), ColorType::Rgba16);
+    if let DynamicImage::ImageRgba16(buf) = &img {
+      // full alpha (65535) scaled by 0.5 -> 32768 (32767.5 rounds up).
+      assert_eq!(buf.get_pixel(0, 0).0[3], 32768);
+    } else {
+      panic!("expected Rgba16");
+    }
+  }
+
+  #[test]
+  fn opacity_preserves_32f_depth() {
+    let mut img =
+      DynamicImage::ImageRgba32F(ImageBuffer::from_raw(1, 1, vec![0.1f32, 0.2, 0.3, 0.8]).unwrap());
+    apply_opacity(&mut img, 0.5);
+    assert_eq!(img.color(), ColorType::Rgba32F);
+    if let DynamicImage::ImageRgba32F(buf) = &img {
+      assert!((buf.get_pixel(0, 0).0[3] - 0.4).abs() < 1e-6);
+    } else {
+      panic!("expected Rgba32F");
+    }
+  }
+
+  #[test]
+  fn opacity_normalizes_out_of_range_float_alpha() {
+    // Alpha is opacity, normalized `0.0..=1.0` at EVERY depth (the 8/16-bit paths can't
+    // exceed their max; the image crate's f32 `DEFAULT_MAX_VALUE` is 1.0). The SOURCE alpha
+    // is normalized into the unit range BEFORE the user's factor is applied, so a requested
+    // fade is always effective — clamping the *product* instead would let an out-of-range
+    // alpha swallow the fade and stay fully opaque. A valid in-range alpha follows
+    // `new = old * factor` exactly. Resolves the Cursor/Codex review on #42 in favor of
+    // normalize-source-then-multiply.
+
+    // Out-of-range source normalizes to full opacity under identity opacity.
+    let mut img =
+      DynamicImage::ImageRgba32F(ImageBuffer::from_raw(1, 1, vec![0.2f32, 0.3, 0.4, 4.0]).unwrap());
+    apply_opacity(&mut img, 1.0);
+    let identity = img.to_rgba32f().get_pixel(0, 0).0[3];
+    assert_eq!(identity, 1.0, "4.0 normalizes to full opacity; got {identity}");
+
+    // ...and a real fade still bites: normalize 4.0 -> 1.0, then * 0.5 -> 0.5 (NOT 1.0).
+    let mut img =
+      DynamicImage::ImageRgba32F(ImageBuffer::from_raw(1, 1, vec![0.2f32, 0.3, 0.4, 4.0]).unwrap());
+    apply_opacity(&mut img, 0.5);
+    let faded = img.to_rgba32f().get_pixel(0, 0).0[3];
+    assert_eq!(faded, 0.5, "opacity(0.5) must still fade out-of-range alpha; got {faded}");
+
+    // In-range source: new = old * factor, unchanged by the normalization.
+    let mut img = DynamicImage::ImageRgba32F(
+      ImageBuffer::from_raw(1, 1, vec![0.2f32, 0.3, 0.4, 0.8]).unwrap(),
+    );
+    apply_opacity(&mut img, 0.5);
+    let in_range = img.to_rgba32f().get_pixel(0, 0).0[3];
+    assert!(
+      (in_range - 0.4).abs() < 1e-6,
+      "in-range alpha follows new = old * factor; got {in_range}"
+    );
+  }
+
+  #[test]
+  fn opacity_saturates_positive_infinite_float_alpha() {
+    // `+∞` is the extreme of "alpha greater than the unit range", so the source normalizes
+    // to 1.0 (full opacity) exactly like a finite alpha > 1.0 does — NOT 0.0 (transparent).
+    // Grouping `+∞` with NaN/negative made opacity flip an "infinitely opaque" pixel to
+    // fully transparent, contradicting the normalized-alpha model. Under identity opacity it
+    // must stay fully opaque. Codex adversarial review on #42.
+    let mut img = DynamicImage::ImageRgba32F(
+      ImageBuffer::from_raw(1, 1, vec![0.2f32, 0.3, 0.4, f32::INFINITY]).unwrap(),
+    );
+    apply_opacity(&mut img, 1.0);
+    let a = img.to_rgba32f().get_pixel(0, 0).0[3];
+    assert_eq!(a, 1.0, "+inf alpha must normalize to full opacity; got {a}");
+  }
+
+  #[test]
+  fn opacity_sanitizes_malformed_float_alpha() {
+    // Decoded Rgba32F is external data: a negative, negative-infinite, or NaN source alpha
+    // normalizes to the transparent bound 0.0 (`clamp` floors `-∞`/negatives; NaN is
+    // sanitized), so after multiplying by the factor it stays 0.0 rather than leaking into
+    // raw/composite output. Positive out-of-range alpha normalizes to full opacity instead
+    // (see `opacity_saturates_positive_infinite_float_alpha` and
+    // `opacity_normalizes_out_of_range_float_alpha`). Cursor + Codex review on #42.
+    for bad in [-0.5f32, f32::NEG_INFINITY, f32::NAN] {
+      let mut img = DynamicImage::ImageRgba32F(
+        ImageBuffer::from_raw(1, 1, vec![0.2f32, 0.3, 0.4, bad]).unwrap(),
+      );
+      apply_opacity(&mut img, 0.5);
+      let a = img.to_rgba32f().get_pixel(0, 0).0[3];
+      assert_eq!(a, 0.0, "malformed alpha {bad} must sanitize to 0; got {a}");
+    }
+  }
+
+  #[test]
+  fn opacity_clamps_above_one_and_ignores_non_finite() {
+    let mut img =
+      DynamicImage::ImageRgba8(RgbaImage::from_raw(1, 1, vec![10, 20, 30, 200]).unwrap());
+    apply_opacity(&mut img, 2.0);
+    assert_eq!(
+      img.to_rgba8().get_pixel(0, 0).0[3],
+      200,
+      "factor > 1 clamps to identity"
+    );
+
+    let mut img =
+      DynamicImage::ImageRgba8(RgbaImage::from_raw(1, 1, vec![10, 20, 30, 200]).unwrap());
+    apply_opacity(&mut img, f32::NAN);
+    assert_eq!(
+      img.to_rgba8().get_pixel(0, 0).0[3],
+      200,
+      "NaN must be a no-op, never silently zero the alpha"
+    );
+  }
+
+  #[test]
+  fn contrast_color_matches_image_crate() {
+    // `apply_contrast` must produce the SAME color as the crate's `adjust_contrast` (it
+    // differs only by preserving alpha). On Rgb8 (no alpha) the two must be byte-identical.
+    let base = DynamicImage::ImageRgb8(
+      image::RgbImage::from_raw(2, 1, vec![200, 50, 100, 10, 220, 30]).unwrap(),
+    );
+    for c in [-50.0f32, -10.0, 0.0, 25.0, 100.0] {
+      let mut mine = base.clone();
+      apply_contrast(&mut mine, c);
+      let theirs = base.adjust_contrast(c);
+      assert_eq!(
+        mine.to_rgb8(),
+        theirs.to_rgb8(),
+        "contrast color must match the image crate at {c}"
+      );
+    }
+  }
+
+  #[test]
+  fn contrast_preserves_alpha_and_matches_crate_color_rgba() {
+    // On RGBA, color must match the crate while alpha is preserved (the crate mangles it).
+    let base =
+      DynamicImage::ImageRgba8(RgbaImage::from_raw(1, 1, vec![200, 50, 100, 200]).unwrap());
+    let mine = {
+      let mut img = base.clone();
+      apply_contrast(&mut img, 60.0);
+      img.to_rgba8().get_pixel(0, 0).0
+    };
+    let crate_px = base.adjust_contrast(60.0).to_rgba8().get_pixel(0, 0).0;
+    assert_eq!(mine[0..3], crate_px[0..3], "color channels must match the crate");
+    assert_eq!(mine[3], 200, "alpha must be preserved");
+    assert_ne!(crate_px[3], 200, "sanity: the crate's adjust_contrast does mangle this alpha");
+  }
+
+  #[test]
+  fn contrast_preserves_16bit_alpha_and_depth() {
+    let mut img = DynamicImage::ImageRgba16(
+      ImageBuffer::from_raw(1, 1, vec![40000u16, 20000, 10000, 50000]).unwrap(),
+    );
+    apply_contrast(&mut img, 50.0);
+    assert_eq!(img.color(), ColorType::Rgba16, "must stay 16-bit");
+    assert_eq!(
+      img.to_rgba16().get_pixel(0, 0).0[3],
+      50000,
+      "16-bit alpha must be preserved, not scaled/crushed"
+    );
+  }
+
+  #[test]
+  fn contrast_noop_is_invisible_for_lumaa_pipeline() {
+    // A no-op `adjustContrast(0)` must not change downstream output. `apply_contrast` keeps
+    // the LumaA color model (does not promote to RGBA), so a staged contrast never makes
+    // `huerotate` see a different pixel model. Guards the Codex adversarial review on #42.
+    let base = DynamicImage::ImageLumaA8(ImageBuffer::from_raw(1, 1, vec![120u8, 200]).unwrap());
+
+    let without = {
+      let mut img = base.clone();
+      let args = ImageTransformArgs {
+        huerotate: Some(90),
+        opacity: Some(1.0),
+        ..Default::default()
+      };
+      apply_transforms(&mut img, &args, None, true).unwrap();
+      img.to_rgba8().get_pixel(0, 0).0
+    };
+    let with_noop_contrast = {
+      let mut img = base.clone();
+      let args = ImageTransformArgs {
+        contrast: Some(0.0),
+        huerotate: Some(90),
+        opacity: Some(1.0),
+        ..Default::default()
+      };
+      apply_transforms(&mut img, &args, None, true).unwrap();
+      img.to_rgba8().get_pixel(0, 0).0
+    };
+    assert_eq!(
+      without, with_noop_contrast,
+      "a no-op contrast(0) must not change huerotate output (LumaA must not be promoted early)"
+    );
   }
 }

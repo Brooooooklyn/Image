@@ -245,9 +245,7 @@ test('metadata() reflects grayscale colorType (#158)', async (t) => {
 })
 
 test('metadata() reflects fastResize dims + Rgba8 colorType (#158)', async (t) => {
-  const expected = await roundTripMeta(
-    await new Transformer(PNG).fastResize({ width: 256 }).png(),
-  )
+  const expected = await roundTripMeta(await new Transformer(PNG).fastResize({ width: 256 }).png())
   const meta = await new Transformer(PNG).fastResize({ width: 256 }).metadata()
   t.is(meta.width, 256)
   t.is(meta.width, expected.width)
@@ -257,9 +255,7 @@ test('metadata() reflects fastResize dims + Rgba8 colorType (#158)', async (t) =
 
 test('metadata() reflects chained rotate().resize().crop() in order (#158)', async (t) => {
   const buffer = await fs.readFile(join(ORIENTATION_DIR, 'orientation_6.jpg'))
-  const expected = await roundTripMeta(
-    await new Transformer(buffer).rotate().resize(300).crop(10, 10, 100, 80).png(),
-  )
+  const expected = await roundTripMeta(await new Transformer(buffer).rotate().resize(300).crop(10, 10, 100, 80).png())
   const meta = await new Transformer(buffer).rotate().resize(300).crop(10, 10, 100, 80).metadata(true)
   t.is(meta.width, expected.width)
   t.is(meta.height, expected.height)
@@ -381,6 +377,128 @@ test('reuse: no-transform encode borrows cache, two encodes are byte-identical (
   const first = transformer.pngSync()
   const second = transformer.pngSync()
   t.true(Buffer.from(first).equals(Buffer.from(second)), 'borrow path leaves the cached decode untouched')
+})
+
+// https://github.com/Brooooooklyn/Image/issues/42 — set an image's alpha (opacity).
+// `opacity(factor)` multiplies the existing alpha by `factor` (0..1), like CSS opacity.
+test('opacity(factor) multiplies the alpha channel (#42)', async (t) => {
+  // Fully-opaque 2x2 RGBA (every alpha = 255).
+  const opaque = Uint8Array.from([255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255])
+  const raw = await Transformer.fromRgbaPixels(opaque, 2, 2).opacity(0.5).rawPixels()
+  // Alpha halved (round(255 * 0.5) = 128); RGB untouched.
+  t.deepEqual([raw[3], raw[7], raw[11], raw[15]], [128, 128, 128, 128])
+  t.is(raw[0], 255)
+  t.is(raw[1], 0)
+  t.is(raw[2], 0)
+})
+
+test('opacity(0) is fully transparent, opacity(1) leaves alpha unchanged (#42)', async (t) => {
+  const opaque = Uint8Array.from([10, 20, 30, 255])
+  const zero = await Transformer.fromRgbaPixels(opaque, 1, 1).opacity(0).rawPixels()
+  t.is(zero[3], 0)
+  const one = await Transformer.fromRgbaPixels(opaque, 1, 1).opacity(1).rawPixels()
+  t.is(one[3], 255)
+})
+
+test('opacity clamps factor above 1 (#42)', async (t) => {
+  const opaque = Uint8Array.from([10, 20, 30, 200])
+  const raw = await Transformer.fromRgbaPixels(opaque, 1, 1).opacity(2).rawPixels()
+  // Clamped to 1.0, so the source alpha is preserved, never overflowing past 255.
+  t.is(raw[3], 200)
+})
+
+test('opacity scales existing partial alpha (#42)', async (t) => {
+  // Source alpha already 100; opacity(0.5) -> round(100 * 0.5) = 50.
+  const semi = Uint8Array.from([10, 20, 30, 100])
+  const raw = await Transformer.fromRgbaPixels(semi, 1, 1).opacity(0.5).rawPixels()
+  t.is(raw[3], 50)
+})
+
+test('opacity converts an RGB source to RGBA in metadata (#42)', async (t) => {
+  // JPEG decodes to Rgb8 (no alpha); opacity must promote it to Rgba8.
+  const meta = await new Transformer(JPEG).opacity(0.5).metadata()
+  t.is(meta.colorType, JsColorType.Rgba8)
+})
+
+// `adjustContrast` (and other value filters) map every channel including alpha, so
+// opacity scales the SOURCE alpha captured before them — otherwise contrast mangles
+// the alpha and the `new = old * factor` contract breaks. Regression for the Codex
+// review on #42. Both positive and (the harder) negative contrast must hold.
+test('opacity scales the source alpha regardless of a staged contrast filter (#42)', async (t) => {
+  const opaque = Uint8Array.from([100, 120, 140, 255])
+  const hi = await Transformer.fromRgbaPixels(opaque, 1, 1).opacity(0.25).adjustContrast(100).rawPixels()
+  t.is(hi[3], 64, 'round(255 * 0.25) survives positive contrast')
+  t.not(hi[0], 100, 'contrast still affects the RGB channels')
+  // Negative contrast pulls 255 toward 128; opacity must still scale the original 255.
+  const lo = await Transformer.fromRgbaPixels(opaque, 1, 1).opacity(0.5).adjustContrast(-50).rawPixels()
+  t.is(lo[3], 128, 'round(255 * 0.5) survives negative contrast')
+})
+
+// A spatial filter (blur) feathers the alpha channel on purpose, so opacity must
+// scale that FEATHERED alpha — not restore the pre-blur hard mask. adjustContrast's
+// alpha change is undone right after it runs, so spatial filters always feather the
+// true alpha. Regression for the Codex review on #42.
+test('opacity keeps a spatial filter (blur) alpha feathering (#42)', async (t) => {
+  // 4x1 with a hard alpha edge: [0, 0, 255, 255]. blur softens the boundary.
+  const edge = Uint8Array.from([10, 10, 10, 0, 10, 10, 10, 0, 10, 10, 10, 255, 10, 10, 10, 255])
+  const raw = await Transformer.fromRgbaPixels(edge, 4, 1).blur(1.2).opacity(0.5).rawPixels()
+  const alpha = [raw[3], raw[7], raw[11], raw[15]]
+  t.true(alpha[1] > 0, 'blur feathering reaches the transparent side (not a hard 0)')
+  t.true(alpha[2] < 128, 'blur feathering softens the opaque side (not a hard 128)')
+  t.true(alpha[0] <= alpha[1] && alpha[1] <= alpha[2] && alpha[2] <= alpha[3], 'monotonic gradient')
+})
+
+// The hardest case: adjustContrast AND a spatial filter staged together. Contrast
+// mangles alpha, but its change is reverted right after it runs, so the LATER blur
+// still feathers the true alpha and opacity scales that feathered result. The earlier
+// fix (snapshot whenever contrast is present, restore at opacity time) collapsed this
+// back to the hard mask. Regression for the Cursor/Codex review on #42 (commit 917d261).
+test('opacity keeps blur feathering even when adjustContrast is also staged (#42)', async (t) => {
+  const edge = Uint8Array.from([10, 10, 10, 0, 10, 10, 10, 0, 10, 10, 10, 255, 10, 10, 10, 255])
+  const raw = await Transformer.fromRgbaPixels(edge, 4, 1).adjustContrast(100).blur(1.2).opacity(0.5).rawPixels()
+  const alpha = [raw[3], raw[7], raw[11], raw[15]]
+  t.true(alpha[1] > 0, 'blur feathering reaches the transparent side despite contrast')
+  t.true(alpha[2] < 128, 'blur feathering softens the opaque side despite contrast')
+  t.true(alpha[0] <= alpha[1] && alpha[1] <= alpha[2] && alpha[2] <= alpha[3], 'monotonic gradient despite contrast')
+})
+
+// Grayscale (LumaA) path: grayscale() yields a LumaA image, so these exercise the
+// alpha-preserving contrast/huerotate helpers on a non-RGB color model in the CI test
+// path. adjustContrast must not touch the alpha that opacity scales.
+test('opacity on a grayscale (LumaA) source preserves alpha through contrast (#42)', async (t) => {
+  const gray = Uint8Array.from([120, 120, 120, 200])
+  const raw = await Transformer.fromRgbaPixels(gray, 1, 1).grayscale().adjustContrast(80).opacity(0.5).rawPixels()
+  // alpha = round(200 * 0.5) = 100, independent of the staged contrast.
+  t.is(raw[3], 100, 'contrast must not change the alpha opacity scales on the LumaA path')
+})
+
+// Hue rotation of grayscale has no hue to rotate: the luma must survive (the crate
+// emitted garbage by treating luma/alpha as RGB). opacity(1) promotes LumaA -> RGBA so
+// rawPixels gives R=G=B=luma.
+test('huerotate leaves a grayscale (LumaA) luma unchanged (#42)', async (t) => {
+  const gray = Uint8Array.from([120, 120, 120, 255])
+  const raw = await Transformer.fromRgbaPixels(gray, 1, 1).grayscale().huerotate(90).opacity(1).rawPixels()
+  t.true(Math.abs(raw[0] - 120) <= 1, `grayscale R preserved through huerotate; got ${raw[0]}`)
+  t.true(Math.abs(raw[2] - 120) <= 1, `grayscale B preserved through huerotate; got ${raw[2]}`)
+  t.is(raw[3], 255, 'alpha preserved')
+})
+
+// The #42 "overlap two images without hiding the bottom" use case: fade the TOP
+// image with opacity, then composite it over the bottom with overlay. The bottom
+// must remain visible through the now semi-transparent top.
+test('opacity on the overlay source blends, keeping the bottom visible (#42)', async (t) => {
+  const blueOpaque = Uint8Array.from([0, 0, 255, 255])
+  const redOpaque = Uint8Array.from([255, 0, 0, 255])
+  // Fade the red top to ~50% and encode it for use as an overlay layer.
+  const fadedTop = await Transformer.fromRgbaPixels(redOpaque, 1, 1).opacity(0.5).png()
+  const raw = await Transformer.fromRgbaPixels(blueOpaque, 1, 1).overlay(fadedTop, 0, 0).rawPixels()
+  // Result is a red/blue blend: the top contributes red AND the bottom blue still
+  // shows through (neither pure red nor pure blue).
+  t.true(raw[0] > 100, 'top red contributes')
+  t.true(raw[2] > 100, 'bottom blue is not hidden')
+  // Compositing over an opaque bottom stays (essentially) opaque; the image crate's
+  // integer "over" blend can round 255 down by 1.
+  t.true(raw[3] >= 254, 'composite over an opaque bottom stays opaque')
 })
 
 // rotate: metadata before == metadata after a rawPixels()/encode (no double-rotate).
