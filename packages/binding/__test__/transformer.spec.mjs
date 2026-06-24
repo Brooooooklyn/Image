@@ -435,8 +435,9 @@ test('opacity scales the source alpha regardless of a staged contrast filter (#4
 })
 
 // A spatial filter (blur) feathers the alpha channel on purpose, so opacity must
-// scale that FEATHERED alpha — not restore the pre-blur hard mask. Only adjustContrast
-// gets the source-alpha snapshot. Regression for the Codex review on #42.
+// scale that FEATHERED alpha — not restore the pre-blur hard mask. adjustContrast's
+// alpha change is undone right after it runs, so spatial filters always feather the
+// true alpha. Regression for the Codex review on #42.
 test('opacity keeps a spatial filter (blur) alpha feathering (#42)', async (t) => {
   // 4x1 with a hard alpha edge: [0, 0, 255, 255]. blur softens the boundary.
   const edge = Uint8Array.from([10, 10, 10, 0, 10, 10, 10, 0, 10, 10, 10, 255, 10, 10, 10, 255])
@@ -445,6 +446,41 @@ test('opacity keeps a spatial filter (blur) alpha feathering (#42)', async (t) =
   t.true(alpha[1] > 0, 'blur feathering reaches the transparent side (not a hard 0)')
   t.true(alpha[2] < 128, 'blur feathering softens the opaque side (not a hard 128)')
   t.true(alpha[0] <= alpha[1] && alpha[1] <= alpha[2] && alpha[2] <= alpha[3], 'monotonic gradient')
+})
+
+// The hardest case: adjustContrast AND a spatial filter staged together. Contrast
+// mangles alpha, but its change is reverted right after it runs, so the LATER blur
+// still feathers the true alpha and opacity scales that feathered result. The earlier
+// fix (snapshot whenever contrast is present, restore at opacity time) collapsed this
+// back to the hard mask. Regression for the Cursor/Codex review on #42 (commit 917d261).
+test('opacity keeps blur feathering even when adjustContrast is also staged (#42)', async (t) => {
+  const edge = Uint8Array.from([10, 10, 10, 0, 10, 10, 10, 0, 10, 10, 10, 255, 10, 10, 10, 255])
+  const raw = await Transformer.fromRgbaPixels(edge, 4, 1).adjustContrast(100).blur(1.2).opacity(0.5).rawPixels()
+  const alpha = [raw[3], raw[7], raw[11], raw[15]]
+  t.true(alpha[1] > 0, 'blur feathering reaches the transparent side despite contrast')
+  t.true(alpha[2] < 128, 'blur feathering softens the opaque side despite contrast')
+  t.true(alpha[0] <= alpha[1] && alpha[1] <= alpha[2] && alpha[2] <= alpha[3], 'monotonic gradient despite contrast')
+})
+
+// Grayscale (LumaA) path: grayscale() yields a LumaA image, so these exercise the
+// alpha-preserving contrast/huerotate helpers on a non-RGB color model in the CI test
+// path. adjustContrast must not touch the alpha that opacity scales.
+test('opacity on a grayscale (LumaA) source preserves alpha through contrast (#42)', async (t) => {
+  const gray = Uint8Array.from([120, 120, 120, 200])
+  const raw = await Transformer.fromRgbaPixels(gray, 1, 1).grayscale().adjustContrast(80).opacity(0.5).rawPixels()
+  // alpha = round(200 * 0.5) = 100, independent of the staged contrast.
+  t.is(raw[3], 100, 'contrast must not change the alpha opacity scales on the LumaA path')
+})
+
+// Hue rotation of grayscale has no hue to rotate: the luma must survive (the crate
+// emitted garbage by treating luma/alpha as RGB). opacity(1) promotes LumaA -> RGBA so
+// rawPixels gives R=G=B=luma.
+test('huerotate leaves a grayscale (LumaA) luma unchanged (#42)', async (t) => {
+  const gray = Uint8Array.from([120, 120, 120, 255])
+  const raw = await Transformer.fromRgbaPixels(gray, 1, 1).grayscale().huerotate(90).opacity(1).rawPixels()
+  t.true(Math.abs(raw[0] - 120) <= 1, `grayscale R preserved through huerotate; got ${raw[0]}`)
+  t.true(Math.abs(raw[2] - 120) <= 1, `grayscale B preserved through huerotate; got ${raw[2]}`)
+  t.is(raw[3], 255, 'alpha preserved')
 })
 
 // The #42 "overlap two images without hiding the bottom" use case: fade the TOP
