@@ -75,7 +75,8 @@ export declare class Transformer {
    * like CSS `opacity`. `1.0` leaves the image unchanged; `0.0` makes it fully
    * transparent. Existing transparency is preserved (`new = old * factor`), and
    * the image is promoted to an alpha-capable type while keeping its bit depth
-   * (RGBA8 / RGBA16 / RGBA32F).
+   * (RGBA8 / RGBA16 / RGBA32F). Out-of-range float (HDR) alpha is normalized into
+   * `0.0..=1.0` before the factor is applied, so a requested fade is always effective.
    *
    * Like every other filter, this applies to *this* image's content; a later
    * `overlay` is composited on top afterward. To fade an image you are dropping

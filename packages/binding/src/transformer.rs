@@ -1161,7 +1161,8 @@ impl Transformer {
   /// like CSS `opacity`. `1.0` leaves the image unchanged; `0.0` makes it fully
   /// transparent. Existing transparency is preserved (`new = old * factor`), and
   /// the image is promoted to an alpha-capable type while keeping its bit depth
-  /// (RGBA8 / RGBA16 / RGBA32F).
+  /// (RGBA8 / RGBA16 / RGBA32F). Out-of-range float (HDR) alpha is normalized into
+  /// `0.0..=1.0` before the factor is applied, so a requested fade is always effective.
   ///
   /// Like every other filter, this applies to *this* image's content; a later
   /// `overlay` is composited on top afterward. To fade an image you are dropping
@@ -1705,7 +1706,18 @@ fn apply_opacity(image: &mut DynamicImage, factor: f32) {
     ColorType::Rgb32F | ColorType::Rgba32F => {
       let mut buf = image.to_rgba32f();
       for pixel in buf.pixels_mut() {
-        pixel[3] = (pixel[3] * factor).clamp(0.0, 1.0);
+        // Normalize the SOURCE alpha into the unit range BEFORE applying the factor, so a
+        // requested fade is always effective. Clamping the *product* instead would let an
+        // out-of-range alpha swallow the fade (`4.0 * 0.5 = 2.0` -> clamp -> `1.0`, still
+        // fully opaque). Alpha is normalized `[0,1]` at every depth — the 8/16-bit paths
+        // can't exceed their max and the image crate's f32 `DEFAULT_MAX_VALUE` is 1.0. For
+        // external Rgba32F data `clamp` floors `-∞`/negatives to 0.0 and saturates `+∞`/
+        // values > 1 to 1.0; NaN is undefined under `clamp`, so sanitize it to 0.0. Both
+        // the normalized alpha and the factor are in `[0,1]`, so the product needs no
+        // further clamp.
+        let a = pixel[3];
+        let normalized = if a.is_nan() { 0.0 } else { a.clamp(0.0, 1.0) };
+        pixel[3] = normalized * factor;
       }
       *image = DynamicImage::ImageRgba32F(buf);
     }
@@ -1882,9 +1894,9 @@ mod tests {
   #[test]
   fn opacity_noop_contrast_invisible_for_hdr_float_alpha() {
     // For an Rgba32F image with alpha > 1.0, a no-op adjustContrast(0) must not change
-    // opacity output. `restore_alpha` must put back the raw captured alpha (no early
-    // [0,1] clamp) and let `apply_opacity` do the final clamp — otherwise restore clamps
-    // 4.0 -> 1.0 and opacity returns 0.5 instead of 1.0. Codex adversarial review on #42.
+    // opacity output. `apply_contrast` never touches alpha, so the alpha that reaches
+    // `apply_opacity` is identical whether or not a no-op contrast is staged; opacity then
+    // normalizes it the same way in both paths. Codex adversarial review on #42.
     let base = DynamicImage::ImageRgba32F(
       ImageBuffer::from_raw(1, 1, vec![0.2f32, 0.3, 0.4, 4.0]).unwrap(),
     );
@@ -2079,6 +2091,75 @@ mod tests {
       assert!((buf.get_pixel(0, 0).0[3] - 0.4).abs() < 1e-6);
     } else {
       panic!("expected Rgba32F");
+    }
+  }
+
+  #[test]
+  fn opacity_normalizes_out_of_range_float_alpha() {
+    // Alpha is opacity, normalized `0.0..=1.0` at EVERY depth (the 8/16-bit paths can't
+    // exceed their max; the image crate's f32 `DEFAULT_MAX_VALUE` is 1.0). The SOURCE alpha
+    // is normalized into the unit range BEFORE the user's factor is applied, so a requested
+    // fade is always effective — clamping the *product* instead would let an out-of-range
+    // alpha swallow the fade and stay fully opaque. A valid in-range alpha follows
+    // `new = old * factor` exactly. Resolves the Cursor/Codex review on #42 in favor of
+    // normalize-source-then-multiply.
+
+    // Out-of-range source normalizes to full opacity under identity opacity.
+    let mut img =
+      DynamicImage::ImageRgba32F(ImageBuffer::from_raw(1, 1, vec![0.2f32, 0.3, 0.4, 4.0]).unwrap());
+    apply_opacity(&mut img, 1.0);
+    let identity = img.to_rgba32f().get_pixel(0, 0).0[3];
+    assert_eq!(identity, 1.0, "4.0 normalizes to full opacity; got {identity}");
+
+    // ...and a real fade still bites: normalize 4.0 -> 1.0, then * 0.5 -> 0.5 (NOT 1.0).
+    let mut img =
+      DynamicImage::ImageRgba32F(ImageBuffer::from_raw(1, 1, vec![0.2f32, 0.3, 0.4, 4.0]).unwrap());
+    apply_opacity(&mut img, 0.5);
+    let faded = img.to_rgba32f().get_pixel(0, 0).0[3];
+    assert_eq!(faded, 0.5, "opacity(0.5) must still fade out-of-range alpha; got {faded}");
+
+    // In-range source: new = old * factor, unchanged by the normalization.
+    let mut img = DynamicImage::ImageRgba32F(
+      ImageBuffer::from_raw(1, 1, vec![0.2f32, 0.3, 0.4, 0.8]).unwrap(),
+    );
+    apply_opacity(&mut img, 0.5);
+    let in_range = img.to_rgba32f().get_pixel(0, 0).0[3];
+    assert!(
+      (in_range - 0.4).abs() < 1e-6,
+      "in-range alpha follows new = old * factor; got {in_range}"
+    );
+  }
+
+  #[test]
+  fn opacity_saturates_positive_infinite_float_alpha() {
+    // `+∞` is the extreme of "alpha greater than the unit range", so the source normalizes
+    // to 1.0 (full opacity) exactly like a finite alpha > 1.0 does — NOT 0.0 (transparent).
+    // Grouping `+∞` with NaN/negative made opacity flip an "infinitely opaque" pixel to
+    // fully transparent, contradicting the normalized-alpha model. Under identity opacity it
+    // must stay fully opaque. Codex adversarial review on #42.
+    let mut img = DynamicImage::ImageRgba32F(
+      ImageBuffer::from_raw(1, 1, vec![0.2f32, 0.3, 0.4, f32::INFINITY]).unwrap(),
+    );
+    apply_opacity(&mut img, 1.0);
+    let a = img.to_rgba32f().get_pixel(0, 0).0[3];
+    assert_eq!(a, 1.0, "+inf alpha must normalize to full opacity; got {a}");
+  }
+
+  #[test]
+  fn opacity_sanitizes_malformed_float_alpha() {
+    // Decoded Rgba32F is external data: a negative, negative-infinite, or NaN source alpha
+    // normalizes to the transparent bound 0.0 (`clamp` floors `-∞`/negatives; NaN is
+    // sanitized), so after multiplying by the factor it stays 0.0 rather than leaking into
+    // raw/composite output. Positive out-of-range alpha normalizes to full opacity instead
+    // (see `opacity_saturates_positive_infinite_float_alpha` and
+    // `opacity_normalizes_out_of_range_float_alpha`). Cursor + Codex review on #42.
+    for bad in [-0.5f32, f32::NEG_INFINITY, f32::NAN] {
+      let mut img = DynamicImage::ImageRgba32F(
+        ImageBuffer::from_raw(1, 1, vec![0.2f32, 0.3, 0.4, bad]).unwrap(),
+      );
+      apply_opacity(&mut img, 0.5);
+      let a = img.to_rgba32f().get_pixel(0, 0).0[3];
+      assert_eq!(a, 0.0, "malformed alpha {bad} must sanitize to 0; got {a}");
     }
   }
 
