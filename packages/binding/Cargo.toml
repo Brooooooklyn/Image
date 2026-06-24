@@ -79,7 +79,7 @@ napi-build = "2"
 # Drop-in criterion replacement, imported as `criterion`: a plain `cargo bench` runs
 # stock criterion, while `cargo codspeed build/run` switches the same benches to
 # CodSpeed instrumentation in CI. Released in lockstep with the `cargo-codspeed` CLI.
-criterion = { package = "codspeed-criterion-compat", version = "4" }
+criterion = { package = "codspeed-criterion-compat", version = "5" }
 
 [[bench]]
 harness = false
