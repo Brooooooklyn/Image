@@ -439,15 +439,32 @@ impl Task for MetadataTask {
     } else {
       (meta.image.width(), meta.image.height(), meta.color_type)
     };
-    // Gate the RETURNED EXIF/orientation on `with_exif`. A pending rotate forced
-    // us to parse EXIF above (for swapped dims), but a `with_exif=false` caller
-    // never requested it, so don't leak it (#158, finding F1).
-    let (exif, orientation) = if self.with_exif {
+    // Gate the RETURNED EXIF/orientation on `with_exif` AND on whether a rotate
+    // is staged. A pending rotate forced us to parse EXIF above (for swapped
+    // dims), but a `with_exif=false` caller never requested it, so don't leak it
+    // (#158, finding F1).
+    let rotation_applied =
+      self.image_transform_args.rotate || self.image_transform_args.orientation.is_some();
+    let (exif, orientation) = if rotation_applied {
+      // A staged rotate bakes EXIF orientation into the pixels (the previewed dims
+      // are already upright), so the encoded output carries no orientation —
+      // report it normalized and drop the now-stale `Orientation` key, matching
+      // sharp autoOrient / ImageMagick -auto-orient / Pillow exif_transpose. Keep
+      // the rest of the source EXIF only when the caller asked for it.
+      let exif = if self.with_exif {
+        let mut e = meta.exif.clone();
+        e.remove("Orientation");
+        e
+      } else {
+        HashMap::new()
+      };
+      (exif, None)
+    } else if self.with_exif {
       (meta.exif.clone(), meta.orientation)
     } else {
-      // HEIC orientation comes from the decoder (not rexif) and was always
-      // surfaced regardless of `with_exif`; preserve it. Everything else stays
-      // suppressed.
+      // with_exif=false, no rotate: suppress rexif EXIF/orientation; HEIC
+      // orientation comes from the decoder (not rexif) and was always surfaced on
+      // main — preserve it.
       let orientation = match meta.format {
         DetectedFormat::Heic => meta.orientation,
         _ => None,

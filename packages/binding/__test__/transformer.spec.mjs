@@ -204,8 +204,37 @@ test('metadata() reflects rotate() exif orientation swap (#158)', async (t) => {
   const meta = await new Transformer(buffer).rotate().metadata(true)
   t.is(meta.width, expected.width)
   t.is(meta.height, expected.height)
-  // orientation field is still reported
-  t.is(meta.orientation, 6)
+  // A staged rotate bakes orientation into the previewed (upright) dims, so the
+  // reported orientation is normalized to undefined to match the encoded output
+  // (sharp autoOrient / ImageMagick -auto-orient / Pillow exif_transpose).
+  t.is(meta.orientation, undefined)
+  t.is(expected.orientation, undefined, 'encoded round-trip carries no orientation')
+})
+
+// A staged rotate normalizes orientation/EXIF in the metadata() preview: the
+// orientation field is dropped (undefined) AND the now-stale `Orientation` EXIF
+// key is removed, while the rest of the source EXIF is retained (#158).
+test('metadata(true) drops Orientation EXIF key after rotate(), keeps other tags (#158)', async (t) => {
+  // Source EXIF (no rotate) carries Orientation + other tags.
+  const source = await new Transformer(WITH_EXIF_JPG).metadata(true)
+  t.true('Orientation' in source.exif, 'source has an Orientation EXIF key')
+  const otherKeys = Object.keys(source.exif).filter((k) => k !== 'Orientation')
+  t.true(otherKeys.length > 0, 'source has at least one non-Orientation EXIF key')
+
+  const meta = await new Transformer(WITH_EXIF_JPG).rotate().metadata(true)
+  // Orientation normalized away.
+  t.is(meta.orientation, undefined)
+  // EXIF is still present but the stale Orientation key is gone...
+  t.truthy(meta.exif)
+  t.false('Orientation' in meta.exif, 'stale Orientation EXIF key dropped')
+  // ...and at least one other source EXIF tag is retained.
+  for (const k of otherKeys) {
+    t.is(meta.exif[k], source.exif[k], `retained source EXIF tag ${k}`)
+  }
+
+  // Cross-check: the encoded .rotate().png() round-trip carries no orientation.
+  const roundTrip = await roundTripMeta(await new Transformer(WITH_EXIF_JPG).rotate().png())
+  t.is(roundTrip.orientation, undefined, 'encoded output has no orientation')
 })
 
 test('metadata() reflects grayscale colorType (#158)', async (t) => {
