@@ -527,6 +527,25 @@ impl ImageTransformArgs {
       || self.grayscale
       || self.crop.is_some()
   }
+
+  /// No staged transform — the encode pipeline only reads the image, so it can borrow the
+  /// cached decode instead of cloning it.
+  fn is_noop(&self) -> bool {
+    !self.rotate
+      && self.orientation.is_none()
+      && self.resize.is_none()
+      && self.fast_resize.is_none()
+      && !self.grayscale
+      && !self.invert
+      && self.contrast.is_none()
+      && self.blur.is_none()
+      && self.unsharpen.is_none()
+      && self.filter3x3.is_none()
+      && self.brightness.is_none()
+      && self.huerotate.is_none()
+      && self.crop.is_none()
+      && self.overlay.is_empty()
+  }
 }
 
 /// Apply the staged pipeline to `image` in pipeline order:
@@ -686,24 +705,23 @@ impl Task for EncodeTask {
 
   fn compute(&mut self) -> Result<Self::Output> {
     let meta = self.image.get(self.image_transform_args.rotate)?;
-    // Clone so the shared cached decode stays pristine — mutating it makes a later
-    // metadata()/encode on the same Transformer re-apply the staged transforms
-    // (double-crop/double-rotate). The metadata path already clones; this matches
-    // it so encoded output is byte-identical with no cache side effect (#158).
-    let mut dynamic_image = meta.image.clone();
-    apply_transforms(
-      &mut dynamic_image,
-      &self.image_transform_args,
-      meta.orientation,
-      true,
-    )?;
-    for (buffer, x, y) in std::mem::take(&mut self.image_transform_args.overlay).into_iter() {
-      let top = ThreadsafeDynamicImage::new(buffer.clone());
-      let top_image_meta = top.get(true)?;
-      overlay(&mut dynamic_image, &top_image_meta.image, x, y);
-    }
-
-    let dynamic_image = &mut dynamic_image;
+    // Only clone when the pipeline will mutate the pixels. A plain encode with nothing staged
+    // borrows the cached decode read-only — no memory doubling (PR #218). When transforms/overlay
+    // ARE staged we clone so the shared cache stays pristine and reuse stays idempotent (#158, Task 4).
+    let owned;
+    let dynamic_image: &DynamicImage = if self.image_transform_args.is_noop() {
+      &meta.image
+    } else {
+      let mut img = meta.image.clone();
+      apply_transforms(&mut img, &self.image_transform_args, meta.orientation, true)?;
+      for (buffer, x, y) in std::mem::take(&mut self.image_transform_args.overlay).into_iter() {
+        let top = ThreadsafeDynamicImage::new(buffer.clone());
+        let top_image_meta = top.get(true)?;
+        overlay(&mut img, &top_image_meta.image, x, y);
+      }
+      owned = img;
+      &owned
+    };
     let width = dynamic_image.width();
     let height = dynamic_image.height();
     let format = match self.options {

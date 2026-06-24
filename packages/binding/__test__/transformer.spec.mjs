@@ -374,6 +374,15 @@ test('reuse: two encodes on one instance produce identical dims (#158)', (t) => 
   t.is(d2.height, d1.height)
 })
 
+// no-transform encode borrows the cached decode read-only; encoding twice on the
+// same instance must yield byte-identical output (borrow path leaves cache intact, PR #218).
+test('reuse: no-transform encode borrows cache, two encodes are byte-identical (#158)', (t) => {
+  const transformer = new Transformer(PNG)
+  const first = transformer.pngSync()
+  const second = transformer.pngSync()
+  t.true(Buffer.from(first).equals(Buffer.from(second)), 'borrow path leaves the cached decode untouched')
+})
+
 // rotate: metadata before == metadata after a rawPixels()/encode (no double-rotate).
 test('reuse: rotate metadata is stable across raw pixels + encode (#158)', async (t) => {
   const buffer = await fs.readFile(join(ORIENTATION_DIR, 'orientation_6.jpg'))
