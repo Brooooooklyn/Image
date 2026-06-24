@@ -312,3 +312,54 @@ test('rawPixelsSync() with no transform == decoded width*height*channels (#158, 
   const expected = sm.width * sm.height * 4
   t.is(new Transformer(PNG).rawPixelsSync().length, expected)
 })
+
+// --- Transformer reuse must be idempotent: encode must NOT mutate the shared
+// cached decode, so the staged transforms apply exactly once on every call
+// (adversarial-review round 2; encode on a clone / no cache mutation, #158) ---
+
+// crop: metadata before an encode == metadata after the encode (no double-crop).
+test('reuse: crop metadata is stable across an encode (no cache mutation, #158)', (t) => {
+  const transformer = new Transformer(PNG).crop(10, 10, 100, 80)
+  const before = transformer.metadataSync()
+  t.is(before.width, 100)
+  t.is(before.height, 80)
+  // Encoding must not re-crop the cached decode in place.
+  transformer.pngSync()
+  const after = transformer.metadataSync()
+  t.is(after.width, 100, 'crop applied once, not re-cropped by the prior encode')
+  t.is(after.height, 80)
+  // rawPixels length stays consistent with 100x80 across calls.
+  const channels = 4 // PNG fixture decodes to RGBA8
+  t.is(transformer.rawPixelsSync().length, 100 * 80 * channels)
+  t.is(transformer.rawPixelsSync().length, 100 * 80 * channels)
+})
+
+// two encodes on one instance must produce the same dimensions.
+test('reuse: two encodes on one instance produce identical dims (#158)', (t) => {
+  const transformer = new Transformer(PNG).crop(10, 10, 100, 80)
+  const d1 = new Transformer(transformer.pngSync()).metadataSync()
+  const d2 = new Transformer(transformer.pngSync()).metadataSync()
+  t.is(d1.width, 100)
+  t.is(d1.height, 80)
+  t.is(d2.width, d1.width, 'second encode is not double-cropped')
+  t.is(d2.height, d1.height)
+})
+
+// rotate: metadata before == metadata after a rawPixels()/encode (no double-rotate).
+test('reuse: rotate metadata is stable across raw pixels + encode (#158)', async (t) => {
+  const buffer = await fs.readFile(join(ORIENTATION_DIR, 'orientation_6.jpg'))
+  const transformer = new Transformer(buffer).rotate()
+  // Cross-check the upright dims against this instance's own first encode round-trip.
+  const upright = new Transformer(transformer.pngSync()).metadataSync()
+  t.is(upright.width, CANONICAL_WIDTH)
+  t.is(upright.height, CANONICAL_HEIGHT)
+
+  const before = transformer.metadataSync()
+  t.is(before.width, upright.width)
+  t.is(before.height, upright.height)
+  // A raw-pixel read (an encode) must not rotate the cached decode in place.
+  transformer.rawPixelsSync()
+  const after = transformer.metadataSync()
+  t.is(after.width, upright.width, 'rotate applied once, not re-rotated by the prior encode')
+  t.is(after.height, upright.height)
+})

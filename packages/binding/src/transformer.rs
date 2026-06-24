@@ -668,8 +668,13 @@ impl Task for EncodeTask {
 
   fn compute(&mut self) -> Result<Self::Output> {
     let meta = self.image.get(self.image_transform_args.rotate)?;
+    // Clone so the shared cached decode stays pristine — mutating it makes a later
+    // metadata()/encode on the same Transformer re-apply the staged transforms
+    // (double-crop/double-rotate). The metadata path already clones; this matches
+    // it so encoded output is byte-identical with no cache side effect (#158).
+    let mut dynamic_image = meta.image.clone();
     apply_transforms(
-      &mut meta.image,
+      &mut dynamic_image,
       &self.image_transform_args,
       meta.orientation,
       true,
@@ -677,10 +682,10 @@ impl Task for EncodeTask {
     for (buffer, x, y) in std::mem::take(&mut self.image_transform_args.overlay).into_iter() {
       let top = ThreadsafeDynamicImage::new(buffer.clone());
       let top_image_meta = top.get(true)?;
-      overlay(&mut meta.image, &top_image_meta.image, x, y);
+      overlay(&mut dynamic_image, &top_image_meta.image, x, y);
     }
 
-    let dynamic_image = &mut meta.image;
+    let dynamic_image = &mut dynamic_image;
     let width = dynamic_image.width();
     let height = dynamic_image.height();
     let format = match self.options {
