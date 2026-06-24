@@ -439,10 +439,11 @@ impl Task for MetadataTask {
     } else {
       (meta.image.width(), meta.image.height(), meta.color_type)
     };
-    // Gate the RETURNED EXIF/orientation on `with_exif` AND on whether a rotate
-    // is staged. A pending rotate forced us to parse EXIF above (for swapped
-    // dims), but a `with_exif=false` caller never requested it, so don't leak it
-    // (#158, finding F1).
+    // Decide the RETURNED EXIF/orientation (#158). Two concerns: (1) a pending
+    // rotate forced us to parse EXIF above for swapped dims, but a
+    // `with_exif=false` caller never requested it, so never leak it; (2) when a
+    // rotate is staged it bakes the orientation into the previewed pixels, so the
+    // returned orientation must be normalized (see the rotation branch below).
     let rotation_applied =
       self.image_transform_args.rotate || self.image_transform_args.orientation.is_some();
     let (exif, orientation) = if rotation_applied {
