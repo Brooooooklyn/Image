@@ -53,6 +53,15 @@ onMac('decodes heic metadata', async (t) => {
   t.is(metadata.colorType, JsColorType.Rgba8)
 })
 
+// Adversarial-review finding F1 (#158): gating EXIF/orientation behind `with_exif`
+// must NOT drop HEIC orientation, which the ImageIO decoder sets unconditionally
+// (independent of rexif). `metadata(false)` must keep it non-null.
+onMac('heic metadata(false) preserves decoder orientation (#158, F1)', async (t) => {
+  const metadata = await new Transformer(HEIC).metadata()
+  t.not(metadata.orientation, undefined)
+  t.not(metadata.orientation, null)
+})
+
 onMac('decodes heic to png/jpeg/webp', async (t) => {
   const png = await new Transformer(HEIC).png()
   t.true(Buffer.isBuffer(png))

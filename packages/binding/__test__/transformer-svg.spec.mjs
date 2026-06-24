@@ -191,3 +191,23 @@ test('semi-transparent SVG background is straight (demultiplied) RGBA (issue #15
   t.true(Math.abs(px[1] - 20) <= 1, `G should be straight ~20, got ${px[1]}`)
   t.true(Math.abs(px[2] - 30) <= 1, `B should be straight ~30, got ${px[2]}`)
 })
+
+// Regression for https://github.com/Brooooooklyn/Image/issues/158 (part 2):
+// SVG input must report `format: "svg"`, not the previous hardcoded "png" that leaked from the
+// shared `transformer_from_rgba8` helper.
+test('SVG input reports format "svg" (#158)', (t) => {
+  const meta = Transformer.fromSvg(SVG).metadataSync()
+  t.is(meta.format, 'svg')
+})
+
+// Regression for https://github.com/Brooooooklyn/Image/issues/158 (part 1, format-agnostic):
+// metadata() must apply pending transforms for SVG input too. Resizing to width 300 must report
+// width 300 with a proportional height, matching what a real `.pngSync()` round-trip produces.
+test('SVG metadata() reflects pending resize (#158)', (t) => {
+  const expected = new Transformer(Transformer.fromSvg(SVG).resize(300).pngSync()).metadataSync()
+  const meta = Transformer.fromSvg(SVG).resize(300).metadataSync()
+  t.is(meta.width, 300)
+  t.true(meta.height > 0)
+  t.is(meta.width, expected.width)
+  t.is(meta.height, expected.height)
+})

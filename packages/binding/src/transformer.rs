@@ -182,6 +182,7 @@ impl From<ResizeFilterType> for FilterType {
 pub enum DetectedFormat {
   Standard(image::ImageFormat),
   Heic,
+  Svg,
 }
 
 impl DetectedFormat {
@@ -191,6 +192,7 @@ impl DetectedFormat {
     match self {
       DetectedFormat::Standard(f) => Some(*f),
       DetectedFormat::Heic => None,
+      DetectedFormat::Svg => None,
     }
   }
 
@@ -200,6 +202,7 @@ impl DetectedFormat {
     match self {
       DetectedFormat::Standard(f) => format!("{f:?}").to_lowercase(),
       DetectedFormat::Heic => "heic".to_owned(),
+      DetectedFormat::Svg => "svg".to_owned(),
     }
   }
 }
@@ -401,6 +404,7 @@ pub struct Metadata {
 pub struct MetadataTask {
   dynamic_image: Arc<ThreadsafeDynamicImage>,
   with_exif: bool,
+  image_transform_args: ImageTransformArgs,
 }
 
 #[napi]
@@ -416,22 +420,59 @@ impl Task for MetadataTask {
   type JsValue = Metadata;
 
   fn compute(&mut self) -> Result<Self::Output> {
-    let ImageMetaData {
-      image: dynamic_image,
-      exif,
-      orientation,
-      format,
-      color_type,
-      ..
-    } = self.dynamic_image.get(self.with_exif)?;
-    Ok((
-      dynamic_image.width(),
-      dynamic_image.height(),
-      exif.clone(),
-      *orientation,
-      *format,
-      *color_type,
-    ))
+    // Parse EXIF when explicitly requested OR when a rotate is pending (so the
+    // orientation-aware dimensions below are correct), mirroring `EncodeTask`.
+    let meta = self
+      .dynamic_image
+      .get(self.with_exif || self.image_transform_args.rotate)?;
+    let (width, height, color_type) = if self.image_transform_args.changes_dimensions_or_color() {
+      // Compute on a CLONE so the shared, cached `DynamicImage` is never mutated;
+      // a later encode of the same `Transformer` must still apply transforms once.
+      let mut image = meta.image.clone();
+      apply_transforms(
+        &mut image,
+        &self.image_transform_args,
+        meta.orientation,
+        false,
+      )?;
+      (image.width(), image.height(), image.color())
+    } else {
+      (meta.image.width(), meta.image.height(), meta.color_type)
+    };
+    // Decide the RETURNED EXIF/orientation (#158). Two concerns: (1) a pending
+    // rotate forced us to parse EXIF above for swapped dims, but a
+    // `with_exif=false` caller never requested it, so never leak it; (2) when a
+    // rotate is staged it bakes the orientation into the previewed pixels, so the
+    // returned orientation must be normalized (see the rotation branch below).
+    let rotation_applied =
+      self.image_transform_args.rotate || self.image_transform_args.orientation.is_some();
+    let (exif, orientation) = if rotation_applied {
+      // A staged rotate bakes EXIF orientation into the pixels (the previewed dims
+      // are already upright), so the encoded output carries no orientation —
+      // report it normalized and drop the now-stale `Orientation` key, matching
+      // sharp autoOrient / ImageMagick -auto-orient / Pillow exif_transpose. Keep
+      // the rest of the source EXIF only when the caller asked for it.
+      let exif = if self.with_exif {
+        let mut e = meta.exif.clone();
+        e.remove("Orientation");
+        e
+      } else {
+        HashMap::new()
+      };
+      (exif, None)
+    } else if self.with_exif {
+      (meta.exif.clone(), meta.orientation)
+    } else {
+      // with_exif=false, no rotate: suppress rexif EXIF/orientation; HEIC
+      // orientation comes from the decoder (not rexif) and was always surfaced on
+      // main — preserve it.
+      let orientation = match meta.format {
+        DetectedFormat::Heic => meta.orientation,
+        _ => None,
+      };
+      (HashMap::new(), orientation)
+    };
+    Ok((width, height, exif, orientation, meta.format, color_type))
   }
 
   fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
@@ -471,6 +512,154 @@ struct ImageTransformArgs {
   orientation: Option<Orientation>,
   crop: Option<(u32, u32, u32, u32)>,
   overlay: Vec<(Arc<Uint8Array>, i64, i64)>,
+}
+
+impl ImageTransformArgs {
+  /// Whether any staged transform changes the encoded image's dimensions or
+  /// color type. Pure value-filters (invert/contrast/blur/unsharpen/filter3x3/
+  /// brighten/huerotate) and the in-place overlay do not, so `metadata()` can
+  /// skip cloning + applying them.
+  fn changes_dimensions_or_color(&self) -> bool {
+    self.rotate
+      || self.orientation.is_some()
+      || self.resize.is_some()
+      || self.fast_resize.is_some()
+      || self.grayscale
+      || self.crop.is_some()
+  }
+
+  /// No staged transform — the encode pipeline only reads the image, so it can borrow the
+  /// cached decode instead of cloning it.
+  fn is_noop(&self) -> bool {
+    !self.rotate
+      && self.orientation.is_none()
+      && self.resize.is_none()
+      && self.fast_resize.is_none()
+      && !self.grayscale
+      && !self.invert
+      && self.contrast.is_none()
+      && self.blur.is_none()
+      && self.unsharpen.is_none()
+      && self.filter3x3.is_none()
+      && self.brightness.is_none()
+      && self.huerotate.is_none()
+      && self.crop.is_none()
+      && self.overlay.is_empty()
+  }
+}
+
+/// Apply the staged pipeline to `image` in pipeline order:
+/// rotate/orientation -> resize -> fast_resize -> grayscale ->
+/// [value filters, encode-only] -> crop. The overlay step is NOT handled here
+/// (it needs the surrounding task's lifetime/cache); callers apply it after.
+///
+/// `for_encode == false` (metadata) skips the pure value-filters, which never
+/// change dimensions or color type.
+fn apply_transforms(
+  image: &mut DynamicImage,
+  args: &ImageTransformArgs,
+  base_orientation: Option<u16>,
+  for_encode: bool,
+) -> Result<()> {
+  let orientation = args
+    .orientation
+    .map(Ok)
+    .or_else(|| base_orientation.map(|o| o.try_into()));
+  if (args.rotate || args.orientation.is_some())
+    && let Some(orientation) = orientation
+  {
+    match orientation? {
+      Orientation::Horizontal => {}
+      Orientation::MirrorHorizontal => *image = image.fliph(),
+      Orientation::Rotate180 => *image = image.rotate180(),
+      Orientation::MirrorVertical => *image = image.flipv(),
+      Orientation::MirrorHorizontalAndRotate270Cw => *image = image.fliph().rotate270(),
+      Orientation::Rotate90Cw => *image = image.rotate90(),
+      Orientation::MirrorHorizontalAndRotate90Cw => *image = image.flipv().rotate270(),
+      Orientation::Rotate270Cw => *image = image.rotate270(),
+    }
+  }
+  let raw_width = image.width();
+  let raw_height = image.height();
+  if let Some(ResizeOptions {
+    width,
+    height,
+    filter,
+    fit,
+  }) = args.resize
+  {
+    match fit.unwrap_or_default() {
+      // the `resize_to_fill` is behavior like cover
+      ResizeFit::Cover => {
+        *image = image.resize_to_fill(
+          width,
+          height.unwrap_or(((width as f32 / raw_width as f32) * (raw_height as f32)) as u32),
+          filter.unwrap_or_default().into(),
+        )
+      }
+      ResizeFit::Fill => {
+        *image = image.resize_exact(
+          width,
+          height.unwrap_or(((width as f32 / raw_width as f32) * (raw_height as f32)) as u32),
+          filter.unwrap_or_default().into(),
+        )
+      }
+      ResizeFit::Inside => {
+        *image = image.resize(
+          width,
+          height.unwrap_or(((width as f32 / raw_width as f32) * (raw_height as f32)) as u32),
+          filter.unwrap_or_default().into(),
+        )
+      }
+    }
+  }
+  if let Some(options) = args.fast_resize {
+    let resized_image = fast_resize(&*image, options)?;
+    *image = DynamicImage::ImageRgba8(
+      RgbaImage::from_raw(
+        resized_image.width(),
+        resized_image.height(),
+        resized_image.into_vec(),
+      )
+      .ok_or_else(|| {
+        Error::new(
+          Status::GenericFailure,
+          "Resized image is not valid".to_owned(),
+        )
+      })?,
+    );
+  }
+
+  if args.grayscale {
+    *image = image.grayscale();
+  }
+  if for_encode {
+    if args.invert {
+      image.invert();
+    }
+    if let Some(contrast) = args.contrast {
+      *image = image.adjust_contrast(contrast);
+    }
+    if let Some(blur) = args.blur {
+      *image = image.blur(blur);
+    }
+    if let Some((sigma, threshold)) = args.unsharpen {
+      *image = image.unsharpen(sigma, threshold);
+    }
+    if let Some(filter) = args.filter3x3 {
+      *image = image.filter3x3(filter.as_ref());
+    }
+    if let Some(brighten) = args.brightness {
+      *image = image.brighten(brighten);
+    }
+    if let Some(hue) = args.huerotate {
+      *image = image.huerotate(hue);
+    }
+  }
+  if let Some((x, y, width, height)) = args.crop {
+    *image = image.crop_imm(x, y, width, height);
+  }
+  Ok(())
 }
 
 pub struct EncodeTask {
@@ -516,110 +705,23 @@ impl Task for EncodeTask {
 
   fn compute(&mut self) -> Result<Self::Output> {
     let meta = self.image.get(self.image_transform_args.rotate)?;
-    let orientation = self
-      .image_transform_args
-      .orientation
-      .map(Ok)
-      .or_else(|| meta.orientation.map(|o| o.try_into()));
-    if (self.image_transform_args.rotate || self.image_transform_args.orientation.is_some())
-      && let Some(orientation) = orientation
-    {
-      match orientation? {
-        Orientation::Horizontal => {}
-        Orientation::MirrorHorizontal => meta.image = meta.image.fliph(),
-        Orientation::Rotate180 => meta.image = meta.image.rotate180(),
-        Orientation::MirrorVertical => meta.image = meta.image.flipv(),
-        Orientation::MirrorHorizontalAndRotate270Cw => meta.image = meta.image.fliph().rotate270(),
-        Orientation::Rotate90Cw => meta.image = meta.image.rotate90(),
-        Orientation::MirrorHorizontalAndRotate90Cw => meta.image = meta.image.flipv().rotate270(),
-        Orientation::Rotate270Cw => meta.image = meta.image.rotate270(),
+    // Only clone when the pipeline will mutate the pixels. A plain encode with nothing staged
+    // borrows the cached decode read-only — no memory doubling (PR #218). When transforms/overlay
+    // ARE staged we clone so the shared cache stays pristine and reuse stays idempotent (#158, Task 4).
+    let owned;
+    let dynamic_image: &DynamicImage = if self.image_transform_args.is_noop() {
+      &meta.image
+    } else {
+      let mut img = meta.image.clone();
+      apply_transforms(&mut img, &self.image_transform_args, meta.orientation, true)?;
+      for (buffer, x, y) in std::mem::take(&mut self.image_transform_args.overlay).into_iter() {
+        let top = ThreadsafeDynamicImage::new(buffer.clone());
+        let top_image_meta = top.get(true)?;
+        overlay(&mut img, &top_image_meta.image, x, y);
       }
-    }
-    let raw_width = meta.image.width();
-    let raw_height = meta.image.height();
-    if let Some(ResizeOptions {
-      width,
-      height,
-      filter,
-      fit,
-    }) = self.image_transform_args.resize
-    {
-      match fit.unwrap_or_default() {
-        // the `resize_to_fill` is behavior like cover
-        ResizeFit::Cover => {
-          meta.image = meta.image.resize_to_fill(
-            width,
-            height.unwrap_or(((width as f32 / raw_width as f32) * (raw_height as f32)) as u32),
-            filter.unwrap_or_default().into(),
-          )
-        }
-        ResizeFit::Fill => {
-          meta.image = meta.image.resize_exact(
-            width,
-            height.unwrap_or(((width as f32 / raw_width as f32) * (raw_height as f32)) as u32),
-            filter.unwrap_or_default().into(),
-          )
-        }
-        ResizeFit::Inside => {
-          meta.image = meta.image.resize(
-            width,
-            height.unwrap_or(((width as f32 / raw_width as f32) * (raw_height as f32)) as u32),
-            filter.unwrap_or_default().into(),
-          )
-        }
-      }
-    }
-    if let Some(options) = self.image_transform_args.fast_resize {
-      let resized_image = fast_resize(&meta.image, options)?;
-      meta.image = DynamicImage::ImageRgba8(
-        RgbaImage::from_raw(
-          resized_image.width(),
-          resized_image.height(),
-          resized_image.into_vec(),
-        )
-        .ok_or_else(|| {
-          Error::new(
-            Status::GenericFailure,
-            "Resized image is not valid".to_owned(),
-          )
-        })?,
-      );
-    }
-
-    if self.image_transform_args.grayscale {
-      meta.image = meta.image.grayscale();
-    }
-    if self.image_transform_args.invert {
-      meta.image.invert();
-    }
-    if let Some(contrast) = self.image_transform_args.contrast {
-      meta.image = meta.image.adjust_contrast(contrast);
-    }
-    if let Some(blur) = self.image_transform_args.blur {
-      meta.image = meta.image.blur(blur);
-    }
-    if let Some((sigma, threshold)) = self.image_transform_args.unsharpen {
-      meta.image = meta.image.unsharpen(sigma, threshold);
-    }
-    if let Some(filter) = self.image_transform_args.filter3x3 {
-      meta.image = meta.image.filter3x3(filter.as_ref());
-    }
-    if let Some(brighten) = self.image_transform_args.brightness {
-      meta.image = meta.image.brighten(brighten);
-    }
-    if let Some(hue) = self.image_transform_args.huerotate {
-      meta.image = meta.image.huerotate(hue);
-    }
-    if let Some((x, y, width, height)) = self.image_transform_args.crop {
-      meta.image = meta.image.crop_imm(x, y, width, height);
-    }
-    for (buffer, x, y) in std::mem::take(&mut self.image_transform_args.overlay).into_iter() {
-      let top = ThreadsafeDynamicImage::new(buffer.clone());
-      let top_image_meta = top.get(true)?;
-      overlay(&mut meta.image, &top_image_meta.image, x, y);
-    }
-
-    let dynamic_image = &mut meta.image;
+      owned = img;
+      &owned
+    };
     let width = dynamic_image.width();
     let height = dynamic_image.height();
     let format = match self.options {
@@ -723,13 +825,13 @@ pub struct Transformer {
   image_transform_args: ImageTransformArgs,
 }
 
-fn transformer_from_rgba8(image: RgbaImage) -> Transformer {
+fn transformer_from_rgba8(image: RgbaImage, format: DetectedFormat) -> Transformer {
   let image_meta = Box::new(Some(ImageMetaData {
     color_type: ColorType::Rgba8,
     orientation: None,
     image: DynamicImage::ImageRgba8(image),
     exif: HashMap::new(),
-    format: DetectedFormat::Standard(ImageFormat::Png),
+    format,
     has_parsed_exif: true,
   }));
   Transformer {
@@ -813,7 +915,9 @@ impl Transformer {
     let target_width = target_width as u32;
     let target_height = target_height as u32;
     let mut pix_map = tiny_skia::Pixmap::new(target_width, target_height).ok_or_else(|| {
-      Error::from_reason(format!("Failed to rasterize SVG at {target_width}x{target_height}"))
+      Error::from_reason(format!(
+        "Failed to rasterize SVG at {target_width}x{target_height}"
+      ))
     })?;
 
     // Inspired by [resvg-js/src/options.rs/fn create_pixmap](https://github.com/yisibl/resvg-js/blob/475ed45c091ef101f62f274b8a30883440bdfd89/src/options.rs#L185)
@@ -843,7 +947,7 @@ impl Transformer {
         "Rendered SVG pixel buffer does not match its dimensions".to_owned(),
       )
     })?;
-    Ok(transformer_from_rgba8(image))
+    Ok(transformer_from_rgba8(image, DetectedFormat::Svg))
   }
 
   #[napi]
@@ -860,7 +964,10 @@ impl Transformer {
         Either::B(b) => b.to_vec(),
       },
     ) {
-      Ok(transformer_from_rgba8(image))
+      Ok(transformer_from_rgba8(
+        image,
+        DetectedFormat::Standard(ImageFormat::Png),
+      ))
     } else {
       Err(Error::new(
         Status::InvalidArg,
@@ -879,6 +986,7 @@ impl Transformer {
       MetadataTask {
         dynamic_image: self.dynamic_image.clone(),
         with_exif: with_exif.unwrap_or(false),
+        image_transform_args: self.image_transform_args.clone(),
       },
       signal,
     )
@@ -889,6 +997,7 @@ impl Transformer {
     let mut task = MetadataTask {
       dynamic_image: self.dynamic_image.clone(),
       with_exif: with_exif.unwrap_or(false),
+      image_transform_args: self.image_transform_args.clone(),
     };
     let output = task.compute()?;
     task.resolve(env, output)
@@ -1059,9 +1168,18 @@ impl Transformer {
 
   #[napi]
   /// Return this image's pixels as a native endian byte slice.
-  pub fn raw_pixels_sync(&self) -> Result<Buffer> {
-    let meta = self.dynamic_image.get(false)?;
-    Ok(meta.image.as_bytes().to_vec().into())
+  pub fn raw_pixels_sync(&self, env: Env) -> Result<Buffer> {
+    // Route through `EncodeTask` so staged transforms apply, exactly like every
+    // other `*_sync` encoder (e.g. `webp_sync`/`png_sync`) and async
+    // `raw_pixels` (#158, finding F2). `env` is injected by napi; the JS
+    // `rawPixelsSync(): Buffer` signature is unchanged.
+    let mut encoder = EncodeTask {
+      image: self.dynamic_image.clone(),
+      options: EncodeOptions::RawPixels,
+      image_transform_args: self.image_transform_args.clone(),
+    };
+    let output = encoder.compute()?;
+    encoder.resolve(env, output)
   }
 
   #[napi]
@@ -1418,6 +1536,18 @@ mod tests {
   #[test]
   fn heic_as_str_is_heic() {
     assert_eq!(DetectedFormat::Heic.as_str(), "heic");
+  }
+
+  #[test]
+  fn svg_as_str_is_svg() {
+    assert_eq!(DetectedFormat::Svg.as_str(), "svg");
+    // Standard(Png) must still report "png" (raw rgba pixel path).
+    assert_eq!(DetectedFormat::Standard(ImageFormat::Png).as_str(), "png");
+  }
+
+  #[test]
+  fn svg_image_format_is_none() {
+    assert_eq!(DetectedFormat::Svg.image_format(), None);
   }
 
   #[test]
