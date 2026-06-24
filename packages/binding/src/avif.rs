@@ -1,4 +1,4 @@
-use image::{DynamicImage, GenericImageView, ImageBuffer, Rgb, buffer::ConvertBuffer};
+use image::{DynamicImage, GenericImageView, ImageBuffer, Rgb, Rgba, buffer::ConvertBuffer};
 use libavif::{AvifData, AvifImage, RgbPixels, YuvFormat};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
@@ -178,7 +178,10 @@ pub(crate) fn encode_avif_inner(
       )
     }
     DynamicImage::ImageRgba16(img) => {
-      let image: ImageBuffer<Rgb<u8>, _> = img.convert();
+      // Keep the alpha channel (convert to RGBA8, not RGB8). The libavif RGB path is
+      // 8-bit, so precision drops to 8-bit regardless, but dropping alpha here made
+      // `.opacity().avif()` on a 16-bit source encode fully opaque (issue #42).
+      let image: ImageBuffer<Rgba<u8>, _> = img.convert();
       let avif_image = image.as_flat_samples();
       encode_image(
         avif_image.as_slice(),
@@ -198,7 +201,8 @@ pub(crate) fn encode_avif_inner(
       )
     }
     DynamicImage::ImageRgba32F(img) => {
-      let image: ImageBuffer<Rgb<u8>, _> = img.convert();
+      // Keep the alpha channel (RGBA8, not RGB8) — same reasoning as `ImageRgba16`.
+      let image: ImageBuffer<Rgba<u8>, _> = img.convert();
       let avif_image = image.as_flat_samples();
       encode_image(
         avif_image.as_slice(),
@@ -234,4 +238,36 @@ fn encode_image(
     rgb.to_image(format)
   };
   Ok(image)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::encode_avif_inner;
+  use image::{DynamicImage, ImageBuffer};
+
+  /// A 16-bit RGBA source with half alpha must keep its transparency through AVIF
+  /// (the libavif RGB path is 8-bit, so precision drops to 8-bit — but the alpha
+  /// channel must NOT be dropped). Guards the Codex P2: `.opacity(0.5).avif()` on a
+  /// 16-bit source was encoding fully opaque because the `ImageRgba16` branch
+  /// converted to `Rgb<u8>`. See issue #42.
+  #[test]
+  fn avif_preserves_alpha_from_rgba16_source() {
+    // 16x16, uniform: opaque-ish color, alpha 0x8000 (~50%). Uniform so the lossy
+    // alpha plane round-trips cleanly.
+    let buf: Vec<u16> = (0..16 * 16)
+      .flat_map(|_| [40000u16, 20000, 10000, 0x8000])
+      .collect();
+    let img = DynamicImage::ImageRgba16(ImageBuffer::from_raw(16, 16, buf).unwrap());
+
+    let data = encode_avif_inner(None, &img).expect("encode avif");
+    let decoded = libavif::decode_rgb(&data).expect("decode avif");
+    let pixels = decoded.to_vec();
+    let channels = pixels.len() / (decoded.width() * decoded.height()) as usize;
+    assert_eq!(channels, 4, "alpha channel must survive AVIF encode");
+    let alpha = pixels[3];
+    assert!(
+      alpha < 200,
+      "alpha must stay ~128 (was halved), not snap back to opaque; got {alpha}"
+    );
+  }
 }

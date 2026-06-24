@@ -512,13 +512,16 @@ struct ImageTransformArgs {
   orientation: Option<Orientation>,
   crop: Option<(u32, u32, u32, u32)>,
   overlay: Vec<(Arc<Uint8Array>, i64, i64)>,
+  /// Multiply the alpha channel by this factor (0.0..=1.0). Promotes the image to RGBA8.
+  opacity: Option<f32>,
 }
 
 impl ImageTransformArgs {
   /// Whether any staged transform changes the encoded image's dimensions or
   /// color type. Pure value-filters (invert/contrast/blur/unsharpen/filter3x3/
   /// brighten/huerotate) and the in-place overlay do not, so `metadata()` can
-  /// skip cloning + applying them.
+  /// skip cloning + applying them. `opacity` is included: it promotes the image
+  /// to RGBA8, so `metadata().colorType` must reflect it (like `grayscale`).
   fn changes_dimensions_or_color(&self) -> bool {
     self.rotate
       || self.orientation.is_some()
@@ -526,6 +529,7 @@ impl ImageTransformArgs {
       || self.fast_resize.is_some()
       || self.grayscale
       || self.crop.is_some()
+      || self.opacity.is_some()
   }
 
   /// No staged transform — the encode pipeline only reads the image, so it can borrow the
@@ -545,6 +549,7 @@ impl ImageTransformArgs {
       && self.huerotate.is_none()
       && self.crop.is_none()
       && self.overlay.is_empty()
+      && self.opacity.is_none()
   }
 }
 
@@ -633,6 +638,16 @@ fn apply_transforms(
   if args.grayscale {
     *image = image.grayscale();
   }
+  // Snapshot the source alpha when opacity runs alongside `adjust_contrast`, so opacity
+  // scales the ORIGINAL alpha — `new = old * factor` — instead of a mangled value (issue
+  // #42). `adjust_contrast` is the only staged filter that maps the alpha channel as an
+  // unwanted side effect: `invert`/`brighten`/`huerotate` leave alpha untouched, and the
+  // spatial filters (`blur`/`unsharpen`/`filter3x3`) feather it on purpose — opacity must
+  // keep that feathering, so they are deliberately NOT snapshot. Skipped too for sources
+  // with no alpha (opacity just adds a fully-opaque channel that nothing has touched).
+  let opacity_source_alpha =
+    (for_encode && args.opacity.is_some() && args.contrast.is_some() && image.color().has_alpha())
+      .then(|| capture_alpha(image));
   if for_encode {
     if args.invert {
       image.invert();
@@ -655,6 +670,14 @@ fn apply_transforms(
     if let Some(hue) = args.huerotate {
       *image = image.huerotate(hue);
     }
+  }
+  // Multiply the alpha channel (issue #42), applied AFTER the value filters using the
+  // pre-filter source alpha (see the snapshot above) so color filters never corrupt
+  // the result. Still unconditional (not gated on `for_encode`) so a pending opacity
+  // is reflected in `metadata().colorType`; in that path no filters ran, so the
+  // current alpha IS the source alpha and the snapshot is unnecessary (`None`).
+  if let Some(factor) = args.opacity {
+    apply_opacity(image, factor, opacity_source_alpha.as_deref());
   }
   if let Some((x, y, width, height)) = args.crop {
     *image = image.crop_imm(x, y, width, height);
@@ -1137,6 +1160,22 @@ impl Transformer {
   }
 
   #[napi]
+  /// Multiply the image's alpha channel by `factor` (clamped to `0.0..=1.0`),
+  /// like CSS `opacity`. `1.0` leaves the image unchanged; `0.0` makes it fully
+  /// transparent. Existing transparency is preserved (`new = old * factor`), and
+  /// the image is promoted to an alpha-capable type while keeping its bit depth
+  /// (RGBA8 / RGBA16 / RGBA32F).
+  ///
+  /// Like every other filter, this applies to *this* image's content; a later
+  /// `overlay` is composited on top afterward. To fade an image you are dropping
+  /// onto another, call `opacity` on that (top) image first, then pass it to the
+  /// bottom image's `overlay`. Handy for fade-out animation frames.
+  pub fn opacity(&mut self, factor: f64) -> &Self {
+    self.image_transform_args.opacity = Some(factor as f32);
+    self
+  }
+
+  #[napi]
   /// Crop a cut-out of this image delimited by the bounding rectangle.
   pub fn crop(&mut self, x: u32, y: u32, width: u32, height: u32) -> &Self {
     self.image_transform_args.crop = Some((x, y, width, height));
@@ -1490,6 +1529,60 @@ impl Transformer {
     output.into_buffer_slice(env)
   }
 }
+/// The source alpha channel, normalized to `0.0..=1.0`, in row-major pixel order.
+/// Captured before the value filters so opacity can scale the ORIGINAL alpha (see
+/// `apply_opacity`). `to_rgba32f` normalizes any bit depth (255/65535 -> 1.0).
+fn capture_alpha(image: &DynamicImage) -> Vec<f32> {
+  image.to_rgba32f().pixels().map(|p| p[3]).collect()
+}
+
+/// Multiply the alpha channel by `factor`, preserving the source bit depth.
+///
+/// `factor` is clamped to `0.0..=1.0`; a non-finite `factor` (NaN / ∞) is treated
+/// as `1.0` (identity) so bad input never silently zeroes the image. The image is
+/// promoted to the alpha-capable type *of its own depth* (RGBA8 / RGBA16 / RGBA32F)
+/// instead of always dropping to 8-bit, so 16-bit (e.g. 10-bit HEIC) and HDR float
+/// sources keep their precision. See issue #42 and the bit-depth regression tests.
+///
+/// When `source_alpha` is `Some` (normalized `0.0..=1.0`, one entry per pixel in
+/// row-major order) the new alpha is `source_alpha * factor`, ignoring the image's
+/// current alpha. This is how opacity stays immune to value filters like
+/// `adjust_contrast`, which map the alpha channel and would otherwise corrupt the
+/// `new = old * factor` contract. When `None`, the image's current alpha is scaled.
+fn apply_opacity(image: &mut DynamicImage, factor: f32, source_alpha: Option<&[f32]>) {
+  let factor = if factor.is_finite() {
+    factor.clamp(0.0, 1.0)
+  } else {
+    1.0
+  };
+  match image.color() {
+    ColorType::L16 | ColorType::La16 | ColorType::Rgb16 | ColorType::Rgba16 => {
+      let mut buf = image.to_rgba16();
+      for (i, pixel) in buf.pixels_mut().enumerate() {
+        let base = source_alpha.map_or(pixel[3] as f32, |a| a[i] * 65535.0);
+        pixel[3] = (base * factor).round().clamp(0.0, 65535.0) as u16;
+      }
+      *image = DynamicImage::ImageRgba16(buf);
+    }
+    ColorType::Rgb32F | ColorType::Rgba32F => {
+      let mut buf = image.to_rgba32f();
+      for (i, pixel) in buf.pixels_mut().enumerate() {
+        let base = source_alpha.map_or(pixel[3], |a| a[i]);
+        pixel[3] = (base * factor).clamp(0.0, 1.0);
+      }
+      *image = DynamicImage::ImageRgba32F(buf);
+    }
+    _ => {
+      let mut buf = image.to_rgba8();
+      for (i, pixel) in buf.pixels_mut().enumerate() {
+        let base = source_alpha.map_or(pixel[3] as f32, |a| a[i] * 255.0);
+        pixel[3] = (base * factor).round().clamp(0.0, 255.0) as u8;
+      }
+      *image = DynamicImage::ImageRgba8(buf);
+    }
+  }
+}
+
 #[inline]
 fn parse_exif(
   buf: &[u8],
@@ -1565,5 +1658,106 @@ mod tests {
   #[test]
   fn heic_image_format_is_none() {
     assert_eq!(DetectedFormat::Heic.image_format(), None);
+  }
+
+  use super::apply_opacity;
+  use image::{ColorType, DynamicImage, ImageBuffer, RgbaImage};
+
+  #[test]
+  fn opacity_rgba8_multiplies_alpha_and_keeps_8bit() {
+    let mut img =
+      DynamicImage::ImageRgba8(RgbaImage::from_raw(1, 1, vec![10, 20, 30, 200]).unwrap());
+    apply_opacity(&mut img, 0.5, None);
+    assert_eq!(img.color(), ColorType::Rgba8);
+    let px = img.to_rgba8();
+    // round(200 * 0.5) = 100; color channels untouched.
+    assert_eq!(px.get_pixel(0, 0).0, [10, 20, 30, 100]);
+  }
+
+  #[test]
+  fn opacity_preserves_16bit_depth() {
+    // The bug this guards (Codex review): a 16-bit source must NOT be silently
+    // down-converted to 8-bit. Even the identity factor must keep Rgba16.
+    let mut img = DynamicImage::ImageRgba16(
+      ImageBuffer::from_raw(1, 1, vec![1000u16, 2000, 3000, 40000]).unwrap(),
+    );
+    apply_opacity(&mut img, 1.0, None);
+    assert_eq!(
+      img.color(),
+      ColorType::Rgba16,
+      "identity opacity must not drop to 8-bit"
+    );
+
+    let mut img = DynamicImage::ImageRgba16(
+      ImageBuffer::from_raw(1, 1, vec![1000u16, 2000, 3000, 40000]).unwrap(),
+    );
+    apply_opacity(&mut img, 0.5, None);
+    assert_eq!(img.color(), ColorType::Rgba16);
+    if let DynamicImage::ImageRgba16(buf) = &img {
+      assert_eq!(buf.get_pixel(0, 0).0, [1000, 2000, 3000, 20000]);
+    } else {
+      panic!("expected Rgba16");
+    }
+  }
+
+  #[test]
+  fn opacity_promotes_rgb16_to_rgba16_not_rgba8() {
+    // RGB16 (no alpha) gains an alpha channel but stays 16-bit.
+    let mut img =
+      DynamicImage::ImageRgb16(ImageBuffer::from_raw(1, 1, vec![1000u16, 2000, 3000]).unwrap());
+    apply_opacity(&mut img, 0.5, None);
+    assert_eq!(img.color(), ColorType::Rgba16);
+    if let DynamicImage::ImageRgba16(buf) = &img {
+      // full alpha (65535) scaled by 0.5 -> 32768 (32767.5 rounds up).
+      assert_eq!(buf.get_pixel(0, 0).0[3], 32768);
+    } else {
+      panic!("expected Rgba16");
+    }
+  }
+
+  #[test]
+  fn opacity_preserves_32f_depth() {
+    let mut img =
+      DynamicImage::ImageRgba32F(ImageBuffer::from_raw(1, 1, vec![0.1f32, 0.2, 0.3, 0.8]).unwrap());
+    apply_opacity(&mut img, 0.5, None);
+    assert_eq!(img.color(), ColorType::Rgba32F);
+    if let DynamicImage::ImageRgba32F(buf) = &img {
+      assert!((buf.get_pixel(0, 0).0[3] - 0.4).abs() < 1e-6);
+    } else {
+      panic!("expected Rgba32F");
+    }
+  }
+
+  #[test]
+  fn opacity_clamps_above_one_and_ignores_non_finite() {
+    let mut img =
+      DynamicImage::ImageRgba8(RgbaImage::from_raw(1, 1, vec![10, 20, 30, 200]).unwrap());
+    apply_opacity(&mut img, 2.0, None);
+    assert_eq!(
+      img.to_rgba8().get_pixel(0, 0).0[3],
+      200,
+      "factor > 1 clamps to identity"
+    );
+
+    let mut img =
+      DynamicImage::ImageRgba8(RgbaImage::from_raw(1, 1, vec![10, 20, 30, 200]).unwrap());
+    apply_opacity(&mut img, f32::NAN, None);
+    assert_eq!(
+      img.to_rgba8().get_pixel(0, 0).0[3],
+      200,
+      "NaN must be a no-op, never silently zero the alpha"
+    );
+  }
+
+  #[test]
+  fn opacity_scales_provided_source_alpha_not_current() {
+    // Simulates the post-value-filter state: the live alpha (50) has been mangled by
+    // a filter, but opacity must scale the captured SOURCE alpha (1.0 == fully opaque)
+    // so the result is `1.0 * 0.5 == 128`, not `50 * 0.5`. Guards the Codex review on
+    // opacity vs adjust_contrast (#42).
+    let mut img =
+      DynamicImage::ImageRgba8(RgbaImage::from_raw(1, 1, vec![10, 20, 30, 50]).unwrap());
+    apply_opacity(&mut img, 0.5, Some(&[1.0]));
+    assert_eq!(img.to_rgba8().get_pixel(0, 0).0[3], 128);
   }
 }

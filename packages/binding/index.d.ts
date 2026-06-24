@@ -70,6 +70,19 @@ export declare class Transformer {
    * just like the css webkit filter hue-rotate(180)
    */
   huerotate(hue: number): this
+  /**
+   * Multiply the image's alpha channel by `factor` (clamped to `0.0..=1.0`),
+   * like CSS `opacity`. `1.0` leaves the image unchanged; `0.0` makes it fully
+   * transparent. Existing transparency is preserved (`new = old * factor`), and
+   * the image is promoted to an alpha-capable type while keeping its bit depth
+   * (RGBA8 / RGBA16 / RGBA32F).
+   *
+   * Like every other filter, this applies to *this* image's content; a later
+   * `overlay` is composited on top afterward. To fade an image you are dropping
+   * onto another, call `opacity` on that (top) image first, then pass it to the
+   * bottom image's `overlay`. Handy for fade-out animation frames.
+   */
+  opacity(factor: number): this
   /** Crop a cut-out of this image delimited by the bounding rectangle. */
   crop(x: number, y: number, width: number, height: number): this
   /** Overlay an image at a given coordinate (x, y) */

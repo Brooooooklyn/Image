@@ -102,6 +102,7 @@ Every transform mutates the pipeline and returns `this`, so they chain. They are
 | `adjustContrast(contrast)`                          | + increases contrast, − decreases.                                                       |
 | `brighten(brightness)`                              | + brightens, − darkens.                                                                  |
 | `huerotate(hue)`                                    | Rotate hue by degrees (0/360 are no-ops), like CSS `hue-rotate()`.                       |
+| `opacity(factor)`                                   | Multiply the alpha channel by `factor` (0–1), like CSS `opacity`. Keeps the bit depth.   |
 
 `resize` signature:
 
