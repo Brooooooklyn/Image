@@ -16,16 +16,16 @@
     "@taplo/cli": "^0.7.0",
     "@types/node": "^24.10.1",
     "@types/sharp": "^0.32.0",
-    "ava": "^8.0.0",
+    "ava": "^8.0.1",
     "blurhash": "^2.0.5",
     "chalk": "^5.6.2",
-    "electron": "^42.0.0",
-    "lerna": "^9.0.3",
+    "electron": "^42.4.1",
+    "lerna": "^9.0.7",
     "npm-run-all2": "^9.0.0",
-    "prettier": "^3.7.4",
+    "prettier": "^3.8.4",
     "rxjs": "^7.8.2",
-    "sharp": "^0.35.0",
-    "typescript": "^6.0.0"
+    "sharp": "^0.35.2",
+    "typescript": "^6.0.3"
   },
   "scripts": {
     "artifacts": "lerna run artifacts",
