@@ -439,14 +439,22 @@ impl Task for MetadataTask {
     } else {
       (meta.image.width(), meta.image.height(), meta.color_type)
     };
-    Ok((
-      width,
-      height,
-      meta.exif.clone(),
-      meta.orientation,
-      meta.format,
-      color_type,
-    ))
+    // Gate the RETURNED EXIF/orientation on `with_exif`. A pending rotate forced
+    // us to parse EXIF above (for swapped dims), but a `with_exif=false` caller
+    // never requested it, so don't leak it (#158, finding F1).
+    let (exif, orientation) = if self.with_exif {
+      (meta.exif.clone(), meta.orientation)
+    } else {
+      // HEIC orientation comes from the decoder (not rexif) and was always
+      // surfaced regardless of `with_exif`; preserve it. Everything else stays
+      // suppressed.
+      let orientation = match meta.format {
+        DetectedFormat::Heic => meta.orientation,
+        _ => None,
+      };
+      (HashMap::new(), orientation)
+    };
+    Ok((width, height, exif, orientation, meta.format, color_type))
   }
 
   fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
@@ -1119,9 +1127,18 @@ impl Transformer {
 
   #[napi]
   /// Return this image's pixels as a native endian byte slice.
-  pub fn raw_pixels_sync(&self) -> Result<Buffer> {
-    let meta = self.dynamic_image.get(false)?;
-    Ok(meta.image.as_bytes().to_vec().into())
+  pub fn raw_pixels_sync(&self, env: Env) -> Result<Buffer> {
+    // Route through `EncodeTask` so staged transforms apply, exactly like every
+    // other `*_sync` encoder (e.g. `webp_sync`/`png_sync`) and async
+    // `raw_pixels` (#158, finding F2). `env` is injected by napi; the JS
+    // `rawPixelsSync(): Buffer` signature is unchanged.
+    let mut encoder = EncodeTask {
+      image: self.dynamic_image.clone(),
+      options: EncodeOptions::RawPixels,
+      image_transform_args: self.image_transform_args.clone(),
+    };
+    let output = encoder.compute()?;
+    encoder.resolve(env, output)
   }
 
   #[napi]

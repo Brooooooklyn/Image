@@ -247,3 +247,68 @@ test('metadata() does not mutate cache; encode applies transform once (#158)', a
   const after = await roundTripMeta(encoded)
   t.is(after.width, 256, 'resize applied exactly once, not re-resized')
 })
+
+// --- metadata(false) must NOT leak EXIF/orientation a pending rotate forced us
+// to parse (adversarial-review finding F1, HIGH, #158) ---
+// A pending `.rotate()` makes compute() parse EXIF (to swap dims), but with
+// `with_exif=false` the caller never asked for EXIF/orientation, so they must
+// stay suppressed. The dim-swap fix must remain.
+test('metadata() (withExif=false) suppresses EXIF/orientation when rotate pending (#158, F1)', async (t) => {
+  const buffer = await fs.readFile(join(ORIENTATION_DIR, 'orientation_6.jpg'))
+  // Dims still swapped: cross-check against the same value with EXIF requested.
+  const withExif = await new Transformer(buffer).rotate().metadata(true)
+  const meta = await new Transformer(buffer).rotate().metadata()
+  t.is(meta.width, withExif.width)
+  t.is(meta.height, withExif.height)
+  t.not(meta.width, meta.height, 'dimensions are swapped (portrait -> landscape)')
+  // The leak: must NOT surface EXIF/orientation the caller never requested.
+  t.is(meta.exif, undefined)
+  t.is(meta.orientation, undefined)
+})
+
+test('metadata() (withExif=false) suppresses rich EXIF on with-exif.jpg when rotate pending (#158, F1)', async (t) => {
+  const meta = await new Transformer(WITH_EXIF_JPG).rotate().metadata()
+  t.is(meta.exif, undefined)
+  t.is(meta.orientation, undefined)
+  // dims still rotated (orientation 5 swaps width/height)
+  const withExif = await new Transformer(WITH_EXIF_JPG).rotate().metadata(true)
+  t.is(meta.width, withExif.width)
+  t.is(meta.height, withExif.height)
+})
+
+// Regression guard: metadata(true) is UNCHANGED — EXIF + orientation still present.
+test('metadata(true) still returns EXIF + orientation on with-exif.jpg (#158, F1 guard)', async (t) => {
+  const meta = await new Transformer(WITH_EXIF_JPG).metadata(true)
+  t.is(meta.orientation, 5)
+  t.truthy(meta.exif)
+  t.true(Object.keys(meta.exif).length > 0)
+})
+
+// --- raw_pixels_sync() must apply staged transforms like every other *_sync
+// encoder (adversarial-review finding F2, MEDIUM, #158) ---
+test('rawPixelsSync() reflects resize, matching async rawPixels() (#158, F2)', async (t) => {
+  const sm = new Transformer(PNG).resize(256).metadataSync()
+  const channels = 4 // PNG fixture decodes to RGBA8
+  const expected = sm.width * sm.height * channels
+  const syncLen = new Transformer(PNG).resize(256).rawPixelsSync().length
+  const asyncLen = (await new Transformer(PNG).resize(256).rawPixels()).length
+  t.is(syncLen, asyncLen, 'sync raw pixels match async raw pixels')
+  t.is(syncLen, expected, 'sync raw pixels length == width*height*channels of resized dims')
+})
+
+test('rawPixelsSync() reflects crop (#158, F2)', async (t) => {
+  const sm = new Transformer(PNG).crop(0, 0, 100, 50).metadataSync()
+  const channels = 4
+  const expected = sm.width * sm.height * channels
+  const syncLen = new Transformer(PNG).crop(0, 0, 100, 50).rawPixelsSync().length
+  const asyncLen = (await new Transformer(PNG).crop(0, 0, 100, 50).rawPixels()).length
+  t.is(syncLen, asyncLen)
+  t.is(syncLen, expected)
+})
+
+// Sanity: a no-transform rawPixelsSync() is unchanged (matches the decoded dims).
+test('rawPixelsSync() with no transform == decoded width*height*channels (#158, F2)', (t) => {
+  const sm = new Transformer(PNG).metadataSync()
+  const expected = sm.width * sm.height * 4
+  t.is(new Transformer(PNG).rawPixelsSync().length, expected)
+})
