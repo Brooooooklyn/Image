@@ -728,7 +728,7 @@ pub(crate) fn encode_heic(img: &DynamicImage, opts: Option<HeicConfig>) -> Resul
     CreateStreamOnHGlobal, GetHGlobalFromStream, IPropertyBag2, PROPBAG2,
   };
   use windows::Win32::System::Com::{STATFLAG_NONAME, STATSTG};
-  use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
+  use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
   use windows::Win32::System::Variant::VARIANT;
 
   let opts = opts.unwrap_or_default();
@@ -748,18 +748,30 @@ pub(crate) fn encode_heic(img: &DynamicImage, opts: Option<HeicConfig>) -> Resul
     return Err(Error::new(Status::InvalidArg, "HEIC: image has zero dimensions".to_owned()));
   }
 
-  // Straight RGBA8. Alpha is flattened to opaque by the WIC encoder (chosen behavior).
-  let rgba = img.to_rgba8();
+  // Bound the RGBA byte count BEFORE the infallible `to_rgba8()` conversion. `to_rgba8()` allocates
+  // width*height*4 bytes via `ImageBuffer::new` (`vec![0; cap]`), which PANICS on capacity overflow
+  // (reachable on the shipped 32-bit i686 target, where `isize::MAX` is 2 GiB) or aborts on OOM —
+  // before this Result-returning fn could surface a clean Error. The count must also fit WIC's u32
+  // size argument (`CreateBitmapFromMemory`'s windows-rs wrapper does `len().try_into().unwrap()`).
+  // Compute in u64 (width/height are u32, so only the final `*4` can overflow) and reject if it
+  // exceeds either WIC's u32 limit or this target's `Vec` capacity limit (`isize::MAX`).
+  let rgba_len = (width as u64)
+    .checked_mul(height as u64)
+    .and_then(|n| n.checked_mul(4))
+    .ok_or_else(|| Error::new(Status::InvalidArg, "HEIC: image dimensions too large".to_owned()))?;
+  if rgba_len > u32::MAX as u64 || rgba_len > isize::MAX as u64 {
+    return Err(Error::new(
+      Status::InvalidArg,
+      "HEIC: image too large for the WIC HEVC encoder".to_owned(),
+    ));
+  }
   let stride = width
     .checked_mul(4)
     .ok_or_else(|| Error::new(Status::InvalidArg, "HEIC: stride overflow".to_owned()))?;
-  // Bound the total RGBA byte count: `CreateBitmapFromMemory`'s windows-rs wrapper converts the
-  // buffer length to `u32` via `try_into().unwrap()`, which would PANIC (crashing the napi worker
-  // thread) for a buffer exceeding `u32::MAX`. Reject oversized images with a clean error instead.
-  // (`stride * height` == `width * height * 4` == `rgba.as_raw().len()`; mirrors the decode guard.)
-  let _buffer_size = stride
-    .checked_mul(height)
-    .ok_or_else(|| Error::new(Status::InvalidArg, "HEIC: buffer size overflow".to_owned()))?;
+  // Straight RGBA8. Alpha is flattened to opaque by the WIC encoder (chosen behavior). Now provably
+  // safe: `rgba_len <= min(u32::MAX, isize::MAX)`, so neither this allocation nor the
+  // `CreateBitmapFromMemory` length->u32 conversion can panic.
+  let rgba = img.to_rgba8();
   // quality 0..=100 -> 0.0..=1.0 (no 0.9 clamp; Windows encodes 1.0 fine, unlike macOS ImageIO).
   let quality = (opts.quality.unwrap_or(80).min(100) as f32) / 100.0;
 
@@ -806,14 +818,30 @@ pub(crate) fn encode_heic(img: &DynamicImage, opts: Option<HeicConfig>) -> Resul
     let hglobal = GetHGlobalFromStream(&out).map_err(|e| wic_error("get hglobal", e))?;
     let mut stat = STATSTG::default();
     out.Stat(&mut stat, STATFLAG_NONAME).map_err(|e| wic_error("stat", e))?;
+    // Logical encoded length, bounded so the unsafe slice is sound: cap at this target's slice/`Vec`
+    // limit (`isize::MAX`) and never exceed the HGLOBAL's own allocation (`GlobalSize`).
     let size = usize::try_from(stat.cbSize)
-      .map_err(|_| Error::new(Status::GenericFailure, "HEIC: encoded size exceeds usize".to_owned()))?;
+      .ok()
+      .filter(|&n| n <= isize::MAX as usize)
+      .ok_or_else(|| Error::new(Status::GenericFailure, "HEIC: encoded size too large".to_owned()))?;
+    let alloc = GlobalSize(hglobal);
+    if size > alloc {
+      return Err(Error::new(Status::GenericFailure, "HEIC: encoded size exceeds buffer".to_owned()));
+    }
     let ptr = GlobalLock(hglobal) as *const u8;
     if ptr.is_null() {
       return Err(Error::new(Status::GenericFailure, "HEIC: failed to lock output buffer".to_owned()));
     }
-    let bytes = std::slice::from_raw_parts(ptr, size).to_vec();
+    // Fallibly allocate, copy, then ALWAYS unlock (even if the reservation fails) so the HGLOBAL lock
+    // is never leaked. `extend_from_slice` after `try_reserve_exact(size)` reuses the reserved
+    // capacity, so it cannot reallocate or panic.
+    let mut bytes: Vec<u8> = Vec::new();
+    let reserved = bytes.try_reserve_exact(size);
+    if reserved.is_ok() {
+      bytes.extend_from_slice(std::slice::from_raw_parts(ptr, size));
+    }
     let _ = GlobalUnlock(hglobal);
+    reserved.map_err(|_| Error::new(Status::GenericFailure, "HEIC: cannot allocate output buffer".to_owned()))?;
     Ok(bytes)
   }
 }
