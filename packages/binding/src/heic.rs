@@ -584,13 +584,19 @@ fn ensure_com_initialized() {
   });
 }
 
-/// Map a WIC/COM error to a `napi::Error`. When the OS HEVC/HEIF codec component is absent (the
-/// common Windows Server / CI case) WIC returns `WINCODEC_ERR_COMPONENTNOTFOUND` — surface a clear,
-/// actionable message instead of a raw HRESULT.
+/// Map a WIC/COM error to a `napi::Error`. When the OS HEVC/HEIF codec component is absent or
+/// half-installed (the common Windows Server / CI case) WIC reports it as either
+/// `WINCODEC_ERR_COMPONENTNOTFOUND` (no decoder registered) or `WINCODEC_ERR_COMPONENTINITIALIZEFAILURE`
+/// (the HEIF container decoder loads but its HEVC backend can't initialize — what the GitHub x86_64
+/// Windows runner returns from `CreateDecoderFromStream`). Map both to one clear, actionable message
+/// instead of a raw HRESULT.
 #[cfg(target_os = "windows")]
 fn wic_error(context: &str, e: windows::core::Error) -> Error {
-  use windows::Win32::Foundation::WINCODEC_ERR_COMPONENTNOTFOUND;
-  if e.code() == WINCODEC_ERR_COMPONENTNOTFOUND {
+  use windows::Win32::Foundation::{
+    WINCODEC_ERR_COMPONENTINITIALIZEFAILURE, WINCODEC_ERR_COMPONENTNOTFOUND,
+  };
+  let code = e.code();
+  if code == WINCODEC_ERR_COMPONENTNOTFOUND || code == WINCODEC_ERR_COMPONENTINITIALIZEFAILURE {
     Error::new(
       Status::GenericFailure,
       "HEIC: the OS HEVC/HEIF codec is not installed. Install 'HEIF Image Extensions' and \
