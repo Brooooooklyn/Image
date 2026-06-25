@@ -2,20 +2,27 @@ use image::DynamicImage;
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
-/// Options for HEIC encoding via Apple's `CGImageDestination` (macOS only).
+/// Options for HEIC encoding. Decode/encode delegate to the OS HEVC codec — Apple ImageIO on macOS,
+/// the Windows Imaging Component (WIC) on Windows — so this package ships no HEVC codec. Encoding is
+/// available on macOS and Windows; other platforms reject it. Behavior differs by OS where the
+/// underlying codec differs (noted per field).
 ///
 /// Ungated so the napi signature and generated `index.d.ts` stay identical on every platform;
-/// only the encode *implementation* ([`encode_heic`]) is macOS-gated.
+/// only the encode *implementation* ([`encode_heic`]) is platform-gated.
 #[napi(object)]
 #[derive(Default, Clone)]
 pub struct HeicConfig {
-  /// Lossy quality 0-100 (default 80, matches AVIF). Mapped to ImageIO's
-  /// `kCGImageDestinationLossyCompressionQuality`, but the compression ceiling is CLAMPED to 0.9:
-  /// HEIC/HEVC via ImageIO has no truly-lossless mode, and compression 1.0 engages a near-lossless
-  /// path the OS software encoder rejects on hosts without a hardware media engine. So `quality`
-  /// 90-100 all map to 0.9 (a ~1-3/255 residual remains regardless). See `encode_heic`.
+  /// Lossy quality 0-100 (default 80, matches AVIF).
+  /// - macOS (ImageIO `kCGImageDestinationLossyCompressionQuality`): the compression ceiling is
+  ///   CLAMPED to 0.9 — ImageIO has no truly-lossless HEIC mode and compression 1.0 engages a
+  ///   near-lossless path the OS software encoder rejects on hosts without a hardware media engine,
+  ///   so `quality` 90-100 all map to 0.9 (a ~1-3/255 residual remains).
+  /// - Windows (WIC `ImageQuality`): mapped linearly to 0.0-1.0 with NO clamp (1.0 encodes fine).
   pub quality: Option<u32>,
-  /// Output bit depth, 8 or 10. Default: follow the source (16-bit `DynamicImage` -> 10, else 8).
+  /// Output bit depth, 8 or 10.
+  /// - macOS: default follows the source (16-bit `DynamicImage` -> 10-bit HEVC Main10, else 8-bit).
+  /// - Windows: the WIC HEVC encoder emits 8-bit only; `bit_depth: 10` is REJECTED with an error
+  ///   (rather than silently downgraded), and alpha is flattened to opaque.
   pub bit_depth: Option<u8>,
 }
 

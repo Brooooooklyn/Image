@@ -40,9 +40,18 @@ const onWinCodec = isWindows && codecInstalled ? test : test.skip              /
 const onCodec = codecInstalled ? test : test.skip                              // shared real round-trips (mac OR win-with-codec)
 const onWinNoCodec = isWindows && hasHeic && !codecInstalled ? test : test.skip // CI Windows: codec-missing rejection
 const offHeic = !isMac && !isWindows && hasHeic ? test : test.skip             // linux/wasm stub: platform rejection
+const onWindows = isWindows ? test : test.skip                                 // Windows API-surface (codec-independent)
 
 onMac('native macOS exposes the HEIC API surface', (t) => {
   // A native-API regression that drops the `.heic`/`.heicSync` registration must FAIL here (not skip).
+  t.is(typeof Transformer.prototype.heic, 'function')
+  t.is(typeof Transformer.prototype.heicSync, 'function')
+})
+
+onWindows('native Windows exposes the HEIC API surface', (t) => {
+  // Runs on EVERY Windows build regardless of whether the OS HEVC codec is installed: the native
+  // binding must always register `.heic`/`.heicSync`. A regression that drops them must FAIL here,
+  // not silently skip every codec-gated Windows test. (Mirrors the macOS API-surface guard.)
   t.is(typeof Transformer.prototype.heic, 'function')
   t.is(typeof Transformer.prototype.heicSync, 'function')
 })
