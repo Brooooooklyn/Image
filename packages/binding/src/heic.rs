@@ -647,9 +647,11 @@ pub(crate) fn decode_heic(buf: &[u8]) -> Result<(DynamicImage, Option<u16>)> {
   unsafe {
     // bytes -> growable HGLOBAL-backed IStream (copies; avoids any borrowed-slice lifetime trap).
     let stream = CreateStreamOnHGlobal(HGLOBAL::default(), true.into()).map_err(|e| wic_error("stream", e))?;
+    let buf_len = u32::try_from(buf.len())
+      .map_err(|_| Error::new(Status::InvalidArg, "HEIC: input too large (exceeds 4 GiB)".to_owned()))?;
     let mut written = 0u32;
     stream
-      .Write(buf.as_ptr() as *const _, buf.len() as u32, Some(&mut written))
+      .Write(buf.as_ptr() as *const _, buf_len, Some(&mut written))
       .ok()
       .map_err(|e| wic_error("stream write", e))?;
     stream.Seek(0, STREAM_SEEK_SET, None).map_err(|e| wic_error("stream seek", e))?;
@@ -743,6 +745,13 @@ pub(crate) fn encode_heic(img: &DynamicImage, opts: Option<HeicConfig>) -> Resul
   let stride = width
     .checked_mul(4)
     .ok_or_else(|| Error::new(Status::InvalidArg, "HEIC: stride overflow".to_owned()))?;
+  // Bound the total RGBA byte count: `CreateBitmapFromMemory`'s windows-rs wrapper converts the
+  // buffer length to `u32` via `try_into().unwrap()`, which would PANIC (crashing the napi worker
+  // thread) for a buffer exceeding `u32::MAX`. Reject oversized images with a clean error instead.
+  // (`stride * height` == `width * height * 4` == `rgba.as_raw().len()`; mirrors the decode guard.)
+  let _buffer_size = stride
+    .checked_mul(height)
+    .ok_or_else(|| Error::new(Status::InvalidArg, "HEIC: buffer size overflow".to_owned()))?;
   // quality 0..=100 -> 0.0..=1.0 (no 0.9 clamp; Windows encodes 1.0 fine, unlike macOS ImageIO).
   let quality = (opts.quality.unwrap_or(80).min(100) as f32) / 100.0;
 
