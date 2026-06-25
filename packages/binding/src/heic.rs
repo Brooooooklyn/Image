@@ -133,7 +133,8 @@ fn u16_slice_as_native_bytes(slice: &[u16]) -> &[u8] {
 }
 
 /// Decode a HEIC/HEIF image to a `DynamicImage` plus EXIF orientation (1..8) if present.
-/// macOS-only (delegates to the OS ImageIO HEVC decoder); errors elsewhere.
+/// Fallback stub for platforms without an OS HEVC codec (everything except macOS/Windows): always
+/// errors. The real decoders are the `cfg(macos)` (ImageIO) and `cfg(windows)` (WIC) variants below.
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub(crate) fn decode_heic(_buf: &[u8]) -> Result<(DynamicImage, Option<u16>)> {
   Err(Error::new(
@@ -349,8 +350,9 @@ pub(crate) fn decode_heic(buf: &[u8]) -> Result<(DynamicImage, Option<u16>)> {
   })
 }
 
-/// Encode a `DynamicImage` to HEIC. macOS-only (delegates to Apple's `CGImageDestination` HEVC
-/// encoder); errors elsewhere. We ship no HEVC codec — Apple's OS holds the patent license.
+/// Encode a `DynamicImage` to HEIC. Fallback stub for platforms without an OS HEVC codec (everything
+/// except macOS/Windows): always errors. The real encoders are the `cfg(macos)`
+/// (`CGImageDestination`) and `cfg(windows)` (WIC) variants below. We ship no HEVC codec.
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub(crate) fn encode_heic(_img: &DynamicImage, _opts: Option<HeicConfig>) -> Result<Vec<u8>> {
   Err(Error::new(

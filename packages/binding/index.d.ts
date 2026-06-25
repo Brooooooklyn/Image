@@ -109,13 +109,17 @@ export declare class Transformer {
   avif(options?: AvifConfig | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>
   avifSync(options?: AvifConfig | undefined | null): Buffer
   /**
-   * Encode to HEIC using the OS-native ImageIO HEVC encoder (macOS only).
-   * Rejects on non-macOS platforms.
+   * Encode to HEIC via the OS-native HEVC encoder — Apple ImageIO on macOS, the Windows Imaging
+   * Component (WIC) on Windows. Ships no HEVC codec (the OS holds the patent license). Rejects on
+   * other platforms, and on Windows hosts lacking the OS HEVC/HEIF Store extension. See `HeicConfig`
+   * for the per-platform quality, bit-depth, and alpha behavior.
    */
   heic(options?: HeicConfig | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>
   /**
-   * Encode to HEIC using the OS-native ImageIO HEVC encoder (macOS only).
-   * Rejects on non-macOS platforms.
+   * Encode to HEIC via the OS-native HEVC encoder — Apple ImageIO on macOS, the Windows Imaging
+   * Component (WIC) on Windows. Ships no HEVC codec (the OS holds the patent license). Rejects on
+   * other platforms, and on Windows hosts lacking the OS HEVC/HEIF Store extension. See `HeicConfig`
+   * for the per-platform quality, bit-depth, and alpha behavior.
    */
   heicSync(options?: HeicConfig | undefined | null): Buffer
   png(options?: PngEncodeOptions | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>
