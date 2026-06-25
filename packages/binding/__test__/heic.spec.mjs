@@ -277,6 +277,23 @@ onWinCodec('encodes transparent rgba -> heic (alpha flattened to opaque)', async
   t.true(leftAlpha > 200, `alpha should be flattened to opaque, got ${leftAlpha}`)
 })
 
+onWinCodec('decodes wide-gamut (Display-P3) heic into sRGB', (t) => {
+  // `un-optimized-10bit.heic` carries a Display-P3 ICC profile. macOS renders HEIC into an sRGB color
+  // space, so Windows must color-transform P3 -> sRGB (IWICColorTransform) rather than return raw P3
+  // mislabeled as sRGB. At the saturated-green pixel (32,128) a correct sRGB conversion collapses red
+  // toward 0 (raw P3 leaves it ~31). VM-measured: sRGB=[0,129,74] vs raw-P3=[31,127,79]. Windows decode
+  // is 8-bit RGBA8 (WIC normalizes), so this is Windows-only.
+  const raw = new Transformer(HEIC_10BIT).rawPixelsSync()
+  const W = 256
+  t.is(raw.length, W * 256 * 4)
+  const i = (128 * W + 32) * 4
+  const r = raw[i]
+  const g = raw[i + 1]
+  t.true(r < 16, `P3->sRGB should drive red toward 0 at the green pixel, got r=${r}`)
+  t.true(g > 100, `green channel should stay saturated, got g=${g}`)
+  t.true(r < g, `expected a green pixel (r < g), got r=${r} g=${g}`)
+})
+
 // --- Codec-missing (CI Windows) + off-platform rejection ---
 
 onWinNoCodec('heic encode rejected without the OS codec', async (t) => {

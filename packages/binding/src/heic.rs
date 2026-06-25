@@ -635,13 +635,61 @@ fn read_orientation(frame: &windows::Win32::Graphics::Imaging::IWICBitmapFrameDe
   }
 }
 
+/// Match macOS color behavior on Windows: macOS renders the decoded HEIC into an sRGB color space, so a
+/// Display-P3 (or other wide-gamut) source comes back as sRGB pixels. WIC's `IWICFormatConverter` only
+/// changes pixel *layout*, not color *space*, so a P3 frame would otherwise return P3 values mislabeled
+/// as sRGB. If the frame carries a non-sRGB color context, run an `IWICColorTransform` to sRGB and fill
+/// `pixels`, returning `true`. Return `false` — leaving `pixels` for the caller's plain
+/// `IWICFormatConverter` fallback — when the frame is untagged, already sRGB (ExifColorSpace value 1), or
+/// the transform path fails for any reason. Best-effort: a color-management failure must never block a
+/// decode the converter can still complete (same philosophy as `read_orientation`). This fn returns no
+/// `Result`, so its internal `?`/`.ok()?` short-circuits to `false` instead of panicking.
+#[cfg(target_os = "windows")]
+fn copy_color_managed_pixels(
+  factory: &windows::Win32::Graphics::Imaging::IWICImagingFactory,
+  frame: &windows::Win32::Graphics::Imaging::IWICBitmapFrameDecode,
+  stride: u32,
+  pixels: &mut [u8],
+) -> bool {
+  use windows::Win32::Graphics::Imaging::{GUID_WICPixelFormat32bppRGBA, WICColorContextExifColorSpace};
+  unsafe {
+    (|| -> Option<()> {
+      // WIC's HEIF decoder returns 0 from the zero-count `GetColorContexts` query even when a profile is
+      // present, so probe with a pre-created single-slot array (the frame's primary color context).
+      let probe = factory.CreateColorContext().ok()?;
+      let mut contexts = [Some(probe)];
+      let mut actual = 0u32;
+      frame.GetColorContexts(&mut contexts, &mut actual).ok()?;
+      if actual == 0 {
+        return None; // untagged -> converter treats it as sRGB (matches macOS)
+      }
+      let source = contexts[0].as_ref()?;
+      // An explicit sRGB context needs no transform (no-op); keep the already-shipped converter path
+      // byte-for-byte for sRGB/untagged frames.
+      if source.GetType().ok()? == WICColorContextExifColorSpace && source.GetExifColorSpace().ok()? == 1 {
+        return None;
+      }
+      let dest = factory.CreateColorContext().ok()?;
+      dest.InitializeFromExifColorSpace(1).ok()?; // 1 = sRGB
+      let transformer = factory.CreateColorTransformer().ok()?;
+      transformer.Initialize(frame, source, &dest, &GUID_WICPixelFormat32bppRGBA).ok()?;
+      transformer.CopyPixels(std::ptr::null(), stride, pixels).ok()?;
+      Some(())
+    })()
+    .is_some()
+  }
+}
+
 /// Windows HEIC decode via WIC. We ship no HEVC codec; the OS/Store extension holds the patent
 /// license, so all decoding goes through OS API calls. WIC normalizes HEIF to 8-bit, so the output
 /// is always `Rgba8` (unlike macOS, which preserves 10-bit as `Rgba16`).
 ///
 /// Pipeline: bytes -> IStream (copy via CreateStreamOnHGlobal) -> IWICBitmapDecoder -> frame 0 ->
-/// IWICFormatConverter to straight 32bppRGBA -> CopyPixels -> `DynamicImage::ImageRgba8`. Orientation
-/// is read best-effort and returned (not baked). Every null/false OS result becomes a clean `Error`.
+/// [color-manage wide-gamut frames to sRGB] -> straight 32bppRGBA -> CopyPixels ->
+/// `DynamicImage::ImageRgba8`. macOS renders HEIC into an sRGB space, so a wide-gamut (e.g. iPhone
+/// Display-P3) frame is run through an `IWICColorTransform` to sRGB to match; sRGB/untagged frames use a
+/// plain `IWICFormatConverter`. Orientation is read best-effort and returned (not baked). Every
+/// null/false OS result becomes a clean `Error`.
 #[cfg(target_os = "windows")]
 pub(crate) fn decode_heic(buf: &[u8]) -> Result<(DynamicImage, Option<u16>)> {
   use windows::Win32::Foundation::HGLOBAL;
@@ -679,19 +727,6 @@ pub(crate) fn decode_heic(buf: &[u8]) -> Result<(DynamicImage, Option<u16>)> {
 
     let orientation = read_orientation(&frame);
 
-    // WIC normalizes HEIF to 8-bit; convert to straight (non-premultiplied) 32bppRGBA.
-    let converter = factory.CreateFormatConverter().map_err(|e| wic_error("converter", e))?;
-    converter
-      .Initialize(
-        &frame,
-        &GUID_WICPixelFormat32bppRGBA,
-        WICBitmapDitherTypeNone,
-        None,
-        0.0,
-        WICBitmapPaletteTypeCustom,
-      )
-      .map_err(|e| wic_error("convert", e))?;
-
     let stride = width
       .checked_mul(4)
       .ok_or_else(|| Error::new(Status::InvalidArg, "HEIC: stride overflow".to_owned()))?;
@@ -706,9 +741,27 @@ pub(crate) fn decode_heic(buf: &[u8]) -> Result<(DynamicImage, Option<u16>)> {
       .try_reserve_exact(size)
       .map_err(|_| Error::new(Status::GenericFailure, "HEIC: cannot allocate decode buffer".to_owned()))?;
     pixels.resize(size, 0);
-    converter
-      .CopyPixels(std::ptr::null(), stride, &mut pixels)
-      .map_err(|e| wic_error("copy pixels", e))?;
+
+    // WIC normalizes HEIF to 8-bit. Match macOS (which renders into an sRGB color space): if the frame
+    // carries a non-sRGB color context, color-transform it to sRGB so wide-gamut (e.g. Display-P3)
+    // pixels aren't returned mislabeled. sRGB/untagged frames — and any transform failure — fall through
+    // to a straight (non-premultiplied) 32bppRGBA conversion, byte-identical to the prior path.
+    if !copy_color_managed_pixels(&factory, &frame, stride, &mut pixels) {
+      let converter = factory.CreateFormatConverter().map_err(|e| wic_error("converter", e))?;
+      converter
+        .Initialize(
+          &frame,
+          &GUID_WICPixelFormat32bppRGBA,
+          WICBitmapDitherTypeNone,
+          None,
+          0.0,
+          WICBitmapPaletteTypeCustom,
+        )
+        .map_err(|e| wic_error("convert", e))?;
+      converter
+        .CopyPixels(std::ptr::null(), stride, &mut pixels)
+        .map_err(|e| wic_error("copy pixels", e))?;
+    }
 
     let img = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(width, height, pixels)
       .map(DynamicImage::ImageRgba8)
