@@ -14,6 +14,10 @@ const ROOT_DIR = join(__DIRNAME, '..', '..', '..')
 const HEIC = await fs.readFile(join(ROOT_DIR, 'un-optimized.heic'))
 // Genuine 10-bit fixture (HEVC Main10), generated via ImageIO from a 16-bit Display-P3 source.
 const HEIC_10BIT = await fs.readFile(join(ROOT_DIR, 'un-optimized-10bit.heic'))
+// Rotated fixture: `heif-enc --rotate-cw 90 un-optimized.png` -> 1024x681 HEVC HEIC carrying a HEIF
+// container `irot` (90deg CW) property, NO EXIF orientation. macOS ImageIO surfaces irot as
+// orientation=6 (pixels un-baked, 1024x681); WIC BAKES irot into the decode (-> upright 681x1024).
+const HEIC_ROT90 = await fs.readFile(join(ROOT_DIR, 'rot90-irot.heic'))
 // 8-bit RGBA PNG source for the encode round-trip (1024x681).
 const PNG = await fs.readFile(join(ROOT_DIR, 'un-optimized.png'))
 
@@ -134,6 +138,31 @@ onCodec('decode preserves orientation (not vertically flipped)', (t) => {
   // HEVC is lossy so `upright` is small but nonzero; a vertical flip makes `flipped` far larger.
   t.true(upright < flipped, `decode looks vertically flipped (upright=${upright}, flipped=${flipped})`)
   t.true(upright < 10, `decode differs too much from its source image (upright=${upright})`)
+})
+
+// HEIF container orientation (irot/imir). The two OS decoders honor it differently but both yield an
+// upright displayed image: macOS returns the orientation tag for the pipeline to apply (pixels stay at
+// coded dims); Windows WIC BAKES it into the decoded pixels. (#221 review: orientation is NOT ignored
+// on Windows for container-stored rotation — WIC applies it, just not via a returned tag.)
+onMac('heic irot orientation surfaces as a tag (macOS, pixels un-baked)', async (t) => {
+  // `rot90-irot.heic` stores a 90deg-CW rotation in the HEIF container `irot` property (no EXIF tag).
+  // ImageIO reports it via kCGImagePropertyOrientation=6 and leaves the pixels at coded dims 1024x681.
+  const m = await new Transformer(HEIC_ROT90).metadata()
+  t.is(m.format, 'heic')
+  t.is(m.width, 1024)
+  t.is(m.height, 681)
+  t.is(m.orientation, 6)
+})
+
+onWinCodec('heic irot orientation is baked by WIC (Windows, upright dims)', async (t) => {
+  // WIC applies the container `irot` during decode, so the same 90deg-CW fixture comes back already
+  // upright with swapped dimensions (681x1024) and no residual orientation tag — proving orientation is
+  // honored on Windows. A regression that ignored it would report the coded 1024x681 instead.
+  const m = await new Transformer(HEIC_ROT90).metadata()
+  t.is(m.format, 'heic')
+  t.is(m.width, 681)
+  t.is(m.height, 1024)
+  t.is(m.orientation ?? null, null)
 })
 
 onWinNoCodec('heic decode rejected without the OS codec', async (t) => {

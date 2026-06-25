@@ -621,26 +621,6 @@ fn wic_factory() -> Result<windows::Win32::Graphics::Imaging::IWICImagingFactory
     .map_err(|e| wic_error("factory", e))
 }
 
-/// Best-effort EXIF orientation (1..8) from a WIC frame; `None` if absent/unreadable. WIC does NOT
-/// auto-rotate, so this is the stored tag and the pipeline applies it (same contract as macOS).
-/// Untagged / orientation-1 images yield `None` (no rotation). NOTE: the WIC HEIF query path for a
-/// *tagged* file is unvalidated (no tagged fixture was available); a wrong path degrades to `None`
-/// (no rotation), never a double-rotation.
-#[cfg(target_os = "windows")]
-fn read_orientation(frame: &windows::Win32::Graphics::Imaging::IWICBitmapFrameDecode) -> Option<u16> {
-  use windows::core::PCWSTR;
-  use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
-  use windows::Win32::System::Com::StructuredStorage::PropVariantToUInt16;
-  unsafe {
-    let reader = frame.GetMetadataQueryReader().ok()?;
-    let name: Vec<u16> = "/ifd/{ushort=274}".encode_utf16().chain(std::iter::once(0)).collect();
-    let mut value = PROPVARIANT::default();
-    reader.GetMetadataByName(PCWSTR(name.as_ptr()), &mut value as *mut _).ok()?;
-    let orientation = PropVariantToUInt16(&value).ok()?;
-    (1..=8).contains(&orientation).then_some(orientation)
-  }
-}
-
 /// Match macOS color behavior on Windows: macOS renders the decoded HEIC into an sRGB color space, so a
 /// Display-P3 (or other wide-gamut) source comes back as sRGB pixels. WIC's `IWICFormatConverter` only
 /// changes pixel *layout*, not color *space*, so a P3 frame would otherwise return P3 values mislabeled
@@ -648,7 +628,7 @@ fn read_orientation(frame: &windows::Win32::Graphics::Imaging::IWICBitmapFrameDe
 /// `pixels`, returning `true`. Return `false` — leaving `pixels` for the caller's plain
 /// `IWICFormatConverter` fallback — when the frame is untagged, already sRGB (ExifColorSpace value 1), or
 /// the transform path fails for any reason. Best-effort: a color-management failure must never block a
-/// decode the converter can still complete (same philosophy as `read_orientation`). This fn returns no
+/// decode the converter can still complete (best-effort: degrade, never fail the whole decode). This fn returns no
 /// `Result`, so its internal `?`/`.ok()?` short-circuits to `false` instead of panicking.
 #[cfg(target_os = "windows")]
 fn copy_color_managed_pixels(
@@ -694,8 +674,10 @@ fn copy_color_managed_pixels(
 /// [color-manage wide-gamut frames to sRGB] -> straight 32bppRGBA -> CopyPixels ->
 /// `DynamicImage::ImageRgba8`. macOS renders HEIC into an sRGB space, so a wide-gamut (e.g. iPhone
 /// Display-P3) frame is run through an `IWICColorTransform` to sRGB to match; sRGB/untagged frames use a
-/// plain `IWICFormatConverter`. Orientation is read best-effort and returned (not baked). Every
-/// null/false OS result becomes a clean `Error`.
+/// plain `IWICFormatConverter`. Unlike macOS (which returns an orientation tag for the pipeline to
+/// apply), WIC BAKES the HEIF container orientation (`irot`/`imir`) into the decoded pixels, so `GetSize`
+/// already reports display dimensions and we return `None` orientation. Every null/false OS result
+/// becomes a clean `Error`.
 #[cfg(target_os = "windows")]
 pub(crate) fn decode_heic(buf: &[u8]) -> Result<(DynamicImage, Option<u16>)> {
   use windows::Win32::Foundation::HGLOBAL;
@@ -731,8 +713,10 @@ pub(crate) fn decode_heic(buf: &[u8]) -> Result<(DynamicImage, Option<u16>)> {
       return Err(Error::new(Status::InvalidArg, "HEIC: decoded image has zero dimensions".to_owned()));
     }
 
-    let orientation = read_orientation(&frame);
-
+    // WIC bakes the HEIF container orientation (`irot`/`imir`) into the decoded frame: `GetSize` already
+    // reports the display (rotated) dimensions and the pixels come out upright, so there is no
+    // orientation to return or apply. (HEIF's EXIF orientation tag is non-authoritative — both WIC and
+    // macOS ImageIO ignore it — so applying it on top of WIC's baking would double-rotate.)
     let stride = width
       .checked_mul(4)
       .ok_or_else(|| Error::new(Status::InvalidArg, "HEIC: stride overflow".to_owned()))?;
@@ -772,7 +756,7 @@ pub(crate) fn decode_heic(buf: &[u8]) -> Result<(DynamicImage, Option<u16>)> {
     let img = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(width, height, pixels)
       .map(DynamicImage::ImageRgba8)
       .ok_or_else(|| Error::new(Status::GenericFailure, "HEIC: buffer size mismatch".to_owned()))?;
-    Ok((img, orientation))
+    Ok((img, None))
   }
 }
 

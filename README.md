@@ -37,9 +37,10 @@ licensing. On other platforms, HEIC decode and `.heic()` / `.heicSync()` reject 
 > Extension* Store packages. They are absent on stock Windows Server / CI runners; on such a host
 > HEIC decode and encode reject with a clear "codec not installed" error.
 
-- **Decode:** reads `.heic` / `.heif` (HEVC-in-HEIF, e.g. iPhone photos). EXIF orientation is honored
-  just like JPEG. Wide-gamut input is color-matched to **sRGB** (v1 normalizes everything to sRGB and
-  carries no ICC profile).
+- **Decode:** reads `.heic` / `.heif` (HEVC-in-HEIF, e.g. iPhone photos). Image orientation (HEIF's
+  container `irot`/`imir` transform) is honored — macOS returns it as a tag the pipeline applies, while
+  Windows WIC bakes it into the decoded pixels. Wide-gamut input is color-matched to **sRGB** (v1
+  normalizes everything to sRGB and carries no ICC profile).
   - macOS: 8-bit sources decode to RGBA8; 10-bit sources decode to RGBA16 (precision preserved).
   - Windows: WIC normalizes all HEIF to 8-bit, so decode always yields RGBA8 (including 10-bit input).
 - **Encode:** `new Transformer(input).heic({ quality, bitDepth })` / `.heicSync(...)`. `quality` is
