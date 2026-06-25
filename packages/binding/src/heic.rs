@@ -689,7 +689,14 @@ pub(crate) fn decode_heic(buf: &[u8]) -> Result<(DynamicImage, Option<u16>)> {
     let size = stride
       .checked_mul(height)
       .ok_or_else(|| Error::new(Status::InvalidArg, "HEIC: buffer size overflow".to_owned()))? as usize;
-    let mut pixels = vec![0u8; size];
+    // Fallible allocation: a malformed frame can report a `size` that overflows `Vec` capacity on
+    // 32-bit targets (`isize::MAX`) or exhausts memory. Map either to a clean `Error` instead of
+    // panicking the napi worker (`vec![0u8; size]` would panic on capacity overflow).
+    let mut pixels: Vec<u8> = Vec::new();
+    pixels
+      .try_reserve_exact(size)
+      .map_err(|_| Error::new(Status::GenericFailure, "HEIC: cannot allocate decode buffer".to_owned()))?;
+    pixels.resize(size, 0);
     converter
       .CopyPixels(std::ptr::null(), stride, &mut pixels)
       .map_err(|e| wic_error("copy pixels", e))?;
@@ -720,7 +727,8 @@ pub(crate) fn encode_heic(img: &DynamicImage, opts: Option<HeicConfig>) -> Resul
   use windows::Win32::System::Com::StructuredStorage::{
     CreateStreamOnHGlobal, GetHGlobalFromStream, IPropertyBag2, PROPBAG2,
   };
-  use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
+  use windows::Win32::System::Com::{STATFLAG_NONAME, STATSTG};
+  use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
   use windows::Win32::System::Variant::VARIANT;
 
   let opts = opts.unwrap_or_default();
@@ -792,9 +800,14 @@ pub(crate) fn encode_heic(img: &DynamicImage, opts: Option<HeicConfig>) -> Resul
     frame.Commit().map_err(|e| wic_error("frame commit", e))?;
     encoder.Commit().map_err(|e| wic_error("encoder commit", e))?;
 
-    // Copy the encoded bytes out of the growable HGLOBAL before the stream is dropped.
+    // Copy the encoded bytes out of the growable HGLOBAL before the stream is dropped. Use the
+    // stream's LOGICAL length (`Stat().cbSize`), not `GlobalSize` (the HGLOBAL allocation capacity),
+    // so the returned buffer can never carry trailing allocation slack.
     let hglobal = GetHGlobalFromStream(&out).map_err(|e| wic_error("get hglobal", e))?;
-    let size = GlobalSize(hglobal);
+    let mut stat = STATSTG::default();
+    out.Stat(&mut stat, STATFLAG_NONAME).map_err(|e| wic_error("stat", e))?;
+    let size = usize::try_from(stat.cbSize)
+      .map_err(|_| Error::new(Status::GenericFailure, "HEIC: encoded size exceeds usize".to_owned()))?;
     let ptr = GlobalLock(hglobal) as *const u8;
     if ptr.is_null() {
       return Err(Error::new(Status::GenericFailure, "HEIC: failed to lock output buffer".to_owned()));
