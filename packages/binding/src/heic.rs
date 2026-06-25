@@ -127,11 +127,11 @@ fn u16_slice_as_native_bytes(slice: &[u16]) -> &[u8] {
 
 /// Decode a HEIC/HEIF image to a `DynamicImage` plus EXIF orientation (1..8) if present.
 /// macOS-only (delegates to the OS ImageIO HEVC decoder); errors elsewhere.
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub(crate) fn decode_heic(_buf: &[u8]) -> Result<(DynamicImage, Option<u16>)> {
   Err(Error::new(
     Status::InvalidArg,
-    "HEIC decoding is only supported on macOS".to_owned(),
+    "HEIC decoding is only supported on macOS and Windows".to_owned(),
   ))
 }
 
@@ -344,11 +344,11 @@ pub(crate) fn decode_heic(buf: &[u8]) -> Result<(DynamicImage, Option<u16>)> {
 
 /// Encode a `DynamicImage` to HEIC. macOS-only (delegates to Apple's `CGImageDestination` HEVC
 /// encoder); errors elsewhere. We ship no HEVC codec — Apple's OS holds the patent license.
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub(crate) fn encode_heic(_img: &DynamicImage, _opts: Option<HeicConfig>) -> Result<Vec<u8>> {
   Err(Error::new(
     Status::GenericFailure,
-    "HEIC encoding is only available on macOS".to_owned(),
+    "HEIC encoding is only available on macOS and Windows".to_owned(),
   ))
 }
 
@@ -554,6 +554,248 @@ pub(crate) fn encode_heic(img: &DynamicImage, opts: Option<HeicConfig>) -> Resul
   })
 }
 
+/// Thread-local COM init (MTA). napi runs encode/decode on libuv worker threads, so COM must be
+/// initialized per-thread, not per-process. We never `CoUninitialize` (the worker pool is shared and
+/// another addon may rely on COM). S_FALSE / RPC_E_CHANGED_MODE are both fine — WIC works regardless
+/// of the thread's apartment, so we ignore the returned HRESULT.
+#[cfg(target_os = "windows")]
+fn ensure_com_initialized() {
+  use std::cell::Cell;
+  thread_local! { static INIT: Cell<bool> = const { Cell::new(false) }; }
+  INIT.with(|done| {
+    if !done.get() {
+      unsafe {
+        let _ = windows::Win32::System::Com::CoInitializeEx(
+          None,
+          windows::Win32::System::Com::COINIT_MULTITHREADED,
+        );
+      }
+      done.set(true);
+    }
+  });
+}
+
+/// Map a WIC/COM error to a `napi::Error`. When the OS HEVC/HEIF codec component is absent (the
+/// common Windows Server / CI case) WIC returns `WINCODEC_ERR_COMPONENTNOTFOUND` — surface a clear,
+/// actionable message instead of a raw HRESULT.
+#[cfg(target_os = "windows")]
+fn wic_error(context: &str, e: windows::core::Error) -> Error {
+  use windows::Win32::Foundation::WINCODEC_ERR_COMPONENTNOTFOUND;
+  if e.code() == WINCODEC_ERR_COMPONENTNOTFOUND {
+    Error::new(
+      Status::GenericFailure,
+      "HEIC: the OS HEVC/HEIF codec is not installed. Install 'HEIF Image Extensions' and \
+       'HEVC Video Extensions' from the Microsoft Store."
+        .to_owned(),
+    )
+  } else {
+    Error::new(
+      Status::GenericFailure,
+      format!("HEIC ({context}): {} (0x{:08X})", e.message(), e.code().0 as u32),
+    )
+  }
+}
+
+/// Create the WIC imaging factory (after ensuring COM is initialized on this thread).
+#[cfg(target_os = "windows")]
+fn wic_factory() -> Result<windows::Win32::Graphics::Imaging::IWICImagingFactory> {
+  use windows::Win32::Graphics::Imaging::CLSID_WICImagingFactory;
+  use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
+  ensure_com_initialized();
+  unsafe { CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER) }
+    .map_err(|e| wic_error("factory", e))
+}
+
+/// Best-effort EXIF orientation (1..8) from a WIC frame; `None` if absent/unreadable. WIC does NOT
+/// auto-rotate, so this is the stored tag and the pipeline applies it (same contract as macOS).
+/// Untagged / orientation-1 images yield `None` (no rotation). NOTE: the WIC HEIF query path for a
+/// *tagged* file is unvalidated (no tagged fixture was available); a wrong path degrades to `None`
+/// (no rotation), never a double-rotation.
+#[cfg(target_os = "windows")]
+fn read_orientation(frame: &windows::Win32::Graphics::Imaging::IWICBitmapFrameDecode) -> Option<u16> {
+  use windows::core::PCWSTR;
+  use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
+  use windows::Win32::System::Com::StructuredStorage::PropVariantToUInt16;
+  unsafe {
+    let reader = frame.GetMetadataQueryReader().ok()?;
+    let name: Vec<u16> = "/ifd/{ushort=274}".encode_utf16().chain(std::iter::once(0)).collect();
+    let mut value = PROPVARIANT::default();
+    reader.GetMetadataByName(PCWSTR(name.as_ptr()), &mut value as *mut _).ok()?;
+    let orientation = PropVariantToUInt16(&value).ok()?;
+    (1..=8).contains(&orientation).then_some(orientation)
+  }
+}
+
+/// Windows HEIC decode via WIC. We ship no HEVC codec; the OS/Store extension holds the patent
+/// license, so all decoding goes through OS API calls. WIC normalizes HEIF to 8-bit, so the output
+/// is always `Rgba8` (unlike macOS, which preserves 10-bit as `Rgba16`).
+///
+/// Pipeline: bytes -> IStream (copy via CreateStreamOnHGlobal) -> IWICBitmapDecoder -> frame 0 ->
+/// IWICFormatConverter to straight 32bppRGBA -> CopyPixels -> `DynamicImage::ImageRgba8`. Orientation
+/// is read best-effort and returned (not baked). Every null/false OS result becomes a clean `Error`.
+#[cfg(target_os = "windows")]
+pub(crate) fn decode_heic(buf: &[u8]) -> Result<(DynamicImage, Option<u16>)> {
+  use windows::Win32::Foundation::HGLOBAL;
+  use windows::Win32::Graphics::Imaging::{
+    GUID_WICPixelFormat32bppRGBA, WICBitmapDitherTypeNone, WICBitmapPaletteTypeCustom,
+    WICDecodeMetadataCacheOnDemand,
+  };
+  use windows::Win32::System::Com::StructuredStorage::CreateStreamOnHGlobal;
+  use windows::Win32::System::Com::STREAM_SEEK_SET;
+
+  let factory = wic_factory()?;
+  unsafe {
+    // bytes -> growable HGLOBAL-backed IStream (copies; avoids any borrowed-slice lifetime trap).
+    let stream = CreateStreamOnHGlobal(HGLOBAL::default(), true.into()).map_err(|e| wic_error("stream", e))?;
+    let mut written = 0u32;
+    stream
+      .Write(buf.as_ptr() as *const _, buf.len() as u32, Some(&mut written))
+      .ok()
+      .map_err(|e| wic_error("stream write", e))?;
+    stream.Seek(0, STREAM_SEEK_SET, None).map_err(|e| wic_error("stream seek", e))?;
+
+    let decoder = factory
+      .CreateDecoderFromStream(&stream, std::ptr::null(), WICDecodeMetadataCacheOnDemand)
+      .map_err(|e| wic_error("decode", e))?;
+    let frame = decoder.GetFrame(0).map_err(|e| wic_error("frame", e))?;
+
+    let mut width = 0u32;
+    let mut height = 0u32;
+    frame.GetSize(&mut width, &mut height).map_err(|e| wic_error("size", e))?;
+    if width == 0 || height == 0 {
+      return Err(Error::new(Status::InvalidArg, "HEIC: decoded image has zero dimensions".to_owned()));
+    }
+
+    let orientation = read_orientation(&frame);
+
+    // WIC normalizes HEIF to 8-bit; convert to straight (non-premultiplied) 32bppRGBA.
+    let converter = factory.CreateFormatConverter().map_err(|e| wic_error("converter", e))?;
+    converter
+      .Initialize(
+        &frame,
+        &GUID_WICPixelFormat32bppRGBA,
+        WICBitmapDitherTypeNone,
+        None,
+        0.0,
+        WICBitmapPaletteTypeCustom,
+      )
+      .map_err(|e| wic_error("convert", e))?;
+
+    let stride = width
+      .checked_mul(4)
+      .ok_or_else(|| Error::new(Status::InvalidArg, "HEIC: stride overflow".to_owned()))?;
+    let size = stride
+      .checked_mul(height)
+      .ok_or_else(|| Error::new(Status::InvalidArg, "HEIC: buffer size overflow".to_owned()))? as usize;
+    let mut pixels = vec![0u8; size];
+    converter
+      .CopyPixels(std::ptr::null(), stride, &mut pixels)
+      .map_err(|e| wic_error("copy pixels", e))?;
+
+    let img = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(width, height, pixels)
+      .map(DynamicImage::ImageRgba8)
+      .ok_or_else(|| Error::new(Status::GenericFailure, "HEIC: buffer size mismatch".to_owned()))?;
+    Ok((img, orientation))
+  }
+}
+
+/// Windows HEIC encode via WIC (`GUID_ContainerFormatHeif`, HEVC by default). We ship no HEVC codec;
+/// the OS/Store extension holds the patent license. Output is 8-bit and OPAQUE: the WIC HEVC encoder
+/// negotiates alpha away (we flatten to opaque by design) and does not emit 10-bit (`bit_depth: 10`
+/// is rejected). Quality maps directly to `ImageQuality` with NO 0.9 clamp (Windows encodes 1.0 fine).
+///
+/// Pipeline: `DynamicImage` -> straight RGBA8 -> IWICBitmap (CreateBitmapFromMemory) -> HEIF encoder
+/// frame with `ImageQuality` (VT_R4) -> WriteSource -> two-phase Commit -> read bytes from the
+/// growable HGLOBAL. Orientation is NOT tagged (pixels are already upright, same as macOS).
+#[cfg(target_os = "windows")]
+pub(crate) fn encode_heic(img: &DynamicImage, opts: Option<HeicConfig>) -> Result<Vec<u8>> {
+  use windows::core::PWSTR;
+  use windows::Win32::Foundation::HGLOBAL;
+  use windows::Win32::Graphics::Imaging::{
+    GUID_ContainerFormatHeif, GUID_WICPixelFormat32bppRGBA, IWICBitmapFrameEncode,
+    WICBitmapEncoderNoCache,
+  };
+  use windows::Win32::System::Com::StructuredStorage::{
+    CreateStreamOnHGlobal, GetHGlobalFromStream, IPropertyBag2, PROPBAG2,
+  };
+  use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
+  use windows::Win32::System::Variant::VARIANT;
+
+  let opts = opts.unwrap_or_default();
+  // 10-bit is not supported by the WIC HEVC encoder (it emits 8-bit); reject rather than silently
+  // downgrade, so callers are not misled about the output depth.
+  if opts.bit_depth == Some(10) {
+    return Err(Error::new(
+      Status::InvalidArg,
+      "HEIC: 10-bit output is not supported on Windows (the OS WIC HEVC encoder emits 8-bit only)"
+        .to_owned(),
+    ));
+  }
+
+  let width = img.width();
+  let height = img.height();
+  if width == 0 || height == 0 {
+    return Err(Error::new(Status::InvalidArg, "HEIC: image has zero dimensions".to_owned()));
+  }
+
+  // Straight RGBA8. Alpha is flattened to opaque by the WIC encoder (chosen behavior).
+  let rgba = img.to_rgba8();
+  let stride = width
+    .checked_mul(4)
+    .ok_or_else(|| Error::new(Status::InvalidArg, "HEIC: stride overflow".to_owned()))?;
+  // quality 0..=100 -> 0.0..=1.0 (no 0.9 clamp; Windows encodes 1.0 fine, unlike macOS ImageIO).
+  let quality = (opts.quality.unwrap_or(80).min(100) as f32) / 100.0;
+
+  let factory = wic_factory()?;
+  unsafe {
+    let out = CreateStreamOnHGlobal(HGLOBAL::default(), true.into()).map_err(|e| wic_error("out stream", e))?;
+    let encoder = factory
+      .CreateEncoder(&GUID_ContainerFormatHeif, std::ptr::null())
+      .map_err(|e| wic_error("encoder", e))?;
+    encoder.Initialize(&out, WICBitmapEncoderNoCache).map_err(|e| wic_error("encoder init", e))?;
+
+    let mut frame_opt: Option<IWICBitmapFrameEncode> = None;
+    let mut bag_opt: Option<IPropertyBag2> = None;
+    encoder
+      .CreateNewFrame(&mut frame_opt, &mut bag_opt)
+      .map_err(|e| wic_error("new frame", e))?;
+    let frame = frame_opt.ok_or_else(|| Error::new(Status::GenericFailure, "HEIC: null frame encoder".to_owned()))?;
+    let bag = bag_opt.ok_or_else(|| Error::new(Status::GenericFailure, "HEIC: null options bag".to_owned()))?;
+
+    // Set ImageQuality (VT_R4). The property bag carries only the name; the VARIANT carries the type.
+    let mut prop_name: Vec<u16> = "ImageQuality".encode_utf16().chain(std::iter::once(0)).collect();
+    let mut prop = PROPBAG2::default();
+    prop.pstrName = PWSTR(prop_name.as_mut_ptr());
+    bag
+      .Write(1, &prop, &VARIANT::from(quality))
+      .map_err(|e| wic_error("set quality", e))?;
+
+    frame.Initialize(&bag).map_err(|e| wic_error("frame init", e))?;
+    frame.SetSize(width, height).map_err(|e| wic_error("set size", e))?;
+    // The encoder negotiates 32bppRGBA -> its supported opaque format; we accept whatever it picks.
+    let mut pixel_format = GUID_WICPixelFormat32bppRGBA;
+    frame.SetPixelFormat(&mut pixel_format).map_err(|e| wic_error("set pixel format", e))?;
+
+    let source = factory
+      .CreateBitmapFromMemory(width, height, &GUID_WICPixelFormat32bppRGBA, stride, rgba.as_raw())
+      .map_err(|e| wic_error("source bitmap", e))?;
+    frame.WriteSource(&source, std::ptr::null()).map_err(|e| wic_error("write source", e))?;
+    frame.Commit().map_err(|e| wic_error("frame commit", e))?;
+    encoder.Commit().map_err(|e| wic_error("encoder commit", e))?;
+
+    // Copy the encoded bytes out of the growable HGLOBAL before the stream is dropped.
+    let hglobal = GetHGlobalFromStream(&out).map_err(|e| wic_error("get hglobal", e))?;
+    let size = GlobalSize(hglobal);
+    let ptr = GlobalLock(hglobal) as *const u8;
+    if ptr.is_null() {
+      return Err(Error::new(Status::GenericFailure, "HEIC: failed to lock output buffer".to_owned()));
+    }
+    let bytes = std::slice::from_raw_parts(ptr, size).to_vec();
+    let _ = GlobalUnlock(hglobal);
+    Ok(bytes)
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -715,10 +957,10 @@ mod tests {
 
   // --- decode_heic: non-macOS stub still errors (macOS now decodes real fixtures) ---
 
-  #[cfg(not(target_os = "macos"))]
+  #[cfg(not(any(target_os = "macos", target_os = "windows")))]
   #[test]
-  fn decode_heic_stub_errors_off_macos() {
-    // Off macOS the stub returns an error (no OS HEVC decoder to delegate to).
+  fn decode_heic_stub_errors_off_macos_windows() {
+    // Off macOS/Windows the stub returns an error (no OS HEVC decoder to delegate to).
     let buf = ftyp(b"heic", b"\0\0\0\0", &[], None);
     assert!(super::decode_heic(&buf).is_err());
   }
