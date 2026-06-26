@@ -1338,8 +1338,9 @@ impl Transformer {
   /// Source-over (`blend: Over`, no tiling, full opacity) composites at 8-bit, identical
   /// to `overlay`. Other blend modes / tiling / opacity < 1 run at the base image's native
   /// channel depth (8/16-bit, or 32-bit float), then the result is converted back to the
-  /// base's original color type — so an opaque base never gains an alpha channel, and
-  /// alpha-reducing modes (Clear/Out/DestOut/Xor) have no visible effect on an opaque base.
+  /// base's original color type — so an opaque base never gains an alpha channel. On an
+  /// opaque base, coverage-reducing modes (Clear/Out/DestOut/Xor) flatten the overlapped
+  /// region toward black, since the removed alpha can't be stored without an alpha channel.
   pub fn composite(
     &mut self,
     on_top: Uint8Array,
@@ -2965,5 +2966,57 @@ mod tests {
       ColorType::Rgb8,
       "opaque base must stay Rgb8 (no alpha channel added)"
     );
+  }
+
+  #[test]
+  fn composite_over_applies_per_overlay_opacity() {
+    // A faded overlay (opacity 0.5) Over an opaque base must blend half-and-half. With
+    // a_s = top_alpha * opacity = 0.5 and ab = 1, Over gives Fa = 1, Fb = 1 - a_s = 0.5,
+    // so ao = 0.5*1 + 1*0.5 = 1.0. Red fades to ~0.5 (128), the base blue keeps ~0.5
+    // (128), green stays 0, and the opaque base keeps full alpha + its Rgba8 color type.
+    let mut base =
+      DynamicImage::ImageRgba8(RgbaImage::from_raw(1, 1, vec![0, 0, 255, 255]).unwrap());
+    let top = DynamicImage::ImageRgba8(RgbaImage::from_raw(1, 1, vec![255, 0, 0, 255]).unwrap());
+    apply_composite(&mut base, &top, 0, 0, BlendMode::Over, 0.5, false);
+    assert_eq!(base.color(), ColorType::Rgba8);
+    let px = base.to_rgba8().get_pixel(0, 0).0;
+    assert!(
+      (127..=129).contains(&px[0]),
+      "R ~= 128 (half-faded red); got {}",
+      px[0]
+    );
+    assert_eq!(px[1], 0, "green stays 0");
+    assert!(
+      (127..=129).contains(&px[2]),
+      "B ~= 128 (half-kept base blue); got {}",
+      px[2]
+    );
+    assert_eq!(px[3], 255, "opaque base keeps full alpha");
+  }
+
+  #[test]
+  fn composite_multiply_runs_at_16bit_depth() {
+    // The 16-bit branch (`composite_into_u16`) must blend at full depth. Multiply of two
+    // mid-grays: 32768/65535 ~= 0.50000763, squared ~= 0.25000763, * 65535 ~= 16384.25,
+    // rounding to ~16384 — the result keeps 16-bit precision and the base stays Rgba16.
+    let mut base = DynamicImage::ImageRgba16(
+      image::ImageBuffer::<image::Rgba<u16>, _>::from_raw(1, 1, vec![32768, 32768, 32768, 65535])
+        .unwrap(),
+    );
+    let top = DynamicImage::ImageRgba16(
+      image::ImageBuffer::<image::Rgba<u16>, _>::from_raw(1, 1, vec![32768, 32768, 32768, 65535])
+        .unwrap(),
+    );
+    apply_composite(&mut base, &top, 0, 0, BlendMode::Multiply, 1.0, false);
+    assert_eq!(base.color(), ColorType::Rgba16, "must stay 16-bit");
+    let px = base.to_rgba16().get_pixel(0, 0).0;
+    for c in 0..3 {
+      assert!(
+        (16380..=16388).contains(&px[c]),
+        "channel {c}: 16-bit Multiply ~= 16384; got {}",
+        px[c]
+      );
+    }
+    assert_eq!(px[3], 65535, "opaque alpha preserved at 16-bit");
   }
 }
