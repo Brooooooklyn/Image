@@ -26,7 +26,12 @@ export declare class Transformer {
    * The image is scaled to the maximum possible size that fits
    * within the bounds specified by `width` and `height`.
    */
-  resize(widthOrOptions: number | ResizeOptions, height?: number | undefined | null, filter?: ResizeFilterType | undefined | null, fit?: ResizeFit | undefined | null): this
+  resize(
+    widthOrOptions: number | ResizeOptions,
+    height?: number | undefined | null,
+    filter?: ResizeFilterType | undefined | null,
+    fit?: ResizeFit | undefined | null,
+  ): this
   /**
    * Resize this image using the specified filter algorithm.
    * The image is scaled to the maximum possible size that fits
@@ -86,8 +91,20 @@ export declare class Transformer {
   opacity(factor: number): this
   /** Crop a cut-out of this image delimited by the bounding rectangle. */
   crop(x: number, y: number, width: number, height: number): this
-  /** Overlay an image at a given coordinate (x, y) */
+  /** Overlay an image at a given coordinate (x, y) using source-over blending. */
   overlay(onTop: Uint8Array, x: number, y: number): this
+  /**
+   * Composite `on_top` onto this image with a sharp-style blend mode, gravity-based
+   * positioning, tiling, and per-overlay opacity. See `CompositeOptions`.
+   *
+   * Source-over (`blend: Over`, no tiling, full opacity) composites at 8-bit, identical
+   * to `overlay`. Other blend modes / tiling / opacity < 1 run at the base image's native
+   * channel depth (8/16-bit, or 32-bit float), then the result is converted back to the
+   * base's original color type — so an opaque base never gains an alpha channel. On an
+   * opaque base, coverage-reducing modes (Clear/Out/DestOut/Xor) flatten the overlapped
+   * region toward black, since the removed alpha can't be stored without an alpha channel.
+   */
+  composite(onTop: Uint8Array, options?: CompositeOptions | undefined | null): this
   /** Return this image's pixels as a native endian byte slice. */
   rawPixels(signal?: AbortSignal | undefined | null): Promise<Buffer>
   /** Return this image's pixels as a native endian byte slice. */
@@ -156,6 +173,63 @@ export interface AvifConfig {
 }
 
 /**
+ * Compositing / blending operator for `Transformer.composite`. Mirrors sharp/libvips
+ * blend modes: Porter-Duff operators plus the W3C separable blend modes.
+ */
+export declare enum BlendMode {
+  /** Source-over (default) — the overlay is drawn on top of the base. */
+  Over = 0,
+  /** Clear — neither source nor destination is shown. */
+  Clear = 1,
+  /** Source — only the overlay is shown. */
+  Source = 2,
+  /** Source-in — the overlay clipped to the base's shape. */
+  In = 3,
+  /** Source-out — the overlay where the base is transparent. */
+  Out = 4,
+  /** Source-atop — the overlay drawn only where the base is opaque. */
+  Atop = 5,
+  /** Destination — only the base is shown (overlay ignored). */
+  Dest = 6,
+  /** Destination-over — the base drawn on top of the overlay. */
+  DestOver = 7,
+  /** Destination-in — the base clipped to the overlay's shape. */
+  DestIn = 8,
+  /** Destination-out — the base where the overlay is transparent. */
+  DestOut = 9,
+  /** Destination-atop — the base drawn only where the overlay is opaque. */
+  DestAtop = 10,
+  /** Exclusive-or of the two coverage regions. */
+  Xor = 11,
+  /** Additive blending. */
+  Add = 12,
+  /** Saturating additive blending. */
+  Saturate = 13,
+  /** Multiply the channels. */
+  Multiply = 14,
+  /** Screen (inverse-multiply) the channels. */
+  Screen = 15,
+  /** Overlay (multiply or screen depending on the backdrop). */
+  Overlay = 16,
+  /** Keep the darker of the two channels. */
+  Darken = 17,
+  /** Keep the lighter of the two channels. */
+  Lighten = 18,
+  /** Brighten the backdrop to reflect the source. */
+  ColorDodge = 19,
+  /** Darken the backdrop to reflect the source. */
+  ColorBurn = 20,
+  /** Hard light (overlay with swapped operands). */
+  HardLight = 21,
+  /** Soft light. */
+  SoftLight = 22,
+  /** Absolute difference of the channels. */
+  Difference = 23,
+  /** Like difference but with lower contrast. */
+  Exclusion = 24,
+}
+
+/**
  * https://en.wikipedia.org/wiki/Chroma_subsampling#Types_of_sampling_and_subsampling
  * https://developer.mozilla.org/en-US/docs/Web/Media/Formats/Video_concepts
  */
@@ -195,7 +269,25 @@ export declare enum ChromaSubsampling {
    * What if the chroma subsampling model is 4:0:0?
    * That says to use every pixel of luma data, but that each row has 0 chroma samples applied to it. The resulting image, then, is comprised solely of the luminance data—a greyscale image.
    */
-  Yuv400 = 3
+  Yuv400 = 3,
+}
+
+export interface CompositeOptions {
+  /** Pixel offset from the top edge. Takes precedence over `gravity` when set. */
+  top?: number
+  /** Pixel offset from the left edge. Takes precedence over `gravity` when set. */
+  left?: number
+  /** Anchor position; used only when neither `left` nor `top` is provided. */
+  gravity?: Gravity
+  /** Blend / compositing operator. Defaults to `Over` (source-over). */
+  blend?: BlendMode
+  /** Repeat the overlay to tile across the whole base. Ignores `left`/`top`/`gravity`. */
+  tile?: boolean
+  /**
+   * Multiply the overlay's alpha by this factor (0.0..=1.0). Fades the OVERLAY
+   * (distinct from `Transformer.opacity`, which fades the base).
+   */
+  opacity?: number
 }
 
 export declare enum CompressionType {
@@ -204,10 +296,14 @@ export declare enum CompressionType {
   /** Fast, minimal compression */
   Fast = 1,
   /** High compression level */
-  Best = 2
+  Best = 2,
 }
 
-export declare function compressJpeg(input: Uint8Array, options?: JpegCompressOptions | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>
+export declare function compressJpeg(
+  input: Uint8Array,
+  options?: JpegCompressOptions | undefined | null,
+  signal?: AbortSignal | undefined | null,
+): Promise<Buffer>
 
 export declare function compressJpegSync(input: Uint8Array, options?: JpegCompressOptions | undefined | null): Buffer
 
@@ -248,7 +344,7 @@ export declare enum FastResizeFilter {
    * Lanczos filter (a truncated sinc) on all pixels that may contribute
    * to the output value.
    */
-  Lanczos3 = 5
+  Lanczos3 = 5,
 }
 
 export interface FastResizeOptions {
@@ -276,7 +372,32 @@ export declare enum FilterType {
    * Uses a heuristic to select one of the preceding filters for each
    * scanline rather than one filter for the entire image
    */
-  Adaptive = 5
+  Adaptive = 5,
+}
+
+/**
+ * Where to anchor the overlay relative to the base image when no explicit
+ * `left`/`top` is given.
+ */
+export declare enum Gravity {
+  /** Center of the base image. */
+  Center = 0,
+  /** Top edge, horizontally centered. */
+  North = 1,
+  /** Top-right corner. */
+  NorthEast = 2,
+  /** Right edge, vertically centered. */
+  East = 3,
+  /** Bottom-right corner. */
+  SouthEast = 4,
+  /** Bottom edge, horizontally centered. */
+  South = 5,
+  /** Bottom-left corner. */
+  SouthWest = 6,
+  /** Left edge, vertically centered. */
+  West = 7,
+  /** Top-left corner. */
+  NorthWest = 8,
 }
 
 /**
@@ -337,10 +458,14 @@ export declare enum JsColorType {
   /** Pixel is 32-bit float RGB */
   Rgb32F = 8,
   /** Pixel is 32-bit float RGBA */
-  Rgba32F = 9
+  Rgba32F = 9,
 }
 
-export declare function losslessCompressPng(input: Uint8Array, options?: PNGLosslessOptions | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>
+export declare function losslessCompressPng(
+  input: Uint8Array,
+  options?: PNGLosslessOptions | undefined | null,
+  signal?: AbortSignal | undefined | null,
+): Promise<Buffer>
 
 export declare function losslessCompressPngSync(input: Buffer, options?: PNGLosslessOptions | undefined | null): Buffer
 
@@ -362,7 +487,7 @@ export declare enum Orientation {
   MirrorHorizontalAndRotate270Cw = 5,
   Rotate90Cw = 6,
   MirrorHorizontalAndRotate90Cw = 7,
-  Rotate270Cw = 8
+  Rotate270Cw = 8,
 }
 
 export interface PngEncodeOptions {
@@ -415,7 +540,11 @@ export interface PNGLosslessOptions {
   strip?: boolean
 }
 
-export declare function pngQuantize(input: Uint8Array, options?: PngQuantOptions | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>
+export declare function pngQuantize(
+  input: Uint8Array,
+  options?: PngQuantOptions | undefined | null,
+  signal?: AbortSignal | undefined | null,
+): Promise<Buffer>
 
 export declare function pngQuantizeSync(input: Uint8Array, options?: PngQuantOptions | undefined | null): Buffer
 
@@ -442,7 +571,7 @@ export declare enum PngRowFilter {
   Sub = 1,
   Up = 2,
   Average = 3,
-  Paeth = 4
+  Paeth = 4,
 }
 
 /**
@@ -523,7 +652,7 @@ export declare enum ResizeFilterType {
   /** Gaussian Filter */
   Gaussian = 3,
   /** Lanczos with window 3 */
-  Lanczos3 = 4
+  Lanczos3 = 4,
 }
 
 export declare enum ResizeFit {
@@ -538,7 +667,7 @@ export declare enum ResizeFit {
    * Preserving aspect ratio
    * resize the image to be as large as possible while ensuring its dimensions are less than or equal to both those specified.
    */
-  Inside = 2
+  Inside = 2,
 }
 
 export interface ResizeOptions {

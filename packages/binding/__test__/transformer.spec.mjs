@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import test from 'ava'
 import { decode } from 'blurhash'
 
-import { JsColorType, ResizeFit, Transformer } from '../index.js'
+import { BlendMode, Gravity, JsColorType, ResizeFit, Transformer } from '../index.js'
 
 const __DIRNAME = join(fileURLToPath(import.meta.url), '..')
 const ROOT_DIR = join(__DIRNAME, '..', '..', '..')
@@ -518,4 +518,72 @@ test('reuse: rotate metadata is stable across raw pixels + encode (#158)', async
   const after = transformer.metadataSync()
   t.is(after.width, upright.width, 'rotate applied once, not re-rotated by the prior encode')
   t.is(after.height, upright.height)
+})
+
+// composite() with a Multiply blend: two mid-grays multiply to ~quarter brightness.
+// 0.502^2 * 255 ≈ 64. Alpha stays fully opaque.
+test('composite Multiply halves two mid-grays (#138)', async (t) => {
+  const gray = Uint8Array.from([128, 128, 128, 255])
+  const topPng = await Transformer.fromRgbaPixels(gray, 1, 1).png()
+  const raw = await Transformer.fromRgbaPixels(gray, 1, 1).composite(topPng, { blend: BlendMode.Multiply }).rawPixels()
+  t.true(raw[0] >= 63 && raw[0] <= 65, `Multiply of two mid-grays ~= 64; got ${raw[0]}`)
+  t.is(raw[3], 255, 'opaque base stays opaque')
+})
+
+// composite() with Gravity.SouthEast anchors a small overlay at the bottom-right corner,
+// leaving the rest of the base untouched.
+test('composite Gravity.SouthEast places the overlay bottom-right (#138)', async (t) => {
+  const base = Uint8Array.from(Array.from({ length: 4 * 4 }, () => [0, 0, 0, 255]).flat())
+  const top = Uint8Array.from(Array.from({ length: 2 * 2 }, () => [10, 20, 30, 255]).flat())
+  const topPng = await Transformer.fromRgbaPixels(top, 2, 2).png()
+  const raw = await Transformer.fromRgbaPixels(base, 4, 4).composite(topPng, { gravity: Gravity.SouthEast }).rawPixels()
+  // bottom-right pixel (3,3) -> offset (3*4+3)*4 = 60 carries the overlay color.
+  t.is(raw[60], 10)
+  t.is(raw[61], 20)
+  t.is(raw[62], 30)
+  t.is(raw[63], 255)
+  // top-left pixel (0,0) -> offset 0 is untouched base color.
+  t.is(raw[0], 0)
+  t.is(raw[1], 0)
+  t.is(raw[2], 0)
+  t.is(raw[3], 255)
+})
+
+// composite() with tile: true repeats the overlay across the whole base.
+test('composite tile covers the whole base (#138)', async (t) => {
+  const base = Uint8Array.from(Array.from({ length: 4 * 4 }, () => [50, 60, 70, 255]).flat())
+  const top = Uint8Array.from(Array.from({ length: 2 * 2 }, () => [10, 20, 30, 255]).flat())
+  const topPng = await Transformer.fromRgbaPixels(top, 2, 2).png()
+  const raw = await Transformer.fromRgbaPixels(base, 4, 4).composite(topPng, { tile: true }).rawPixels()
+  for (let i = 0; i < 16; i++) {
+    const o = i * 4
+    t.is(raw[o], 10, `pixel ${i} R`)
+    t.is(raw[o + 1], 20, `pixel ${i} G`)
+    t.is(raw[o + 2], 30, `pixel ${i} B`)
+    t.is(raw[o + 3], 255, `pixel ${i} A`)
+  }
+})
+
+// composite() with BlendMode.DestOver keeps the (opaque) backdrop: Fa = 1 - ab = 0,
+// so the base shows through unchanged.
+test('composite DestOver keeps the opaque backdrop (#138)', async (t) => {
+  const red = Uint8Array.from([255, 0, 0, 255])
+  const blue = Uint8Array.from([0, 0, 255, 255])
+  const topPng = await Transformer.fromRgbaPixels(blue, 1, 1).png()
+  const raw = await Transformer.fromRgbaPixels(red, 1, 1).composite(topPng, { blend: BlendMode.DestOver }).rawPixels()
+  t.is(raw[0], 255)
+  t.is(raw[1], 0)
+  t.is(raw[2], 0)
+  t.is(raw[3], 255)
+})
+
+// composite() opacity fades the OVERLAY, so a 50%-faded red over blue blends to ~purple.
+test('composite opacity fades the overlay (#138)', async (t) => {
+  const blue = Uint8Array.from([0, 0, 255, 255])
+  const red = Uint8Array.from([255, 0, 0, 255])
+  const topPng = await Transformer.fromRgbaPixels(red, 1, 1).png()
+  const raw = await Transformer.fromRgbaPixels(blue, 1, 1).composite(topPng, { opacity: 0.5 }).rawPixels()
+  t.true(raw[0] >= 127 && raw[0] <= 129, `faded red ~= 128; got ${raw[0]}`)
+  t.true(raw[2] >= 127 && raw[2] <= 129, `remaining blue ~= 128; got ${raw[2]}`)
+  t.is(raw[3], 255, 'opaque base stays opaque')
 })
