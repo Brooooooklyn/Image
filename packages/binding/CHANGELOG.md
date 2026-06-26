@@ -3,6 +3,19 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+# [1.14.0](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.13.0...@napi-rs/image@1.14.0) (2026-06-26)
+
+### Bug Fixes
+
+- **svg:** scale SVG content to fill the upscaled raster ([#159](https://github.com/Brooooooklyn/Image/issues/159)) ([#215](https://github.com/Brooooooklyn/Image/issues/215)) ([ff57062](https://github.com/Brooooooklyn/Image/commit/ff5706242efe82933b0b6e0a774911bb7ae5c2fb))
+- **transformer:** metadata() reflects pending transforms; SVG format "svg" ([#158](https://github.com/Brooooooklyn/Image/issues/158)) ([#218](https://github.com/Brooooooklyn/Image/issues/218)) ([9dba311](https://github.com/Brooooooklyn/Image/commit/9dba311ab54cae355b12ac22b4e0985731e5d0d1)), closes [#199](https://github.com/Brooooooklyn/Image/issues/199)
+
+### Features
+
+- **heic:** macOS-native HEIC decode + encode via Apple ImageIO ([#214](https://github.com/Brooooooklyn/Image/issues/214)) ([e07e1e0](https://github.com/Brooooooklyn/Image/commit/e07e1e0071c164406ebc6f8e71280dc473571176)), closes [#199](https://github.com/Brooooooklyn/Image/issues/199)
+- **heic:** Windows WIC backend for HEIC decode/encode ([#221](https://github.com/Brooooooklyn/Image/issues/221)) ([67304eb](https://github.com/Brooooooklyn/Image/commit/67304eb1af2fb478699cda1e62cbb4751470c0c6))
+- **transformer:** add opacity(factor) to scale the alpha channel ([#42](https://github.com/Brooooooklyn/Image/issues/42)) ([#220](https://github.com/Brooooooklyn/Image/issues/220)) ([c2bc50a](https://github.com/Brooooooklyn/Image/commit/c2bc50ac3663f758b6b5b903c698a35e046b6560))
+
 # [1.13.0](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.12.1...@napi-rs/image@1.13.0) (2026-06-22)
 
 ### Bug Fixes
