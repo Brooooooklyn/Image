@@ -99,14 +99,22 @@ export declare class Transformer {
    *
    * Placement (sharp parity): when neither `left` nor `top` is given the overlay is
    * anchored by `gravity`, which defaults to the CENTRE of the base image. `left` and
-   * `top` must be provided together — supplying only one is an error.
+   * `top` must be provided together — supplying only one is an error. The overlay must be
+   * the same size as the base or smaller in both dimensions; a larger overlay is an error
+   * (`Image to composite must have same dimensions or smaller`). When `tile` is set the
+   * overlay repeats to fill the whole base, phased so one tile aligns with the resolved
+   * `left`/`top` or `gravity`.
    *
-   * Source-over (`blend: Over`, no tiling, full opacity) composites at 8-bit, identical
-   * to `overlay`. Other blend modes / tiling / opacity < 1 run at the base image's native
-   * channel depth (8/16-bit, or 32-bit float), then the result is converted back to the
-   * base's original color type — so an opaque base never gains an alpha channel. On an
-   * opaque base, coverage-reducing modes (Clear/Out/DestOut/Xor) flatten the overlapped
-   * region toward black, since the removed alpha can't be stored without an alpha channel.
+   * `composite()` always composites at the base image's native channel depth (8/16-bit, or
+   * 32-bit float), then converts the result back to the base's original color type — so an
+   * opaque base never gains an alpha channel. (Even a default `Over` runs through this depth-
+   * aware path; its 8-bit output may differ from `overlay`'s by at most 1 per channel due to
+   * rounding vs truncation.) On an opaque base, coverage-reducing modes (Clear/Out/DestOut/Xor)
+   * flatten the overlapped region toward black, since the removed alpha can't be stored without
+   * an alpha channel. For 32-bit-float (HDR) bases, blend-mode compositing operates in `[0,1]`
+   * (where the W3C blend modes are defined), so HDR channel values outside `[0,1]` in the
+   * composited region are clamped; fully-transparent sources, `Dest`, and `DestOver` over an
+   * opaque backdrop are preserved exactly.
    */
   composite(onTop: Uint8Array, options?: CompositeOptions | undefined | null): this
   /** Return this image's pixels as a native endian byte slice. */
@@ -294,7 +302,10 @@ export interface CompositeOptions {
   gravity?: Gravity
   /** Blend / compositing operator. Defaults to `Over` (source-over). */
   blend?: BlendMode
-  /** Repeat the overlay to tile across the whole base. Ignores `left`/`top`/`gravity`. */
+  /**
+   * Repeat the overlay to fill the whole base, phased so a tile aligns with the resolved
+   * `left`/`top` or `gravity`.
+   */
   tile?: boolean
   /**
    * Multiply the overlay's alpha by this factor (0.0..=1.0). Fades the OVERLAY

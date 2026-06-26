@@ -595,7 +595,8 @@ pub struct CompositeOptions {
   pub gravity: Option<Gravity>,
   /// Blend / compositing operator. Defaults to `Over` (source-over).
   pub blend: Option<BlendMode>,
-  /// Repeat the overlay to tile across the whole base. Ignores `left`/`top`/`gravity`.
+  /// Repeat the overlay to fill the whole base, phased so a tile aligns with the resolved
+  /// `left`/`top` or `gravity`.
   pub tile: Option<bool>,
   /// Multiply the overlay's alpha by this factor (0.0..=1.0). Fades the OVERLAY
   /// (distinct from `Transformer.opacity`, which fades the base).
@@ -614,7 +615,8 @@ struct CompositeItem {
   gravity: Gravity, // used only when !has_offset; defaults to Center
   blend: BlendMode,
   tile: bool,
-  opacity: f32, // 1.0 == no-op
+  opacity: f32,         // 1.0 == no-op
+  simple_overlay: bool, // legacy overlay(): byte-identical 8-bit `image::overlay`; composite() => false
 }
 
 #[derive(Default, Clone)]
@@ -857,6 +859,17 @@ impl Task for EncodeTask {
       for item in std::mem::take(&mut self.image_transform_args.overlay).into_iter() {
         let top = ThreadsafeDynamicImage::new(item.buffer.clone());
         let top_image_meta = top.get(true)?;
+        // Fix D: composite() rejects an overlay larger than the base in either dimension (sharp
+        // parity). Legacy overlay() keeps its historical silent clipping.
+        if !item.simple_overlay {
+          let (tw, th) = (top_image_meta.image.width(), top_image_meta.image.height());
+          if tw > img.width() || th > img.height() {
+            return Err(Error::new(
+              Status::InvalidArg,
+              "Image to composite must have same dimensions or smaller".to_owned(),
+            ));
+          }
+        }
         let (x, y) = resolve_position(
           item.has_offset,
           item.left,
@@ -867,11 +880,12 @@ impl Task for EncodeTask {
           top_image_meta.image.width(),
           top_image_meta.image.height(),
         );
-        // Source-over with no tiling / full opacity keeps the fast 8-bit path (unchanged
-        // behaviour, byte-identical to `overlay`). Everything else uses the precise compositor.
-        if item.blend == BlendMode::Over && !item.tile && item.opacity == 1.0 {
+        if item.simple_overlay {
+          // Legacy overlay(): byte-identical 8-bit source-over (clips oversized overlays).
           overlay(&mut img, &top_image_meta.image, x, y);
         } else {
+          // composite(): always depth-aware at the base's native depth (8/16-bit or f32), so a
+          // default `Over` on an HDR base is not clamped to 8-bit and no-op guards apply.
           apply_composite(
             &mut img,
             &top_image_meta.image,
@@ -1336,6 +1350,7 @@ impl Transformer {
       blend: BlendMode::Over,
       tile: false,
       opacity: 1.0,
+      simple_overlay: true, // legacy: keep the byte-identical 8-bit `image::overlay` path
     });
     Ok(self)
   }
@@ -1346,14 +1361,22 @@ impl Transformer {
   ///
   /// Placement (sharp parity): when neither `left` nor `top` is given the overlay is
   /// anchored by `gravity`, which defaults to the CENTRE of the base image. `left` and
-  /// `top` must be provided together — supplying only one is an error.
+  /// `top` must be provided together — supplying only one is an error. The overlay must be
+  /// the same size as the base or smaller in both dimensions; a larger overlay is an error
+  /// (`Image to composite must have same dimensions or smaller`). When `tile` is set the
+  /// overlay repeats to fill the whole base, phased so one tile aligns with the resolved
+  /// `left`/`top` or `gravity`.
   ///
-  /// Source-over (`blend: Over`, no tiling, full opacity) composites at 8-bit, identical
-  /// to `overlay`. Other blend modes / tiling / opacity < 1 run at the base image's native
-  /// channel depth (8/16-bit, or 32-bit float), then the result is converted back to the
-  /// base's original color type — so an opaque base never gains an alpha channel. On an
-  /// opaque base, coverage-reducing modes (Clear/Out/DestOut/Xor) flatten the overlapped
-  /// region toward black, since the removed alpha can't be stored without an alpha channel.
+  /// `composite()` always composites at the base image's native channel depth (8/16-bit, or
+  /// 32-bit float), then converts the result back to the base's original color type — so an
+  /// opaque base never gains an alpha channel. (Even a default `Over` runs through this depth-
+  /// aware path; its 8-bit output may differ from `overlay`'s by at most 1 per channel due to
+  /// rounding vs truncation.) On an opaque base, coverage-reducing modes (Clear/Out/DestOut/Xor)
+  /// flatten the overlapped region toward black, since the removed alpha can't be stored without
+  /// an alpha channel. For 32-bit-float (HDR) bases, blend-mode compositing operates in `[0,1]`
+  /// (where the W3C blend modes are defined), so HDR channel values outside `[0,1]` in the
+  /// composited region are clamped; fully-transparent sources, `Dest`, and `DestOver` over an
+  /// opaque backdrop are preserved exactly.
   pub fn composite(
     &mut self,
     on_top: Uint8Array,
@@ -1385,6 +1408,7 @@ impl Transformer {
       blend: o.blend.unwrap_or_default(),
       tile: o.tile.unwrap_or(false),
       opacity,
+      simple_overlay: false, // composite() is always depth-aware (see compute() dispatch)
     });
     Ok(self)
   }
@@ -1938,6 +1962,7 @@ fn apply_opacity(image: &mut DynamicImage, factor: f32) {
 /// given (`has_offset`), `left`/`top` are used verbatim; otherwise the overlay is anchored by
 /// `gravity` (default Center). Computed in i64; negative results are valid (the overlay is
 /// clipped by the compositor).
+#[allow(clippy::too_many_arguments)] // placement primitives kept flat so the fn is unit-testable
 fn resolve_position(
   has_offset: bool,
   left: i64,
@@ -2142,10 +2167,12 @@ fn overlap_bounds(
   )
 }
 
-/// Invoke `f(ox, oy)` for each placement: once at `(x, y)` normally; for tiling, at every
-/// top-left origin stepping by the overlay size across the whole base from `(0,0)` (ignoring x/y).
-/// Streams the origins instead of materializing a `Vec` — a 1x1 tile over a large base would
-/// otherwise allocate one tuple per pixel.
+/// Invoke `f(ox, oy)` for each placement: once at `(x, y)` normally; for tiling, at every top-left
+/// origin stepping by the overlay size across the whole base. The tile grid is PHASED by the
+/// resolved `(x, y)` (from `left`/`top` or `gravity`) so one tile origin lands exactly on `(x, y)`
+/// and the rest tile outward to fill the base. Streams the origins instead of materializing a `Vec`
+/// — a 1x1 tile over a large base would otherwise allocate one tuple per pixel.
+#[allow(clippy::too_many_arguments)] // geometry primitives kept flat (bw/bh/tw/th/x/y) for clarity
 fn for_each_placement(
   tile: bool,
   bw: u32,
@@ -2164,14 +2191,18 @@ fn for_each_placement(
   if tw == 0 || th == 0 {
     return;
   }
-  let mut oy = 0u32;
-  while oy < bh {
-    let mut ox = 0u32;
-    while ox < bw {
-      f(ox as i64, oy as i64);
-      ox += tw;
+  let (tw_i, th_i) = (tw as i64, th as i64);
+  // First origin <= 0 congruent to the resolved (x, y) modulo tile size, so one tile lands on (x, y).
+  let start_x = x.rem_euclid(tw_i) - tw_i;
+  let start_y = y.rem_euclid(th_i) - th_i;
+  let mut oy = start_y;
+  while oy < bh as i64 {
+    let mut ox = start_x;
+    while ox < bw as i64 {
+      f(ox, oy);
+      ox += tw_i;
     }
-    oy += th;
+    oy += th_i;
   }
 }
 
@@ -2275,9 +2306,11 @@ fn composite_into_u16(
   });
 }
 
-/// Composite `top` onto a 32-bit float RGBA `base` in place. Channels are clamped to `[0,1]` for
-/// blending (HDR values outside the unit range are clamped, NaN sanitized to 0.0); the blended
-/// result is already clamped to `[0,1]`, so it is written directly.
+/// Composite `top` onto a 32-bit float RGBA `base` in place. The W3C blend modes are defined in
+/// `[0,1]`, so channels are clamped to `[0,1]` for blending (HDR values outside the unit range are
+/// clamped, NaN sanitized to 0.0) and the already-`[0,1]` result is written directly. To avoid
+/// clamping HDR/NaN destinations needlessly, destination-preserving cases (`Dest`, a transparent
+/// no-op source, and `DestOver` over an opaque backdrop) skip the pixel and keep the raw backdrop.
 fn composite_into_f32(
   base: &mut Rgba32FImage,
   top: &Rgba32FImage,
@@ -2297,13 +2330,21 @@ fn composite_into_f32(
     for ry in 0..rh {
       for rx in 0..rw {
         let s = top.get_pixel(otx + rx, oty + ry).0;
-        // Compute the effective source alpha first. When it is 0 and the mode does not clear
-        // based on the source, the output equals the backdrop — skip the pixel so `norm_f32`
-        // does NOT clamp / sanitize the (possibly HDR > 1 or NaN) destination for a true no-op
-        // overlay. Only the f32 path needs this; u8/u16 normalize losslessly.
+        // Read the destination first (raw, possibly HDR > 1 or NaN) so we can preserve it exactly
+        // for modes that leave the backdrop untouched, instead of clamping it via `norm_f32`. The
+        // blend itself runs in `[0,1]`; only the f32 path needs these guards (u8/u16 normalize
+        // losslessly). Destination is preserved when:
+        //   - the mode ignores the source entirely (`Dest`), or
+        //   - the source is fully transparent and the mode does not clear on a transparent source, or
+        //   - `DestOver` over a fully-opaque backdrop (the backdrop fully covers the source).
         let a_s = (norm_f32(s[3]) * opacity).clamp(0.0, 1.0);
-        if a_s == 0.0 && !clears_dest_when_source_transparent(mode) {
-          continue;
+        let d_raw = base.get_pixel(obx + rx, oby + ry).0;
+        let dst_a = d_raw[3]; // raw backdrop alpha BEFORE norm
+        let preserves_dest = mode == BlendMode::Dest
+          || (a_s == 0.0 && !clears_dest_when_source_transparent(mode))
+          || (mode == BlendMode::DestOver && dst_a >= 1.0);
+        if preserves_dest {
+          continue; // leave the original (possibly HDR / NaN) destination untouched
         }
         let cs = [
           norm_f32(s[0]),
@@ -2311,12 +2352,11 @@ fn composite_into_f32(
           norm_f32(s[2]),
           norm_f32(s[3]),
         ];
-        let d = base.get_pixel(obx + rx, oby + ry).0;
         let cb = [
-          norm_f32(d[0]),
-          norm_f32(d[1]),
-          norm_f32(d[2]),
-          norm_f32(d[3]),
+          norm_f32(d_raw[0]),
+          norm_f32(d_raw[1]),
+          norm_f32(d_raw[2]),
+          norm_f32(d_raw[3]),
         ];
         let out = blend_rgba_f32(cb, cs, mode, opacity);
         base.put_pixel(obx + rx, oby + ry, Rgba(out));
@@ -2499,7 +2539,7 @@ mod tests {
 
   use super::{
     BlendMode, Gravity, ImageTransformArgs, apply_composite, apply_contrast, apply_huerotate,
-    apply_opacity, apply_transforms, resolve_position,
+    apply_opacity, apply_transforms, for_each_placement, resolve_position,
   };
   use image::{ColorType, DynamicImage, ImageBuffer, RgbImage, RgbaImage};
 
@@ -3229,5 +3269,67 @@ mod tests {
         px[c]
       );
     }
+  }
+
+  #[test]
+  fn composite_dest_preserves_hdr_destination() {
+    // `Dest` ignores the source entirely: an HDR Rgba32F backdrop (channel > 1.0) must survive an
+    // opaque top untouched (not clamped to 1.0) and stay Rgba32F.
+    let mut base = DynamicImage::ImageRgba32F(
+      image::ImageBuffer::<image::Rgba<f32>, _>::from_raw(1, 1, vec![4.0, 2.0, 0.5, 1.0]).unwrap(),
+    );
+    let top = DynamicImage::ImageRgba32F(
+      image::ImageBuffer::<image::Rgba<f32>, _>::from_raw(1, 1, vec![1.0, 1.0, 1.0, 1.0]).unwrap(),
+    );
+    apply_composite(&mut base, &top, 0, 0, BlendMode::Dest, 1.0, false);
+    assert_eq!(base.color(), ColorType::Rgba32F, "must stay Rgba32F");
+    let px = base.to_rgba32f().get_pixel(0, 0).0;
+    assert_eq!(
+      px[0], 4.0,
+      "Dest must keep the HDR backdrop (not clamp to 1.0)"
+    );
+    assert_eq!(px[1], 2.0);
+    assert_eq!(px[2], 0.5);
+    assert_eq!(px[3], 1.0);
+  }
+
+  #[test]
+  fn composite_dest_over_preserves_hdr_over_opaque_backdrop() {
+    // `DestOver` over a fully-opaque backdrop leaves the backdrop visible. The HDR Rgba32F base
+    // (channel > 1.0, alpha 1.0) must be preserved exactly, not clamped via the [0,1] blend.
+    let mut base = DynamicImage::ImageRgba32F(
+      image::ImageBuffer::<image::Rgba<f32>, _>::from_raw(1, 1, vec![4.0, 2.0, 0.5, 1.0]).unwrap(),
+    );
+    let top = DynamicImage::ImageRgba32F(
+      image::ImageBuffer::<image::Rgba<f32>, _>::from_raw(1, 1, vec![0.1, 0.2, 0.3, 1.0]).unwrap(),
+    );
+    apply_composite(&mut base, &top, 0, 0, BlendMode::DestOver, 1.0, false);
+    assert_eq!(base.color(), ColorType::Rgba32F, "must stay Rgba32F");
+    let px = base.to_rgba32f().get_pixel(0, 0).0;
+    assert_eq!(
+      px[0], 4.0,
+      "DestOver over an opaque HDR backdrop must keep it (not clamp to 1.0)"
+    );
+    assert_eq!(px[1], 2.0);
+    assert_eq!(px[2], 0.5);
+    assert_eq!(px[3], 1.0);
+  }
+
+  #[test]
+  fn tile_placement_is_phased_by_resolved_offset() {
+    // A 2x2 tile over a 4x4 base resolved at x=1, y=0 must phase the grid so a tile origin lands on
+    // x=1: origins step by the tile size from `x mod tw - tw`, giving x in {-1, 1, 3} (NOT {0, 2}).
+    let mut origins: Vec<(i64, i64)> = Vec::new();
+    for_each_placement(true, 4, 4, 2, 2, 1, 0, |ox, oy| origins.push((ox, oy)));
+
+    let mut xs: Vec<i64> = origins.iter().map(|&(ox, _)| ox).collect();
+    xs.sort_unstable();
+    xs.dedup();
+    assert_eq!(xs, vec![-1, 1, 3], "tile x origins must be phased by x=1");
+
+    let mut ys: Vec<i64> = origins.iter().map(|&(_, oy)| oy).collect();
+    ys.sort_unstable();
+    ys.dedup();
+    assert_eq!(ys, vec![-2, 0, 2], "tile y origins must be phased by y=0");
   }
 }

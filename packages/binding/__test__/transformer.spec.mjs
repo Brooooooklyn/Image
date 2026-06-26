@@ -627,3 +627,19 @@ test('composite sanitizes NaN opacity to a full overlay (#138)', async (t) => {
   t.true(raw[2] <= 1, `blue fully covered; got ${raw[2]}`)
   t.is(raw[3], 255, 'opaque base stays opaque')
 })
+
+// sharp parity: composite() rejects an overlay larger than the base in either dimension, throwing
+// "Image to composite must have same dimensions or smaller". Legacy overlay() keeps its historical
+// silent clipping and must NOT throw on the same oversized top.
+test('composite rejects an oversized overlay while overlay() clips (#138)', async (t) => {
+  const base = Uint8Array.from(Array.from({ length: 2 * 2 }, () => [0, 0, 0, 255]).flat())
+  const top = Uint8Array.from(Array.from({ length: 4 * 4 }, () => [10, 20, 30, 255]).flat())
+  const topPng = await Transformer.fromRgbaPixels(top, 4, 4).png()
+  const err = await t.throwsAsync(() => Transformer.fromRgbaPixels(base, 2, 2).composite(topPng).png())
+  t.true(
+    /same dimensions or smaller/.test(err.message),
+    `oversized composite must report the sharp error; got ${err && err.message}`,
+  )
+  // Legacy overlay() with the same oversized top clips instead of throwing.
+  await t.notThrowsAsync(() => Transformer.fromRgbaPixels(base, 2, 2).overlay(topPng, 0, 0).png())
+})
