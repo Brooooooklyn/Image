@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use image::imageops::overlay;
 use image::{
-  ColorType, DynamicImage, ImageBuffer, ImageEncoder, ImageFormat, Pixel, RgbaImage,
-  imageops::FilterType,
+  ColorType, DynamicImage, ImageBuffer, ImageEncoder, ImageFormat, Pixel, Rgba, Rgba32FImage,
+  RgbaImage, imageops::FilterType,
 };
 use libavif::AvifData;
 use napi::bindgen_prelude::*;
@@ -81,6 +81,89 @@ impl TryFrom<u16> for Orientation {
       )),
     }
   }
+}
+
+#[napi]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+/// Compositing / blending operator for `Transformer.composite`. Mirrors sharp/libvips
+/// blend modes: Porter-Duff operators plus the W3C separable blend modes.
+pub enum BlendMode {
+  /// Source-over (default) — the overlay is drawn on top of the base.
+  #[default]
+  Over,
+  /// Clear — neither source nor destination is shown.
+  Clear,
+  /// Source — only the overlay is shown.
+  Source,
+  /// Source-in — the overlay clipped to the base's shape.
+  In,
+  /// Source-out — the overlay where the base is transparent.
+  Out,
+  /// Source-atop — the overlay drawn only where the base is opaque.
+  Atop,
+  /// Destination — only the base is shown (overlay ignored).
+  Dest,
+  /// Destination-over — the base drawn on top of the overlay.
+  DestOver,
+  /// Destination-in — the base clipped to the overlay's shape.
+  DestIn,
+  /// Destination-out — the base where the overlay is transparent.
+  DestOut,
+  /// Destination-atop — the base drawn only where the overlay is opaque.
+  DestAtop,
+  /// Exclusive-or of the two coverage regions.
+  Xor,
+  /// Additive blending.
+  Add,
+  /// Saturating additive blending.
+  Saturate,
+  /// Multiply the channels.
+  Multiply,
+  /// Screen (inverse-multiply) the channels.
+  Screen,
+  /// Overlay (multiply or screen depending on the backdrop).
+  Overlay,
+  /// Keep the darker of the two channels.
+  Darken,
+  /// Keep the lighter of the two channels.
+  Lighten,
+  /// Brighten the backdrop to reflect the source.
+  ColorDodge,
+  /// Darken the backdrop to reflect the source.
+  ColorBurn,
+  /// Hard light (overlay with swapped operands).
+  HardLight,
+  /// Soft light.
+  SoftLight,
+  /// Absolute difference of the channels.
+  Difference,
+  /// Like difference but with lower contrast.
+  Exclusion,
+}
+
+#[napi]
+#[derive(Clone, Copy)]
+/// Where to anchor the overlay relative to the base image when no explicit
+/// `left`/`top` is given.
+pub enum Gravity {
+  /// Center of the base image.
+  Center,
+  /// Top edge, horizontally centered.
+  North,
+  /// Top-right corner.
+  NorthEast,
+  /// Right edge, vertically centered.
+  East,
+  /// Bottom-right corner.
+  SouthEast,
+  /// Bottom edge, horizontally centered.
+  South,
+  /// Bottom-left corner.
+  SouthWest,
+  /// Left edge, vertically centered.
+  West,
+  /// Top-left corner.
+  NorthWest,
 }
 
 #[napi]
@@ -497,6 +580,38 @@ pub struct ResizeOptions {
   pub fit: Option<ResizeFit>,
 }
 
+#[napi(object)]
+#[derive(Clone, Default)]
+pub struct CompositeOptions {
+  /// Pixel offset from the top edge. Takes precedence over `gravity` when set.
+  pub top: Option<i64>,
+  /// Pixel offset from the left edge. Takes precedence over `gravity` when set.
+  pub left: Option<i64>,
+  /// Anchor position; used only when neither `left` nor `top` is provided.
+  pub gravity: Option<Gravity>,
+  /// Blend / compositing operator. Defaults to `Over` (source-over).
+  pub blend: Option<BlendMode>,
+  /// Repeat the overlay to tile across the whole base. Ignores `left`/`top`/`gravity`.
+  pub tile: Option<bool>,
+  /// Multiply the overlay's alpha by this factor (0.0..=1.0). Fades the OVERLAY
+  /// (distinct from `Transformer.opacity`, which fades the base).
+  pub opacity: Option<f64>,
+}
+
+/// A single staged composite/overlay operation. `overlay()` and `composite()` both push one of
+/// these; the legacy `overlay()` produces the source-over, no-tile, full-opacity shape that
+/// `compute()` routes through the unchanged fast 8-bit path.
+#[derive(Clone)]
+struct CompositeItem {
+  buffer: Arc<Uint8Array>,
+  left: i64,
+  top: i64,
+  gravity: Option<Gravity>,
+  blend: BlendMode,
+  tile: bool,
+  opacity: f32, // 1.0 == no-op
+}
+
 #[derive(Default, Clone)]
 struct ImageTransformArgs {
   grayscale: bool,
@@ -512,7 +627,7 @@ struct ImageTransformArgs {
   huerotate: Option<i32>,
   orientation: Option<Orientation>,
   crop: Option<(u32, u32, u32, u32)>,
-  overlay: Vec<(Arc<Uint8Array>, i64, i64)>,
+  overlay: Vec<CompositeItem>,
   /// Multiply the alpha channel by this factor (0.0..=1.0). Promotes the image to RGBA8.
   opacity: Option<f32>,
 }
@@ -734,10 +849,31 @@ impl Task for EncodeTask {
     } else {
       let mut img = meta.image.clone();
       apply_transforms(&mut img, &self.image_transform_args, meta.orientation, true)?;
-      for (buffer, x, y) in std::mem::take(&mut self.image_transform_args.overlay).into_iter() {
-        let top = ThreadsafeDynamicImage::new(buffer.clone());
+      for item in std::mem::take(&mut self.image_transform_args.overlay).into_iter() {
+        let top = ThreadsafeDynamicImage::new(item.buffer.clone());
         let top_image_meta = top.get(true)?;
-        overlay(&mut img, &top_image_meta.image, x, y);
+        let (x, y) = resolve_position(
+          &item,
+          img.width(),
+          img.height(),
+          top_image_meta.image.width(),
+          top_image_meta.image.height(),
+        );
+        // Source-over with no tiling / full opacity keeps the fast 8-bit path (unchanged
+        // behaviour, byte-identical to `overlay`). Everything else uses the precise compositor.
+        if item.blend == BlendMode::Over && !item.tile && item.opacity == 1.0 {
+          overlay(&mut img, &top_image_meta.image, x, y);
+        } else {
+          apply_composite(
+            &mut img,
+            &top_image_meta.image,
+            x,
+            y,
+            item.blend,
+            item.opacity,
+            item.tile,
+          );
+        }
       }
       owned = img;
       &owned
@@ -1181,12 +1317,44 @@ impl Transformer {
   }
 
   #[napi]
-  /// Overlay an image at a given coordinate (x, y)
+  /// Overlay an image at a given coordinate (x, y) using source-over blending.
   pub fn overlay(&mut self, on_top: Uint8Array, x: i64, y: i64) -> Result<&Self> {
-    self
-      .image_transform_args
-      .overlay
-      .push((Arc::new(on_top), x, y));
+    self.image_transform_args.overlay.push(CompositeItem {
+      buffer: Arc::new(on_top),
+      left: x,
+      top: y,
+      gravity: None,
+      blend: BlendMode::Over,
+      tile: false,
+      opacity: 1.0,
+    });
+    Ok(self)
+  }
+
+  #[napi]
+  /// Composite `on_top` onto this image with a sharp-style blend mode, gravity-based
+  /// positioning, tiling, and per-overlay opacity. See `CompositeOptions`.
+  ///
+  /// Source-over (`blend: Over`, no tiling, full opacity) composites at 8-bit, identical
+  /// to `overlay`. Other blend modes / tiling / opacity < 1 run at the base image's native
+  /// channel depth (8/16-bit, or 32-bit float), then the result is converted back to the
+  /// base's original color type — so an opaque base never gains an alpha channel, and
+  /// alpha-reducing modes (Clear/Out/DestOut/Xor) have no visible effect on an opaque base.
+  pub fn composite(
+    &mut self,
+    on_top: Uint8Array,
+    options: Option<CompositeOptions>,
+  ) -> Result<&Self> {
+    let o = options.unwrap_or_default();
+    self.image_transform_args.overlay.push(CompositeItem {
+      buffer: Arc::new(on_top),
+      left: o.left.unwrap_or(0),
+      top: o.top.unwrap_or(0),
+      gravity: o.gravity,
+      blend: o.blend.unwrap_or_default(),
+      tile: o.tile.unwrap_or(false),
+      opacity: (o.opacity.unwrap_or(1.0) as f32).clamp(0.0, 1.0),
+    });
     Ok(self)
   }
 
@@ -1735,6 +1903,413 @@ fn apply_opacity(image: &mut DynamicImage, factor: f32) {
   }
 }
 
+/// Resolve the top-left placement of an overlay. Explicit `left`/`top` take precedence over
+/// `gravity` (sharp semantics): gravity is honored only when it is set AND both offsets are 0.
+/// Computed in i64; negative results are valid (the overlay is clipped by the compositor).
+fn resolve_position(item: &CompositeItem, bw: u32, bh: u32, tw: u32, th: u32) -> (i64, i64) {
+  if item.left != 0 || item.top != 0 || item.gravity.is_none() {
+    // explicit offset (or default 0,0 when neither offset nor gravity given)
+    return (item.left, item.top);
+  }
+  let (bw, bh, tw, th) = (bw as i64, bh as i64, tw as i64, th as i64);
+  let cx = (bw - tw) / 2;
+  let cy = (bh - th) / 2;
+  let right = bw - tw;
+  let bottom = bh - th;
+  match item.gravity.unwrap() {
+    Gravity::NorthWest => (0, 0),
+    Gravity::North => (cx, 0),
+    Gravity::NorthEast => (right, 0),
+    Gravity::West => (0, cy),
+    Gravity::Center => (cx, cy),
+    Gravity::East => (right, cy),
+    Gravity::SouthWest => (0, bottom),
+    Gravity::South => (cx, bottom),
+    Gravity::SouthEast => (right, bottom),
+  }
+}
+
+// --- Blend math core (W3C "Compositing and Blending Level 1"). All channels are straight-alpha
+// f32 in [0,1]; `cb` is the backdrop, `cs` the source. ---
+
+fn color_dodge(cb: f32, cs: f32) -> f32 {
+  if cb == 0.0 {
+    0.0
+  } else if cs == 1.0 {
+    1.0
+  } else {
+    (cb / (1.0 - cs)).min(1.0)
+  }
+}
+
+fn color_burn(cb: f32, cs: f32) -> f32 {
+  if cb == 1.0 {
+    1.0
+  } else if cs == 0.0 {
+    0.0
+  } else {
+    1.0 - ((1.0 - cb) / cs).min(1.0)
+  }
+}
+
+fn hard_light(cb: f32, cs: f32) -> f32 {
+  if cs <= 0.5 {
+    2.0 * cb * cs
+  } else {
+    let d = 2.0 * cs - 1.0;
+    cb + d - cb * d
+  }
+}
+
+fn soft_light(cb: f32, cs: f32) -> f32 {
+  let d = if cb <= 0.25 {
+    ((16.0 * cb - 12.0) * cb + 4.0) * cb
+  } else {
+    cb.sqrt()
+  };
+  if cs <= 0.5 {
+    cb - (1.0 - 2.0 * cs) * cb * (1.0 - cb)
+  } else {
+    cb + (2.0 * cs - 1.0) * (d - cb)
+  }
+}
+
+/// Separable blend `B(cb, cs)`. Returns `None` for Porter-Duff-only modes (identity = `cs`).
+fn separable_blend(mode: BlendMode, cb: f32, cs: f32) -> Option<f32> {
+  Some(match mode {
+    BlendMode::Multiply => cb * cs,
+    BlendMode::Screen => cb + cs - cb * cs,
+    BlendMode::Overlay => hard_light(cs, cb), // NOTE the swapped args
+    BlendMode::Darken => cb.min(cs),
+    BlendMode::Lighten => cb.max(cs),
+    BlendMode::ColorDodge => color_dodge(cb, cs),
+    BlendMode::ColorBurn => color_burn(cb, cs),
+    BlendMode::HardLight => hard_light(cb, cs),
+    BlendMode::SoftLight => soft_light(cb, cs),
+    BlendMode::Difference => (cb - cs).abs(),
+    BlendMode::Exclusion => cb + cs - 2.0 * cb * cs,
+    _ => return None,
+  })
+}
+
+/// Porter-Duff coefficients `(Fa, Fb)`. Separable modes (and `Over`) use source-over.
+fn pd_coeffs(mode: BlendMode, a_s: f32, ab: f32) -> (f32, f32) {
+  match mode {
+    BlendMode::Clear => (0.0, 0.0),
+    BlendMode::Source => (1.0, 0.0),
+    BlendMode::Dest => (0.0, 1.0),
+    BlendMode::DestOver => (1.0 - ab, 1.0),
+    BlendMode::In => (ab, 0.0),
+    BlendMode::DestIn => (0.0, a_s),
+    BlendMode::Out => (1.0 - ab, 0.0),
+    BlendMode::DestOut => (0.0, 1.0 - a_s),
+    BlendMode::Atop => (ab, 1.0 - a_s),
+    BlendMode::DestAtop => (1.0 - ab, a_s),
+    BlendMode::Xor => (1.0 - ab, 1.0 - a_s),
+    BlendMode::Add => (1.0, 1.0),
+    BlendMode::Saturate => (
+      if a_s > 0.0 {
+        (1.0 - ab).min(a_s) / a_s
+      } else {
+        0.0
+      },
+      1.0,
+    ),
+    // Over + all separable modes composite with source-over coefficients.
+    _ => (1.0, 1.0 - a_s),
+  }
+}
+
+/// Blend one source pixel over one backdrop pixel. All channels straight-alpha `[0,1]`.
+fn blend_rgba_f32(cb: [f32; 4], cs: [f32; 4], mode: BlendMode, opacity: f32) -> [f32; 4] {
+  let ab = cb[3];
+  let a_s = (cs[3] * opacity).clamp(0.0, 1.0);
+  let (fa, fb) = pd_coeffs(mode, a_s, ab);
+  let ao = (a_s * fa + ab * fb).clamp(0.0, 1.0);
+  let mut out = [0.0f32; 4];
+  for c in 0..3 {
+    let b = separable_blend(mode, cb[c], cs[c]).unwrap_or(cs[c]);
+    let cs_blended = (1.0 - ab) * cs[c] + ab * b;
+    let co = a_s * fa * cs_blended + ab * fb * cb[c]; // premultiplied
+    out[c] = if ao > 0.0 {
+      (co / ao).clamp(0.0, 1.0)
+    } else {
+      0.0
+    };
+  }
+  out[3] = ao;
+  out
+}
+
+/// Clamp/normalize an f32 channel into `[0,1]`, sanitizing NaN to 0.0 (mirrors `apply_opacity`'s
+/// NaN handling). HDR values outside the unit range are clamped for blending.
+#[inline]
+fn norm_f32(v: f32) -> f32 {
+  if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) }
+}
+
+/// Overlap rectangle of `top` placed at `(x, y)` over a `bw x bh` base, clamped exactly like the
+/// `image` crate's `overlay_bounds_ext` (handles negative offsets and tops larger than the base).
+/// Returns `(origin_bottom_x, origin_bottom_y, origin_top_x, origin_top_y, x_range, y_range)`.
+fn overlap_bounds(
+  bw: u32,
+  bh: u32,
+  tw: u32,
+  th: u32,
+  x: i64,
+  y: i64,
+) -> (u32, u32, u32, u32, u32, u32) {
+  if x > i64::from(bw)
+    || y > i64::from(bh)
+    || x.saturating_add(i64::from(tw)) <= 0
+    || y.saturating_add(i64::from(th)) <= 0
+  {
+    return (0, 0, 0, 0, 0, 0);
+  }
+  let max_x = x.saturating_add(i64::from(tw));
+  let max_y = y.saturating_add(i64::from(th));
+  let max_inbounds_x = max_x.clamp(0, i64::from(bw)) as u32;
+  let max_inbounds_y = max_y.clamp(0, i64::from(bh)) as u32;
+  let origin_bottom_x = x.clamp(0, i64::from(bw)) as u32;
+  let origin_bottom_y = y.clamp(0, i64::from(bh)) as u32;
+  let x_range = max_inbounds_x - origin_bottom_x;
+  let y_range = max_inbounds_y - origin_bottom_y;
+  let origin_top_x = x.saturating_mul(-1).clamp(0, i64::from(tw)) as u32;
+  let origin_top_y = y.saturating_mul(-1).clamp(0, i64::from(th)) as u32;
+  (
+    origin_bottom_x,
+    origin_bottom_y,
+    origin_top_x,
+    origin_top_y,
+    x_range,
+    y_range,
+  )
+}
+
+/// Placement offsets for an overlay. A single `(x, y)` normally; for tiling, top-left origins
+/// stepping by the overlay size across the whole base starting at `(0, 0)` (ignoring `x/y`).
+fn placement_offsets(
+  tile: bool,
+  bw: u32,
+  bh: u32,
+  tw: u32,
+  th: u32,
+  x: i64,
+  y: i64,
+) -> Vec<(i64, i64)> {
+  if !tile {
+    return vec![(x, y)];
+  }
+  let mut offsets = Vec::new();
+  // Caller guards `tw > 0 && th > 0`; keep a defensive check so the loop always terminates.
+  if tw == 0 || th == 0 {
+    return offsets;
+  }
+  let mut oy = 0u32;
+  while oy < bh {
+    let mut ox = 0u32;
+    while ox < bw {
+      offsets.push((ox as i64, oy as i64));
+      ox += tw;
+    }
+    oy += th;
+  }
+  offsets
+}
+
+/// Composite `top` onto an 8-bit RGBA `base` in place. Channels normalize `/255`, denormalize
+/// `(v*255).round().clamp(0,255)` (the same rounding idiom as `apply_opacity`).
+fn composite_into_u8(
+  base: &mut RgbaImage,
+  top: &RgbaImage,
+  x: i64,
+  y: i64,
+  mode: BlendMode,
+  opacity: f32,
+  tile: bool,
+) {
+  let (bw, bh) = (base.width(), base.height());
+  let (tw, th) = (top.width(), top.height());
+  if tw == 0 || th == 0 {
+    return;
+  }
+  for (ox, oy) in placement_offsets(tile, bw, bh, tw, th, x, y) {
+    let (obx, oby, otx, oty, rw, rh) = overlap_bounds(bw, bh, tw, th, ox, oy);
+    for ry in 0..rh {
+      for rx in 0..rw {
+        let s = top.get_pixel(otx + rx, oty + ry).0;
+        let cs = [
+          s[0] as f32 / 255.0,
+          s[1] as f32 / 255.0,
+          s[2] as f32 / 255.0,
+          s[3] as f32 / 255.0,
+        ];
+        let d = base.get_pixel(obx + rx, oby + ry).0;
+        let cb = [
+          d[0] as f32 / 255.0,
+          d[1] as f32 / 255.0,
+          d[2] as f32 / 255.0,
+          d[3] as f32 / 255.0,
+        ];
+        let out = blend_rgba_f32(cb, cs, mode, opacity);
+        base.put_pixel(
+          obx + rx,
+          oby + ry,
+          Rgba([
+            (out[0] * 255.0).round().clamp(0.0, 255.0) as u8,
+            (out[1] * 255.0).round().clamp(0.0, 255.0) as u8,
+            (out[2] * 255.0).round().clamp(0.0, 255.0) as u8,
+            (out[3] * 255.0).round().clamp(0.0, 255.0) as u8,
+          ]),
+        );
+      }
+    }
+  }
+}
+
+/// Composite `top` onto a 16-bit RGBA `base` in place. Channels normalize `/65535`, denormalize
+/// `(v*65535).round().clamp(0,65535)`.
+fn composite_into_u16(
+  base: &mut ImageBuffer<Rgba<u16>, Vec<u16>>,
+  top: &ImageBuffer<Rgba<u16>, Vec<u16>>,
+  x: i64,
+  y: i64,
+  mode: BlendMode,
+  opacity: f32,
+  tile: bool,
+) {
+  let (bw, bh) = (base.width(), base.height());
+  let (tw, th) = (top.width(), top.height());
+  if tw == 0 || th == 0 {
+    return;
+  }
+  for (ox, oy) in placement_offsets(tile, bw, bh, tw, th, x, y) {
+    let (obx, oby, otx, oty, rw, rh) = overlap_bounds(bw, bh, tw, th, ox, oy);
+    for ry in 0..rh {
+      for rx in 0..rw {
+        let s = top.get_pixel(otx + rx, oty + ry).0;
+        let cs = [
+          s[0] as f32 / 65535.0,
+          s[1] as f32 / 65535.0,
+          s[2] as f32 / 65535.0,
+          s[3] as f32 / 65535.0,
+        ];
+        let d = base.get_pixel(obx + rx, oby + ry).0;
+        let cb = [
+          d[0] as f32 / 65535.0,
+          d[1] as f32 / 65535.0,
+          d[2] as f32 / 65535.0,
+          d[3] as f32 / 65535.0,
+        ];
+        let out = blend_rgba_f32(cb, cs, mode, opacity);
+        base.put_pixel(
+          obx + rx,
+          oby + ry,
+          Rgba([
+            (out[0] * 65535.0).round().clamp(0.0, 65535.0) as u16,
+            (out[1] * 65535.0).round().clamp(0.0, 65535.0) as u16,
+            (out[2] * 65535.0).round().clamp(0.0, 65535.0) as u16,
+            (out[3] * 65535.0).round().clamp(0.0, 65535.0) as u16,
+          ]),
+        );
+      }
+    }
+  }
+}
+
+/// Composite `top` onto a 32-bit float RGBA `base` in place. Channels are clamped to `[0,1]` for
+/// blending (HDR values outside the unit range are clamped, NaN sanitized to 0.0); the blended
+/// result is already clamped to `[0,1]`, so it is written directly.
+fn composite_into_f32(
+  base: &mut Rgba32FImage,
+  top: &Rgba32FImage,
+  x: i64,
+  y: i64,
+  mode: BlendMode,
+  opacity: f32,
+  tile: bool,
+) {
+  let (bw, bh) = (base.width(), base.height());
+  let (tw, th) = (top.width(), top.height());
+  if tw == 0 || th == 0 {
+    return;
+  }
+  for (ox, oy) in placement_offsets(tile, bw, bh, tw, th, x, y) {
+    let (obx, oby, otx, oty, rw, rh) = overlap_bounds(bw, bh, tw, th, ox, oy);
+    for ry in 0..rh {
+      for rx in 0..rw {
+        let s = top.get_pixel(otx + rx, oty + ry).0;
+        let cs = [
+          norm_f32(s[0]),
+          norm_f32(s[1]),
+          norm_f32(s[2]),
+          norm_f32(s[3]),
+        ];
+        let d = base.get_pixel(obx + rx, oby + ry).0;
+        let cb = [
+          norm_f32(d[0]),
+          norm_f32(d[1]),
+          norm_f32(d[2]),
+          norm_f32(d[3]),
+        ];
+        let out = blend_rgba_f32(cb, cs, mode, opacity);
+        base.put_pixel(obx + rx, oby + ry, Rgba(out));
+      }
+    }
+  }
+}
+
+/// Convert the composited RGBA `DynamicImage` back to the base's `original` color family, so an
+/// opaque base never gains an alpha channel and `metadata().colorType` stays accurate. Falls back
+/// to the RGBA image (of the working depth) for any color type not separately handled.
+fn restore_color_type(img: DynamicImage, original: ColorType) -> DynamicImage {
+  match original {
+    ColorType::L8 => DynamicImage::ImageLuma8(img.to_luma8()),
+    ColorType::La8 => DynamicImage::ImageLumaA8(img.to_luma_alpha8()),
+    ColorType::Rgb8 => DynamicImage::ImageRgb8(img.to_rgb8()),
+    ColorType::Rgba8 => img,
+    ColorType::L16 => DynamicImage::ImageLuma16(img.to_luma16()),
+    ColorType::La16 => DynamicImage::ImageLumaA16(img.to_luma_alpha16()),
+    ColorType::Rgb16 => DynamicImage::ImageRgb16(img.to_rgb16()),
+    ColorType::Rgba16 => img,
+    ColorType::Rgb32F => DynamicImage::ImageRgb32F(img.to_rgb32f()),
+    ColorType::Rgba32F => img,
+    _ => img,
+  }
+}
+
+/// Composite `top` onto `base` at `(x, y)` (or tiled) with `mode`/`opacity`. Works at the base's
+/// native channel depth (8/16-bit or 32-bit float), then restores the base's ORIGINAL color type.
+fn apply_composite(
+  base: &mut DynamicImage,
+  top: &DynamicImage,
+  x: i64,
+  y: i64,
+  mode: BlendMode,
+  opacity: f32,
+  tile: bool,
+) {
+  let original = base.color();
+  // Choose working depth from the base. 16-bit -> Rgba16; 32-bit float -> Rgba32F; else Rgba8.
+  match original {
+    ColorType::Rgba16 | ColorType::Rgb16 | ColorType::La16 | ColorType::L16 => {
+      let mut work = base.to_rgba16();
+      composite_into_u16(&mut work, &top.to_rgba16(), x, y, mode, opacity, tile);
+      *base = restore_color_type(DynamicImage::ImageRgba16(work), original);
+    }
+    ColorType::Rgb32F | ColorType::Rgba32F => {
+      let mut work = base.to_rgba32f();
+      composite_into_f32(&mut work, &top.to_rgba32f(), x, y, mode, opacity, tile);
+      *base = restore_color_type(DynamicImage::ImageRgba32F(work), original);
+    }
+    _ => {
+      let mut work = base.to_rgba8();
+      composite_into_u8(&mut work, &top.to_rgba8(), x, y, mode, opacity, tile);
+      *base = restore_color_type(DynamicImage::ImageRgba8(work), original);
+    }
+  }
+}
+
 #[inline]
 fn parse_exif(
   buf: &[u8],
@@ -1813,9 +2388,10 @@ mod tests {
   }
 
   use super::{
-    ImageTransformArgs, apply_contrast, apply_huerotate, apply_opacity, apply_transforms,
+    BlendMode, ImageTransformArgs, apply_composite, apply_contrast, apply_huerotate, apply_opacity,
+    apply_transforms,
   };
-  use image::{ColorType, DynamicImage, ImageBuffer, RgbaImage};
+  use image::{ColorType, DynamicImage, ImageBuffer, RgbImage, RgbaImage};
 
   #[test]
   fn huerotate_preserves_16bit_color_through_pipeline() {
@@ -1888,7 +2464,10 @@ mod tests {
     );
     apply_huerotate(&mut img, 90);
     let px = img.to_rgba16().get_pixel(0, 0).0;
-    assert_eq!(px[3], 50000, "16-bit alpha must pass through, not clamp to 255");
+    assert_eq!(
+      px[3], 50000,
+      "16-bit alpha must pass through, not clamp to 255"
+    );
     assert!(
       px[0] as u32 + px[1] as u32 + px[2] as u32 > 1000,
       "16-bit color must not be crushed to ~255; got {px:?}"
@@ -1901,9 +2480,8 @@ mod tests {
     // opacity output. `apply_contrast` never touches alpha, so the alpha that reaches
     // `apply_opacity` is identical whether or not a no-op contrast is staged; opacity then
     // normalizes it the same way in both paths. Codex adversarial review on #42.
-    let base = DynamicImage::ImageRgba32F(
-      ImageBuffer::from_raw(1, 1, vec![0.2f32, 0.3, 0.4, 4.0]).unwrap(),
-    );
+    let base =
+      DynamicImage::ImageRgba32F(ImageBuffer::from_raw(1, 1, vec![0.2f32, 0.3, 0.4, 4.0]).unwrap());
     let alpha_of = |contrast: Option<f32>| {
       let mut img = base.clone();
       let args = ImageTransformArgs {
@@ -1947,9 +2525,8 @@ mod tests {
     // so an HDR channel must survive — never clipped to 1.0. The crate clamped float to
     // 255, so it preserved these; our depth-aware impl must not regress. Guards the Codex
     // adversarial review on #42.
-    let mut img = DynamicImage::ImageRgba32F(
-      ImageBuffer::from_raw(1, 1, vec![2.5f32, 0.3, 1.8, 4.0]).unwrap(),
-    );
+    let mut img =
+      DynamicImage::ImageRgba32F(ImageBuffer::from_raw(1, 1, vec![2.5f32, 0.3, 1.8, 4.0]).unwrap());
     apply_huerotate(&mut img, 0);
     if let DynamicImage::ImageRgba32F(buf) = &img {
       let p = buf.get_pixel(0, 0).0;
@@ -1959,7 +2536,11 @@ mod tests {
         p[0]
       );
       assert!((p[1] - 0.3).abs() < 1e-4, "G survives; got {}", p[1]);
-      assert!((p[2] - 1.8).abs() < 1e-4, "HDR B must survive; got {}", p[2]);
+      assert!(
+        (p[2] - 1.8).abs() < 1e-4,
+        "HDR B must survive; got {}",
+        p[2]
+      );
       assert!((p[3] - 4.0).abs() < 1e-6, "alpha untouched; got {}", p[3]);
     } else {
       panic!("expected Rgba32F");
@@ -1970,12 +2551,15 @@ mod tests {
   fn huerotate_leaves_grayscale_luma_unchanged() {
     // Grayscale has no hue, so rotating it is a no-op on luma (the crate emitted garbage
     // by treating luma/alpha as RGB). Alpha is preserved too.
-    let mut img =
-      DynamicImage::ImageLumaA8(ImageBuffer::from_raw(1, 1, vec![120u8, 200]).unwrap());
+    let mut img = DynamicImage::ImageLumaA8(ImageBuffer::from_raw(1, 1, vec![120u8, 200]).unwrap());
     apply_huerotate(&mut img, 90);
     assert_eq!(img.color(), ColorType::La8, "grayscale stays grayscale");
     if let DynamicImage::ImageLumaA8(buf) = &img {
-      assert_eq!(buf.get_pixel(0, 0).0, [120, 200], "luma and alpha unchanged");
+      assert_eq!(
+        buf.get_pixel(0, 0).0,
+        [120, 200],
+        "luma and alpha unchanged"
+      );
     } else {
       panic!("expected LumaA8");
     }
@@ -1999,7 +2583,11 @@ mod tests {
       apply_transforms(&mut img, &args, None, true).unwrap();
       img.to_rgba8().get_pixel(0, 0).0[3]
     };
-    assert_eq!(alpha(None), 200, "contrast alone must leave alpha untouched");
+    assert_eq!(
+      alpha(None),
+      200,
+      "contrast alone must leave alpha untouched"
+    );
     assert_eq!(alpha(Some(1.0)), 200, "opacity(1) must be a true no-op");
     assert_eq!(
       alpha(None),
@@ -2113,19 +2701,24 @@ mod tests {
       DynamicImage::ImageRgba32F(ImageBuffer::from_raw(1, 1, vec![0.2f32, 0.3, 0.4, 4.0]).unwrap());
     apply_opacity(&mut img, 1.0);
     let identity = img.to_rgba32f().get_pixel(0, 0).0[3];
-    assert_eq!(identity, 1.0, "4.0 normalizes to full opacity; got {identity}");
+    assert_eq!(
+      identity, 1.0,
+      "4.0 normalizes to full opacity; got {identity}"
+    );
 
     // ...and a real fade still bites: normalize 4.0 -> 1.0, then * 0.5 -> 0.5 (NOT 1.0).
     let mut img =
       DynamicImage::ImageRgba32F(ImageBuffer::from_raw(1, 1, vec![0.2f32, 0.3, 0.4, 4.0]).unwrap());
     apply_opacity(&mut img, 0.5);
     let faded = img.to_rgba32f().get_pixel(0, 0).0[3];
-    assert_eq!(faded, 0.5, "opacity(0.5) must still fade out-of-range alpha; got {faded}");
+    assert_eq!(
+      faded, 0.5,
+      "opacity(0.5) must still fade out-of-range alpha; got {faded}"
+    );
 
     // In-range source: new = old * factor, unchanged by the normalization.
-    let mut img = DynamicImage::ImageRgba32F(
-      ImageBuffer::from_raw(1, 1, vec![0.2f32, 0.3, 0.4, 0.8]).unwrap(),
-    );
+    let mut img =
+      DynamicImage::ImageRgba32F(ImageBuffer::from_raw(1, 1, vec![0.2f32, 0.3, 0.4, 0.8]).unwrap());
     apply_opacity(&mut img, 0.5);
     let in_range = img.to_rgba32f().get_pixel(0, 0).0[3];
     assert!(
@@ -2218,9 +2811,16 @@ mod tests {
       img.to_rgba8().get_pixel(0, 0).0
     };
     let crate_px = base.adjust_contrast(60.0).to_rgba8().get_pixel(0, 0).0;
-    assert_eq!(mine[0..3], crate_px[0..3], "color channels must match the crate");
+    assert_eq!(
+      mine[0..3],
+      crate_px[0..3],
+      "color channels must match the crate"
+    );
     assert_eq!(mine[3], 200, "alpha must be preserved");
-    assert_ne!(crate_px[3], 200, "sanity: the crate's adjust_contrast does mangle this alpha");
+    assert_ne!(
+      crate_px[3], 200,
+      "sanity: the crate's adjust_contrast does mangle this alpha"
+    );
   }
 
   #[test]
@@ -2268,6 +2868,102 @@ mod tests {
     assert_eq!(
       without, with_noop_contrast,
       "a no-op contrast(0) must not change huerotate output (LumaA must not be promoted early)"
+    );
+  }
+
+  #[test]
+  fn composite_multiply_halves_gray() {
+    // round(0.502^2 * 255) = 64. Multiply of two mid-grays.
+    let mut base =
+      DynamicImage::ImageRgba8(RgbaImage::from_raw(1, 1, vec![128, 128, 128, 255]).unwrap());
+    let top =
+      DynamicImage::ImageRgba8(RgbaImage::from_raw(1, 1, vec![128, 128, 128, 255]).unwrap());
+    apply_composite(&mut base, &top, 0, 0, BlendMode::Multiply, 1.0, false);
+    assert_eq!(base.color(), ColorType::Rgba8);
+    assert_eq!(base.to_rgba8().get_pixel(0, 0).0, [64, 64, 64, 255]);
+  }
+
+  #[test]
+  fn composite_color_dodge_saturates_without_nan() {
+    // cs == 1.0 hits the ColorDodge guard: channels saturate to 255, no NaN/panic.
+    let mut base =
+      DynamicImage::ImageRgba8(RgbaImage::from_raw(1, 1, vec![128, 128, 128, 255]).unwrap());
+    let top =
+      DynamicImage::ImageRgba8(RgbaImage::from_raw(1, 1, vec![255, 255, 255, 255]).unwrap());
+    apply_composite(&mut base, &top, 0, 0, BlendMode::ColorDodge, 1.0, false);
+    assert_eq!(base.to_rgba8().get_pixel(0, 0).0, [255, 255, 255, 255]);
+  }
+
+  #[test]
+  fn composite_dest_over_keeps_opaque_backdrop() {
+    // DestOver onto an opaque backdrop: Fa = 1 - ab = 0, so the base shows through unchanged.
+    let mut base =
+      DynamicImage::ImageRgba8(RgbaImage::from_raw(1, 1, vec![255, 0, 0, 255]).unwrap());
+    let top = DynamicImage::ImageRgba8(RgbaImage::from_raw(1, 1, vec![0, 0, 255, 255]).unwrap());
+    apply_composite(&mut base, &top, 0, 0, BlendMode::DestOver, 1.0, false);
+    assert_eq!(base.to_rgba8().get_pixel(0, 0).0, [255, 0, 0, 255]);
+  }
+
+  #[test]
+  fn composite_over_matches_legacy_overlay_within_one() {
+    // The custom `Over` path must match `image::imageops::overlay` within ±1 per channel
+    // (rounding vs truncation).
+    let base = DynamicImage::ImageRgba8(RgbaImage::from_raw(1, 1, vec![0, 0, 255, 255]).unwrap());
+    let top = DynamicImage::ImageRgba8(RgbaImage::from_raw(1, 1, vec![255, 0, 0, 128]).unwrap());
+
+    let legacy = {
+      let mut b = base.clone();
+      image::imageops::overlay(&mut b, &top, 0, 0);
+      b.to_rgba8().get_pixel(0, 0).0
+    };
+    let custom = {
+      let mut b = base.clone();
+      apply_composite(&mut b, &top, 0, 0, BlendMode::Over, 1.0, false);
+      b.to_rgba8().get_pixel(0, 0).0
+    };
+    for c in 0..4 {
+      let diff = (legacy[c] as i32 - custom[c] as i32).abs();
+      assert!(
+        diff <= 1,
+        "channel {c}: legacy {} vs custom {} differ by {diff} (> 1)",
+        legacy[c],
+        custom[c]
+      );
+    }
+  }
+
+  #[test]
+  fn composite_tile_covers_whole_base() {
+    // A 2x2 opaque overlay tiled over a 4x4 base must paint every pixel.
+    let mut base = DynamicImage::ImageRgba8(
+      RgbaImage::from_raw(4, 4, vec![50, 60, 70, 255].repeat(16)).unwrap(),
+    );
+    let top =
+      DynamicImage::ImageRgba8(RgbaImage::from_raw(2, 2, vec![10, 20, 30, 255].repeat(4)).unwrap());
+    apply_composite(&mut base, &top, 0, 0, BlendMode::Over, 1.0, true);
+    let out = base.to_rgba8();
+    for y in 0..4 {
+      for x in 0..4 {
+        assert_eq!(
+          out.get_pixel(x, y).0,
+          [10, 20, 30, 255],
+          "tile must cover pixel ({x}, {y})"
+        );
+      }
+    }
+  }
+
+  #[test]
+  fn composite_preserves_opaque_color_type() {
+    // An opaque RGB8 base must NOT gain an alpha channel after compositing.
+    let mut base = DynamicImage::ImageRgb8(RgbImage::from_raw(1, 1, vec![100, 150, 200]).unwrap());
+    let top =
+      DynamicImage::ImageRgba8(RgbaImage::from_raw(1, 1, vec![128, 128, 128, 255]).unwrap());
+    apply_composite(&mut base, &top, 0, 0, BlendMode::Multiply, 1.0, false);
+    assert_eq!(
+      base.color(),
+      ColorType::Rgb8,
+      "opaque base must stay Rgb8 (no alpha channel added)"
     );
   }
 }
