@@ -10,36 +10,52 @@ import { JsColorType, Transformer } from '../index.js'
 const __DIRNAME = join(fileURLToPath(import.meta.url), '..')
 const ROOT_DIR = join(__DIRNAME, '..', '..', '..')
 
-// HEIC delegates to the OS ImageIO HEVC codec, so it works ONLY with the native macOS binding. Gate
-// on the host platform (and, off macOS, the loaded binding) — NOT on an env var.
-//   - native macOS (darwin)  → onMac: run the real decode/encode tests UNCONDITIONALLY. HEIC MUST
-//     work here, so a regression that drops the native `.heic`/`.heicSync` registration (or breaks
-//     decode/encode) FAILS these tests instead of silently skipping — that is the whole point of the
-//     suite. The explicit API-presence test below makes a missing method a clear, named failure.
-//   - non-macOS WITH the method (native linux/windows, or a wasm shipping the macOS-only stub)
-//                            → offMac: assert the documented "only ... on macOS" rejection.
-//   - non-macOS WITHOUT the method (a pre-HEIC wasm)
-//                            → skip; there is nothing to assert and HEIC can never run in the wasm
-//                              sandbox. The moment a wasm ships the stub, `offMac` lights up on it.
-// `hasHeic` is used ONLY for that off-macOS skip — never to gate macOS, so it can't hide a macOS
-// regression. Why not key on NAPI_RS_FORCE_WASI: the loader only forces WASI for the literal
-// 'true'/'error' (packages/binding/index.js), yet the CI wasi job sets '1', so the env var does NOT
-// reliably indicate which binding loaded — the method's presence does. The wasi CI job runs on Linux,
-// so `onMac` never runs against a wasm in CI.
-const hasHeic = typeof Transformer.prototype.heicSync === 'function'
-const isMac = os.platform() === 'darwin'
-const onMac = isMac ? test : test.skip
-const offMac = !isMac && hasHeic ? test : test.skip
-
 // 8-bit fixture: `sips -s format heic un-optimized.png --out un-optimized.heic` (1024x681).
 const HEIC = await fs.readFile(join(ROOT_DIR, 'un-optimized.heic'))
 // Genuine 10-bit fixture (HEVC Main10), generated via ImageIO from a 16-bit Display-P3 source.
 const HEIC_10BIT = await fs.readFile(join(ROOT_DIR, 'un-optimized-10bit.heic'))
+// Rotated fixture: `heif-enc --rotate-cw 90 un-optimized.png` -> 1024x681 HEVC HEIC carrying a HEIF
+// container `irot` (90deg CW) property, NO EXIF orientation. macOS ImageIO surfaces irot as
+// orientation=6 (pixels un-baked, 1024x681); WIC BAKES irot into the decode (-> upright 681x1024).
+const HEIC_ROT90 = await fs.readFile(join(ROOT_DIR, 'rot90-irot.heic'))
 // 8-bit RGBA PNG source for the encode round-trip (1024x681).
 const PNG = await fs.readFile(join(ROOT_DIR, 'un-optimized.png'))
 
+const hasHeic = typeof Transformer.prototype.heicSync === 'function'
+const isMac = os.platform() === 'darwin'
+const isWindows = os.platform() === 'win32'
+
+// Runtime probe: does THIS host actually have the OS HEIC codec? macOS always does (ImageIO); Windows
+// needs the Store HEVC/HEIF extensions (absent on Server/CI runners). Probe by decoding the committed
+// fixture — succeeds only when the codec is present; a codec-missing host throws cleanly.
+const codecInstalled = await (async () => {
+  if (isMac) return true
+  if (!isWindows || !hasHeic) return false
+  try {
+    await new Transformer(HEIC).metadata()
+    return true
+  } catch {
+    return false
+  }
+})()
+
+const onMac = isMac ? test : test.skip                                          // macOS-only behaviors (10-bit, alpha-survives)
+const onWinCodec = isWindows && codecInstalled ? test : test.skip              // Windows-only behaviors (alpha flattened, 10-bit rejected)
+const onCodec = codecInstalled ? test : test.skip                              // shared real round-trips (mac OR win-with-codec)
+const onWinNoCodec = isWindows && hasHeic && !codecInstalled ? test : test.skip // CI Windows: codec-missing rejection
+const offHeic = !isMac && !isWindows && hasHeic ? test : test.skip             // linux/wasm stub: platform rejection
+const onWindows = isWindows ? test : test.skip                                 // Windows API-surface (codec-independent)
+
 onMac('native macOS exposes the HEIC API surface', (t) => {
   // A native-API regression that drops the `.heic`/`.heicSync` registration must FAIL here (not skip).
+  t.is(typeof Transformer.prototype.heic, 'function')
+  t.is(typeof Transformer.prototype.heicSync, 'function')
+})
+
+onWindows('native Windows exposes the HEIC API surface', (t) => {
+  // Runs on EVERY Windows build regardless of whether the OS HEVC codec is installed: the native
+  // binding must always register `.heic`/`.heicSync`. A regression that drops them must FAIL here,
+  // not silently skip every codec-gated Windows test. (Mirrors the macOS API-surface guard.)
   t.is(typeof Transformer.prototype.heic, 'function')
   t.is(typeof Transformer.prototype.heicSync, 'function')
 })
@@ -92,7 +108,7 @@ onMac('10-bit heic re-encodes to png', async (t) => {
   t.true(png.length > 0)
 })
 
-onMac('decode preserves orientation (not vertically flipped)', (t) => {
+onCodec('decode preserves orientation (not vertically flipped)', (t) => {
   // `un-optimized.heic` was produced from `un-optimized.png`, so the PNG (decoded via the trusted
   // image-rs path) is the upright ground truth. A CoreGraphics bitmap context flip would invert the
   // rows while keeping the dimensions, so dims can't catch it — compare row order against the source.
@@ -124,15 +140,44 @@ onMac('decode preserves orientation (not vertically flipped)', (t) => {
   t.true(upright < 10, `decode differs too much from its source image (upright=${upright})`)
 })
 
-offMac('heic rejected off macOS', async (t) => {
+// HEIF container orientation (irot/imir). The two OS decoders honor it differently but both yield an
+// upright displayed image: macOS returns the orientation tag for the pipeline to apply (pixels stay at
+// coded dims); Windows WIC BAKES it into the decoded pixels. (#221 review: orientation is NOT ignored
+// on Windows for container-stored rotation — WIC applies it, just not via a returned tag.)
+onMac('heic irot orientation surfaces as a tag (macOS, pixels un-baked)', async (t) => {
+  // `rot90-irot.heic` stores a 90deg-CW rotation in the HEIF container `irot` property (no EXIF tag).
+  // ImageIO reports it via kCGImagePropertyOrientation=6 and leaves the pixels at coded dims 1024x681.
+  const m = await new Transformer(HEIC_ROT90).metadata()
+  t.is(m.format, 'heic')
+  t.is(m.width, 1024)
+  t.is(m.height, 681)
+  t.is(m.orientation, 6)
+})
+
+onWinCodec('heic irot orientation is baked by WIC (Windows, upright dims)', async (t) => {
+  // WIC applies the container `irot` during decode, so the same 90deg-CW fixture comes back already
+  // upright with swapped dimensions (681x1024) and no residual orientation tag — proving orientation is
+  // honored on Windows. A regression that ignored it would report the coded 1024x681 instead.
+  const m = await new Transformer(HEIC_ROT90).metadata()
+  t.is(m.format, 'heic')
+  t.is(m.width, 681)
+  t.is(m.height, 1024)
+  t.is(m.orientation ?? null, null)
+})
+
+onWinNoCodec('heic decode rejected without the OS codec', async (t) => {
+  await t.throwsAsync(() => new Transformer(HEIC).metadata(), { message: /codec.*not installed/i })
+})
+
+offHeic('heic decode rejected off macOS/Windows', async (t) => {
   await t.throwsAsync(() => new Transformer(HEIC).metadata(), {
-    message: /only supported on macOS/,
+    message: /only supported on macOS and Windows/,
   })
 })
 
 // --- HEIC encode (macOS-only, via CGImageDestination "public.heic") ---
 
-onMac('encodes png -> heic (round-trip)', async (t) => {
+onCodec('encodes png -> heic (round-trip)', async (t) => {
   const buf = await new Transformer(PNG).heic()
   t.true(Buffer.isBuffer(buf))
   t.true(buf.length > 0)
@@ -143,12 +188,35 @@ onMac('encodes png -> heic (round-trip)', async (t) => {
   t.is(meta.height, 681)
 })
 
-onMac('heic max quality (quality 100)', async (t) => {
-  // ImageIO HEIC has no truly-lossless mode; the encoder CLAMPS its compression quality to 0.9 (see
-  // encode_heic), because compression 1.0 engages a near-lossless path the OS *software* HEVC encoder
-  // rejects on hosts without a hardware media engine. So `quality: 100` maps to 0.9 deterministically
-  // on every host (no runtime fallback) — this must not throw and must round-trip; we assert only
-  // format/dims, never fidelity (a ~1-3/255 residual remains regardless).
+onCodec('heic encode preserves channel order (no R/B swap)', async (t) => {
+  // A solid asymmetric color (r > g > b) must survive encode->decode WITHOUT a channel swap. Guards both
+  // backends' RGBA handling — notably Windows WIC, where the HEIF encoder negotiates 32bppRGBA to an
+  // opaque BGR format and `WriteSource` performs the conversion (a swap would surface here as b > r).
+  // HEVC is lossy, so assert the channel ordering plus loose magnitude bounds rather than exact values.
+  const WIDTH = 32
+  const HEIGHT = 32
+  const pixels = Buffer.alloc(WIDTH * HEIGHT * 4)
+  for (let i = 0; i < WIDTH * HEIGHT; i++) {
+    pixels[i * 4] = 210 // R (max)
+    pixels[i * 4 + 1] = 90 // G (mid)
+    pixels[i * 4 + 2] = 40 // B (min)
+    pixels[i * 4 + 3] = 255
+  }
+  const buf = Transformer.fromRgbaPixels(pixels, WIDTH, HEIGHT).heicSync()
+  const raw = new Transformer(Buffer.from(buf)).rawPixelsSync()
+  const c = (Math.floor(HEIGHT / 2) * WIDTH + Math.floor(WIDTH / 2)) * 4
+  const [r, g, b] = [raw[c], raw[c + 1], raw[c + 2]]
+  t.true(r > g && g > b, `channel order not preserved (got r=${r} g=${g} b=${b}, expected r>g>b)`)
+  t.true(r > 150, `red should stay dominant, got ${r}`)
+  t.true(b < 110, `blue should stay the minimum, got ${b}`)
+})
+
+onCodec('heic max quality (quality 100)', async (t) => {
+  // `quality: 100` is valid on both backends but maps differently: macOS ImageIO CLAMPS its
+  // compression quality to 0.9 (no truly-lossless mode; compression 1.0 engages a near-lossless path
+  // the OS software HEVC encoder rejects without a hardware media engine), while Windows WIC maps it
+  // straight to 1.0 with no clamp. Either way it must not throw and must round-trip; we assert only
+  // format/dims, never fidelity (a small residual remains regardless).
   const buf = new Transformer(PNG).heicSync({ quality: 100 })
   t.true(Buffer.isBuffer(buf))
   t.true(buf.length > 0)
@@ -220,8 +288,73 @@ onMac('encodes transparent rgba -> heic (alpha round-trip)', async (t) => {
   t.true(rightAlpha > leftAlpha, `alpha gradient direction lost (left=${leftAlpha}, right=${rightAlpha})`)
 })
 
-offMac('heic encode rejected off macOS', async (t) => {
+// --- Windows-specific behaviors (alpha flattened, 10-bit rejected) ---
+
+onWinCodec('heic rejects bitDepth:10 on Windows', async (t) => {
+  await t.throwsAsync(() => new Transformer(HEIC_10BIT).heic({ bitDepth: 10 }), {
+    message: /10-bit.*not supported on Windows/,
+  })
+  t.throws(() => new Transformer(HEIC_10BIT).heicSync({ bitDepth: 10 }), {
+    message: /10-bit.*not supported on Windows/,
+  })
+})
+
+onWinCodec('encodes transparent rgba -> heic (alpha flattened to opaque)', async (t) => {
+  // Windows WIC HEVC encode is opaque-only; a transparent source must still encode successfully and
+  // round-trip, but alpha comes back fully opaque (flattened) — the documented Windows behavior.
+  const WIDTH = 32
+  const HEIGHT = 32
+  const pixels = Buffer.alloc(WIDTH * HEIGHT * 4)
+  for (let y = 0; y < HEIGHT; y++) {
+    for (let x = 0; x < WIDTH; x++) {
+      const i = (y * WIDTH + x) * 4
+      pixels[i] = 200
+      pixels[i + 1] = 100
+      pixels[i + 2] = 50
+      pixels[i + 3] = Math.round((x / (WIDTH - 1)) * 255)
+    }
+  }
+  const buf = Transformer.fromRgbaPixels(pixels, WIDTH, HEIGHT).heicSync()
+  t.true(Buffer.isBuffer(buf))
+  t.true(buf.length > 0)
+  const meta = await new Transformer(Buffer.from(buf)).metadata()
+  t.is(meta.format, 'heic')
+  t.is(meta.width, WIDTH)
+  t.is(meta.height, HEIGHT)
+  const raw = new Transformer(Buffer.from(buf)).rawPixelsSync()
+  t.is(raw.length, WIDTH * HEIGHT * 4)
+  const midRow = Math.floor(HEIGHT / 2)
+  const leftAlpha = raw[(midRow * WIDTH + 0) * 4 + 3]
+  // Flattened: even the originally-transparent left edge is opaque.
+  t.true(leftAlpha > 200, `alpha should be flattened to opaque, got ${leftAlpha}`)
+})
+
+onWinCodec('decodes wide-gamut (Display-P3) heic into sRGB', (t) => {
+  // `un-optimized-10bit.heic` carries a Display-P3 ICC profile. macOS renders HEIC into an sRGB color
+  // space, so Windows must color-transform P3 -> sRGB (IWICColorTransform) rather than return raw P3
+  // mislabeled as sRGB. At the saturated-green pixel (32,128) a correct sRGB conversion collapses red
+  // toward 0 (raw P3 leaves it ~31). VM-measured: sRGB=[0,129,74] vs raw-P3=[31,127,79]. Windows decode
+  // is 8-bit RGBA8 (WIC normalizes), so this is Windows-only.
+  const raw = new Transformer(HEIC_10BIT).rawPixelsSync()
+  const W = 256
+  t.is(raw.length, W * 256 * 4)
+  const i = (128 * W + 32) * 4
+  const r = raw[i]
+  const g = raw[i + 1]
+  t.true(r < 16, `P3->sRGB should drive red toward 0 at the green pixel, got r=${r}`)
+  t.true(g > 100, `green channel should stay saturated, got g=${g}`)
+  t.true(r < g, `expected a green pixel (r < g), got r=${r} g=${g}`)
+})
+
+// --- Codec-missing (CI Windows) + off-platform rejection ---
+
+onWinNoCodec('heic encode rejected without the OS codec', async (t) => {
+  // Encode failure mode without the codec is unverified (surfaces at Commit); assert it throws.
+  await t.throwsAsync(() => new Transformer(PNG).heic())
+})
+
+offHeic('heic encode rejected off macOS/Windows', async (t) => {
   await t.throwsAsync(() => new Transformer(PNG).heic(), {
-    message: /only available on macOS/,
+    message: /only available on macOS and Windows/,
   })
 })

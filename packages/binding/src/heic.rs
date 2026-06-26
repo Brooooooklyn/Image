@@ -2,20 +2,27 @@ use image::DynamicImage;
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
-/// Options for HEIC encoding via Apple's `CGImageDestination` (macOS only).
+/// Options for HEIC encoding. Decode/encode delegate to the OS HEVC codec — Apple ImageIO on macOS,
+/// the Windows Imaging Component (WIC) on Windows — so this package ships no HEVC codec. Encoding is
+/// available on macOS and Windows; other platforms reject it. Behavior differs by OS where the
+/// underlying codec differs (noted per field).
 ///
 /// Ungated so the napi signature and generated `index.d.ts` stay identical on every platform;
-/// only the encode *implementation* ([`encode_heic`]) is macOS-gated.
+/// only the encode *implementation* ([`encode_heic`]) is platform-gated.
 #[napi(object)]
 #[derive(Default, Clone)]
 pub struct HeicConfig {
-  /// Lossy quality 0-100 (default 80, matches AVIF). Mapped to ImageIO's
-  /// `kCGImageDestinationLossyCompressionQuality`, but the compression ceiling is CLAMPED to 0.9:
-  /// HEIC/HEVC via ImageIO has no truly-lossless mode, and compression 1.0 engages a near-lossless
-  /// path the OS software encoder rejects on hosts without a hardware media engine. So `quality`
-  /// 90-100 all map to 0.9 (a ~1-3/255 residual remains regardless). See `encode_heic`.
+  /// Lossy quality 0-100 (default 80, matches AVIF).
+  /// - macOS (ImageIO `kCGImageDestinationLossyCompressionQuality`): the compression ceiling is
+  ///   CLAMPED to 0.9 — ImageIO has no truly-lossless HEIC mode and compression 1.0 engages a
+  ///   near-lossless path the OS software encoder rejects on hosts without a hardware media engine,
+  ///   so `quality` 90-100 all map to 0.9 (a ~1-3/255 residual remains).
+  /// - Windows (WIC `ImageQuality`): mapped linearly to 0.0-1.0 with NO clamp (1.0 encodes fine).
   pub quality: Option<u32>,
-  /// Output bit depth, 8 or 10. Default: follow the source (16-bit `DynamicImage` -> 10, else 8).
+  /// Output bit depth, 8 or 10.
+  /// - macOS: default follows the source (16-bit `DynamicImage` -> 10-bit HEVC Main10, else 8-bit).
+  /// - Windows: the WIC HEVC encoder emits 8-bit only; `bit_depth: 10` is REJECTED with an error
+  ///   (rather than silently downgraded), and alpha is flattened to opaque.
   pub bit_depth: Option<u8>,
 }
 
@@ -126,12 +133,13 @@ fn u16_slice_as_native_bytes(slice: &[u16]) -> &[u8] {
 }
 
 /// Decode a HEIC/HEIF image to a `DynamicImage` plus EXIF orientation (1..8) if present.
-/// macOS-only (delegates to the OS ImageIO HEVC decoder); errors elsewhere.
-#[cfg(not(target_os = "macos"))]
+/// Fallback stub for platforms without an OS HEVC codec (everything except macOS/Windows): always
+/// errors. The real decoders are the `cfg(macos)` (ImageIO) and `cfg(windows)` (WIC) variants below.
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub(crate) fn decode_heic(_buf: &[u8]) -> Result<(DynamicImage, Option<u16>)> {
   Err(Error::new(
     Status::InvalidArg,
-    "HEIC decoding is only supported on macOS".to_owned(),
+    "HEIC decoding is only supported on macOS and Windows".to_owned(),
   ))
 }
 
@@ -342,13 +350,14 @@ pub(crate) fn decode_heic(buf: &[u8]) -> Result<(DynamicImage, Option<u16>)> {
   })
 }
 
-/// Encode a `DynamicImage` to HEIC. macOS-only (delegates to Apple's `CGImageDestination` HEVC
-/// encoder); errors elsewhere. We ship no HEVC codec — Apple's OS holds the patent license.
-#[cfg(not(target_os = "macos"))]
+/// Encode a `DynamicImage` to HEIC. Fallback stub for platforms without an OS HEVC codec (everything
+/// except macOS/Windows): always errors. The real encoders are the `cfg(macos)`
+/// (`CGImageDestination`) and `cfg(windows)` (WIC) variants below. We ship no HEVC codec.
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub(crate) fn encode_heic(_img: &DynamicImage, _opts: Option<HeicConfig>) -> Result<Vec<u8>> {
   Err(Error::new(
     Status::GenericFailure,
-    "HEIC encoding is only available on macOS".to_owned(),
+    "HEIC encoding is only available on macOS and Windows".to_owned(),
   ))
 }
 
@@ -554,6 +563,346 @@ pub(crate) fn encode_heic(img: &DynamicImage, opts: Option<HeicConfig>) -> Resul
   })
 }
 
+/// Thread-local COM init (MTA). napi runs encode/decode on libuv worker threads, so COM must be
+/// initialized per-thread, not per-process. We never `CoUninitialize` (the worker pool is shared and
+/// another addon may rely on COM). S_FALSE / RPC_E_CHANGED_MODE are both fine — WIC works regardless
+/// of the thread's apartment, so we ignore the returned HRESULT.
+#[cfg(target_os = "windows")]
+fn ensure_com_initialized() {
+  use std::cell::Cell;
+  thread_local! { static INIT: Cell<bool> = const { Cell::new(false) }; }
+  INIT.with(|done| {
+    if !done.get() {
+      unsafe {
+        let _ = windows::Win32::System::Com::CoInitializeEx(
+          None,
+          windows::Win32::System::Com::COINIT_MULTITHREADED,
+        );
+      }
+      done.set(true);
+    }
+  });
+}
+
+/// Map a WIC/COM error to a `napi::Error`. When the OS HEVC/HEIF codec component is absent or
+/// half-installed (the common Windows Server / CI case) WIC reports it as either
+/// `WINCODEC_ERR_COMPONENTNOTFOUND` (no decoder registered) or `WINCODEC_ERR_COMPONENTINITIALIZEFAILURE`
+/// (the HEIF container decoder loads but its HEVC backend can't initialize — what the GitHub x86_64
+/// Windows runner returns from `CreateDecoderFromStream`). Map both to one clear, actionable message
+/// instead of a raw HRESULT.
+#[cfg(target_os = "windows")]
+fn wic_error(context: &str, e: windows::core::Error) -> Error {
+  use windows::Win32::Foundation::{
+    WINCODEC_ERR_COMPONENTINITIALIZEFAILURE, WINCODEC_ERR_COMPONENTNOTFOUND,
+  };
+  let code = e.code();
+  if code == WINCODEC_ERR_COMPONENTNOTFOUND || code == WINCODEC_ERR_COMPONENTINITIALIZEFAILURE {
+    Error::new(
+      Status::GenericFailure,
+      "HEIC: the OS HEVC/HEIF codec is not installed. Install 'HEIF Image Extensions' and \
+       'HEVC Video Extensions' from the Microsoft Store."
+        .to_owned(),
+    )
+  } else {
+    Error::new(
+      Status::GenericFailure,
+      format!("HEIC ({context}): {} (0x{:08X})", e.message(), e.code().0 as u32),
+    )
+  }
+}
+
+/// Create the WIC imaging factory (after ensuring COM is initialized on this thread).
+#[cfg(target_os = "windows")]
+fn wic_factory() -> Result<windows::Win32::Graphics::Imaging::IWICImagingFactory> {
+  use windows::Win32::Graphics::Imaging::CLSID_WICImagingFactory;
+  use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
+  ensure_com_initialized();
+  unsafe { CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER) }
+    .map_err(|e| wic_error("factory", e))
+}
+
+/// Match macOS color behavior on Windows: macOS renders the decoded HEIC into an sRGB color space, so a
+/// Display-P3 (or other wide-gamut) source comes back as sRGB pixels. WIC's `IWICFormatConverter` only
+/// changes pixel *layout*, not color *space*, so a P3 frame would otherwise return P3 values mislabeled
+/// as sRGB. If the frame carries a non-sRGB color context, run an `IWICColorTransform` to sRGB and fill
+/// `pixels`, returning `true`. Return `false` — leaving `pixels` for the caller's plain
+/// `IWICFormatConverter` fallback — when the frame is untagged, already sRGB (ExifColorSpace value 1), or
+/// the transform path fails for any reason. Best-effort: a color-management failure must never block a
+/// decode the converter can still complete (best-effort: degrade, never fail the whole decode). This fn returns no
+/// `Result`, so its internal `?`/`.ok()?` short-circuits to `false` instead of panicking.
+#[cfg(target_os = "windows")]
+fn copy_color_managed_pixels(
+  factory: &windows::Win32::Graphics::Imaging::IWICImagingFactory,
+  frame: &windows::Win32::Graphics::Imaging::IWICBitmapFrameDecode,
+  stride: u32,
+  pixels: &mut [u8],
+) -> bool {
+  use windows::Win32::Graphics::Imaging::{GUID_WICPixelFormat32bppRGBA, WICColorContextExifColorSpace};
+  unsafe {
+    (|| -> Option<()> {
+      // WIC's HEIF decoder returns 0 from the zero-count `GetColorContexts` query even when a profile is
+      // present, so probe with a pre-created single-slot array (the frame's primary color context).
+      let probe = factory.CreateColorContext().ok()?;
+      let mut contexts = [Some(probe)];
+      let mut actual = 0u32;
+      frame.GetColorContexts(&mut contexts, &mut actual).ok()?;
+      if actual == 0 {
+        return None; // untagged -> converter treats it as sRGB (matches macOS)
+      }
+      let source = contexts[0].as_ref()?;
+      // An explicit sRGB context needs no transform (no-op); keep the already-shipped converter path
+      // byte-for-byte for sRGB/untagged frames.
+      if source.GetType().ok()? == WICColorContextExifColorSpace && source.GetExifColorSpace().ok()? == 1 {
+        return None;
+      }
+      let dest = factory.CreateColorContext().ok()?;
+      dest.InitializeFromExifColorSpace(1).ok()?; // 1 = sRGB
+      let transformer = factory.CreateColorTransformer().ok()?;
+      transformer.Initialize(frame, source, &dest, &GUID_WICPixelFormat32bppRGBA).ok()?;
+      transformer.CopyPixels(std::ptr::null(), stride, pixels).ok()?;
+      Some(())
+    })()
+    .is_some()
+  }
+}
+
+/// Windows HEIC decode via WIC. We ship no HEVC codec; the OS/Store extension holds the patent
+/// license, so all decoding goes through OS API calls. WIC normalizes HEIF to 8-bit, so the output
+/// is always `Rgba8` (unlike macOS, which preserves 10-bit as `Rgba16`).
+///
+/// Pipeline: bytes -> IStream (copy via CreateStreamOnHGlobal) -> IWICBitmapDecoder -> frame 0 ->
+/// [color-manage wide-gamut frames to sRGB] -> straight 32bppRGBA -> CopyPixels ->
+/// `DynamicImage::ImageRgba8`. macOS renders HEIC into an sRGB space, so a wide-gamut (e.g. iPhone
+/// Display-P3) frame is run through an `IWICColorTransform` to sRGB to match; sRGB/untagged frames use a
+/// plain `IWICFormatConverter`. Unlike macOS (which returns an orientation tag for the pipeline to
+/// apply), WIC BAKES the HEIF container orientation (`irot`/`imir`) into the decoded pixels, so `GetSize`
+/// already reports display dimensions and we return `None` orientation. Every null/false OS result
+/// becomes a clean `Error`.
+#[cfg(target_os = "windows")]
+pub(crate) fn decode_heic(buf: &[u8]) -> Result<(DynamicImage, Option<u16>)> {
+  use windows::Win32::Foundation::HGLOBAL;
+  use windows::Win32::Graphics::Imaging::{
+    GUID_WICPixelFormat32bppRGBA, WICBitmapDitherTypeNone, WICBitmapPaletteTypeCustom,
+    WICDecodeMetadataCacheOnDemand,
+  };
+  use windows::Win32::System::Com::StructuredStorage::CreateStreamOnHGlobal;
+  use windows::Win32::System::Com::STREAM_SEEK_SET;
+
+  let factory = wic_factory()?;
+  unsafe {
+    // bytes -> growable HGLOBAL-backed IStream (copies; avoids any borrowed-slice lifetime trap).
+    let stream = CreateStreamOnHGlobal(HGLOBAL::default(), true.into()).map_err(|e| wic_error("stream", e))?;
+    let buf_len = u32::try_from(buf.len())
+      .map_err(|_| Error::new(Status::InvalidArg, "HEIC: input too large (exceeds 4 GiB)".to_owned()))?;
+    let mut written = 0u32;
+    stream
+      .Write(buf.as_ptr() as *const _, buf_len, Some(&mut written))
+      .ok()
+      .map_err(|e| wic_error("stream write", e))?;
+    stream.Seek(0, STREAM_SEEK_SET, None).map_err(|e| wic_error("stream seek", e))?;
+
+    let decoder = factory
+      .CreateDecoderFromStream(&stream, std::ptr::null(), WICDecodeMetadataCacheOnDemand)
+      .map_err(|e| wic_error("decode", e))?;
+    let frame = decoder.GetFrame(0).map_err(|e| wic_error("frame", e))?;
+
+    let mut width = 0u32;
+    let mut height = 0u32;
+    frame.GetSize(&mut width, &mut height).map_err(|e| wic_error("size", e))?;
+    if width == 0 || height == 0 {
+      return Err(Error::new(Status::InvalidArg, "HEIC: decoded image has zero dimensions".to_owned()));
+    }
+
+    // WIC bakes the HEIF container orientation (`irot`/`imir`) into the decoded frame: `GetSize` already
+    // reports the display (rotated) dimensions and the pixels come out upright, so there is no
+    // orientation to return or apply. (HEIF's EXIF orientation tag is non-authoritative — both WIC and
+    // macOS ImageIO ignore it — so applying it on top of WIC's baking would double-rotate.)
+    let stride = width
+      .checked_mul(4)
+      .ok_or_else(|| Error::new(Status::InvalidArg, "HEIC: stride overflow".to_owned()))?;
+    let size = stride
+      .checked_mul(height)
+      .ok_or_else(|| Error::new(Status::InvalidArg, "HEIC: buffer size overflow".to_owned()))? as usize;
+    // Fallible allocation: a malformed frame can report a `size` that overflows `Vec` capacity on
+    // 32-bit targets (`isize::MAX`) or exhausts memory. Map either to a clean `Error` instead of
+    // panicking the napi worker (`vec![0u8; size]` would panic on capacity overflow).
+    let mut pixels: Vec<u8> = Vec::new();
+    pixels
+      .try_reserve_exact(size)
+      .map_err(|_| Error::new(Status::GenericFailure, "HEIC: cannot allocate decode buffer".to_owned()))?;
+    pixels.resize(size, 0);
+
+    // WIC normalizes HEIF to 8-bit. Match macOS (which renders into an sRGB color space): if the frame
+    // carries a non-sRGB color context, color-transform it to sRGB so wide-gamut (e.g. Display-P3)
+    // pixels aren't returned mislabeled. sRGB/untagged frames — and any transform failure — fall through
+    // to a straight (non-premultiplied) 32bppRGBA conversion, byte-identical to the prior path.
+    if !copy_color_managed_pixels(&factory, &frame, stride, &mut pixels) {
+      let converter = factory.CreateFormatConverter().map_err(|e| wic_error("converter", e))?;
+      converter
+        .Initialize(
+          &frame,
+          &GUID_WICPixelFormat32bppRGBA,
+          WICBitmapDitherTypeNone,
+          None,
+          0.0,
+          WICBitmapPaletteTypeCustom,
+        )
+        .map_err(|e| wic_error("convert", e))?;
+      converter
+        .CopyPixels(std::ptr::null(), stride, &mut pixels)
+        .map_err(|e| wic_error("copy pixels", e))?;
+    }
+
+    let img = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(width, height, pixels)
+      .map(DynamicImage::ImageRgba8)
+      .ok_or_else(|| Error::new(Status::GenericFailure, "HEIC: buffer size mismatch".to_owned()))?;
+    Ok((img, None))
+  }
+}
+
+/// Windows HEIC encode via WIC (`GUID_ContainerFormatHeif`, HEVC by default). We ship no HEVC codec;
+/// the OS/Store extension holds the patent license. Output is 8-bit and OPAQUE: the WIC HEVC encoder
+/// negotiates alpha away (we flatten to opaque by design) and does not emit 10-bit (`bit_depth: 10`
+/// is rejected). Quality maps directly to `ImageQuality` with NO 0.9 clamp (Windows encodes 1.0 fine).
+///
+/// Pipeline: `DynamicImage` -> straight RGBA8 -> IWICBitmap (CreateBitmapFromMemory) -> HEIF encoder
+/// frame with `ImageQuality` (VT_R4) -> WriteSource -> two-phase Commit -> read bytes from the
+/// growable HGLOBAL. Orientation is NOT tagged (pixels are already upright, same as macOS).
+#[cfg(target_os = "windows")]
+pub(crate) fn encode_heic(img: &DynamicImage, opts: Option<HeicConfig>) -> Result<Vec<u8>> {
+  use windows::core::PWSTR;
+  use windows::Win32::Foundation::HGLOBAL;
+  use windows::Win32::Graphics::Imaging::{
+    GUID_ContainerFormatHeif, GUID_WICPixelFormat32bppRGBA, IWICBitmapFrameEncode,
+    WICBitmapEncoderNoCache,
+  };
+  use windows::Win32::System::Com::StructuredStorage::{
+    CreateStreamOnHGlobal, GetHGlobalFromStream, IPropertyBag2, PROPBAG2,
+  };
+  use windows::Win32::System::Com::{STATFLAG_NONAME, STATSTG};
+  use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
+  use windows::Win32::System::Variant::VARIANT;
+
+  let opts = opts.unwrap_or_default();
+  // 10-bit is not supported by the WIC HEVC encoder (it emits 8-bit); reject rather than silently
+  // downgrade, so callers are not misled about the output depth.
+  if opts.bit_depth == Some(10) {
+    return Err(Error::new(
+      Status::InvalidArg,
+      "HEIC: 10-bit output is not supported on Windows (the OS WIC HEVC encoder emits 8-bit only)"
+        .to_owned(),
+    ));
+  }
+
+  let width = img.width();
+  let height = img.height();
+  if width == 0 || height == 0 {
+    return Err(Error::new(Status::InvalidArg, "HEIC: image has zero dimensions".to_owned()));
+  }
+
+  // Bound the RGBA byte count BEFORE the infallible `to_rgba8()` conversion. `to_rgba8()` allocates
+  // width*height*4 bytes via `ImageBuffer::new` (`vec![0; cap]`), which PANICS on capacity overflow
+  // (reachable on the shipped 32-bit i686 target, where `isize::MAX` is 2 GiB) or aborts on OOM —
+  // before this Result-returning fn could surface a clean Error. The count must also fit WIC's u32
+  // size argument (`CreateBitmapFromMemory`'s windows-rs wrapper does `len().try_into().unwrap()`).
+  // Compute in u64 (width/height are u32, so only the final `*4` can overflow) and reject if it
+  // exceeds either WIC's u32 limit or this target's `Vec` capacity limit (`isize::MAX`).
+  let rgba_len = (width as u64)
+    .checked_mul(height as u64)
+    .and_then(|n| n.checked_mul(4))
+    .ok_or_else(|| Error::new(Status::InvalidArg, "HEIC: image dimensions too large".to_owned()))?;
+  if rgba_len > u32::MAX as u64 || rgba_len > isize::MAX as u64 {
+    return Err(Error::new(
+      Status::InvalidArg,
+      "HEIC: image too large for the WIC HEVC encoder".to_owned(),
+    ));
+  }
+  let stride = width
+    .checked_mul(4)
+    .ok_or_else(|| Error::new(Status::InvalidArg, "HEIC: stride overflow".to_owned()))?;
+  // Straight RGBA8. Alpha is flattened to opaque by the WIC encoder (chosen behavior). Now provably
+  // safe: `rgba_len <= min(u32::MAX, isize::MAX)`, so neither this allocation nor the
+  // `CreateBitmapFromMemory` length->u32 conversion can panic.
+  let rgba = img.to_rgba8();
+  // quality 0..=100 -> 0.0..=1.0 (no 0.9 clamp; Windows encodes 1.0 fine, unlike macOS ImageIO).
+  let quality = (opts.quality.unwrap_or(80).min(100) as f32) / 100.0;
+
+  let factory = wic_factory()?;
+  unsafe {
+    let out = CreateStreamOnHGlobal(HGLOBAL::default(), true.into()).map_err(|e| wic_error("out stream", e))?;
+    let encoder = factory
+      .CreateEncoder(&GUID_ContainerFormatHeif, std::ptr::null())
+      .map_err(|e| wic_error("encoder", e))?;
+    encoder.Initialize(&out, WICBitmapEncoderNoCache).map_err(|e| wic_error("encoder init", e))?;
+
+    let mut frame_opt: Option<IWICBitmapFrameEncode> = None;
+    let mut bag_opt: Option<IPropertyBag2> = None;
+    encoder
+      .CreateNewFrame(&mut frame_opt, &mut bag_opt)
+      .map_err(|e| wic_error("new frame", e))?;
+    let frame = frame_opt.ok_or_else(|| Error::new(Status::GenericFailure, "HEIC: null frame encoder".to_owned()))?;
+    let bag = bag_opt.ok_or_else(|| Error::new(Status::GenericFailure, "HEIC: null options bag".to_owned()))?;
+
+    // Set ImageQuality (VT_R4). The property bag carries only the name; the VARIANT carries the type.
+    let mut prop_name: Vec<u16> = "ImageQuality".encode_utf16().chain(std::iter::once(0)).collect();
+    let mut prop = PROPBAG2::default();
+    prop.pstrName = PWSTR(prop_name.as_mut_ptr());
+    bag
+      .Write(1, &prop, &VARIANT::from(quality))
+      .map_err(|e| wic_error("set quality", e))?;
+
+    frame.Initialize(&bag).map_err(|e| wic_error("frame init", e))?;
+    frame.SetSize(width, height).map_err(|e| wic_error("set size", e))?;
+    // `SetPixelFormat` reports the encoder's chosen format back in `pixel_format` (the HEIF encoder
+    // negotiates 32bppRGBA -> an opaque BGR format). We intentionally do NOT read it back: `WriteSource`
+    // below converts our 32bppRGBA source bitmap to whatever the frame negotiated, itself. Verified on a
+    // real codec — RGBA -> BGR with correct channel order and alpha flattened to opaque (round-trip max
+    // channel error 1/255) — so a manual `IWICFormatConverter` is unnecessary.
+    let mut pixel_format = GUID_WICPixelFormat32bppRGBA;
+    frame.SetPixelFormat(&mut pixel_format).map_err(|e| wic_error("set pixel format", e))?;
+
+    let source = factory
+      .CreateBitmapFromMemory(width, height, &GUID_WICPixelFormat32bppRGBA, stride, rgba.as_raw())
+      .map_err(|e| wic_error("source bitmap", e))?;
+    // WriteSource performs the source(32bppRGBA) -> frame(negotiated) pixel-format conversion.
+    frame.WriteSource(&source, std::ptr::null()).map_err(|e| wic_error("write source", e))?;
+    frame.Commit().map_err(|e| wic_error("frame commit", e))?;
+    encoder.Commit().map_err(|e| wic_error("encoder commit", e))?;
+
+    // Copy the encoded bytes out of the growable HGLOBAL before the stream is dropped. Use the
+    // stream's LOGICAL length (`Stat().cbSize`), not `GlobalSize` (the HGLOBAL allocation capacity),
+    // so the returned buffer can never carry trailing allocation slack.
+    let hglobal = GetHGlobalFromStream(&out).map_err(|e| wic_error("get hglobal", e))?;
+    let mut stat = STATSTG::default();
+    out.Stat(&mut stat, STATFLAG_NONAME).map_err(|e| wic_error("stat", e))?;
+    // Logical encoded length, bounded so the unsafe slice is sound: cap at this target's slice/`Vec`
+    // limit (`isize::MAX`) and never exceed the HGLOBAL's own allocation (`GlobalSize`).
+    let size = usize::try_from(stat.cbSize)
+      .ok()
+      .filter(|&n| n <= isize::MAX as usize)
+      .ok_or_else(|| Error::new(Status::GenericFailure, "HEIC: encoded size too large".to_owned()))?;
+    let alloc = GlobalSize(hglobal);
+    if size > alloc {
+      return Err(Error::new(Status::GenericFailure, "HEIC: encoded size exceeds buffer".to_owned()));
+    }
+    let ptr = GlobalLock(hglobal) as *const u8;
+    if ptr.is_null() {
+      return Err(Error::new(Status::GenericFailure, "HEIC: failed to lock output buffer".to_owned()));
+    }
+    // Fallibly allocate, copy, then ALWAYS unlock (even if the reservation fails) so the HGLOBAL lock
+    // is never leaked. `extend_from_slice` after `try_reserve_exact(size)` reuses the reserved
+    // capacity, so it cannot reallocate or panic.
+    let mut bytes: Vec<u8> = Vec::new();
+    let reserved = bytes.try_reserve_exact(size);
+    if reserved.is_ok() {
+      bytes.extend_from_slice(std::slice::from_raw_parts(ptr, size));
+    }
+    let _ = GlobalUnlock(hglobal);
+    reserved.map_err(|_| Error::new(Status::GenericFailure, "HEIC: cannot allocate output buffer".to_owned()))?;
+    Ok(bytes)
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -715,10 +1064,10 @@ mod tests {
 
   // --- decode_heic: non-macOS stub still errors (macOS now decodes real fixtures) ---
 
-  #[cfg(not(target_os = "macos"))]
+  #[cfg(not(any(target_os = "macos", target_os = "windows")))]
   #[test]
-  fn decode_heic_stub_errors_off_macos() {
-    // Off macOS the stub returns an error (no OS HEVC decoder to delegate to).
+  fn decode_heic_stub_errors_off_macos_windows() {
+    // Off macOS/Windows the stub returns an error (no OS HEVC decoder to delegate to).
     let buf = ftyp(b"heic", b"\0\0\0\0", &[], None);
     assert!(super::decode_heic(&buf).is_err());
   }

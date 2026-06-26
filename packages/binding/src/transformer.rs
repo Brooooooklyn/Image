@@ -1303,8 +1303,10 @@ impl Transformer {
   }
 
   #[napi]
-  /// Encode to HEIC using the OS-native ImageIO HEVC encoder (macOS only).
-  /// Rejects on non-macOS platforms.
+  /// Encode to HEIC via the OS-native HEVC encoder — Apple ImageIO on macOS, the Windows Imaging
+  /// Component (WIC) on Windows. Ships no HEVC codec (the OS holds the patent license). Rejects on
+  /// other platforms, and on Windows hosts lacking the OS HEVC/HEIF Store extension. See `HeicConfig`
+  /// for the per-platform quality, bit-depth, and alpha behavior.
   pub fn heic(
     &mut self,
     options: Option<HeicConfig>,
@@ -1321,8 +1323,10 @@ impl Transformer {
   }
 
   #[napi]
-  /// Encode to HEIC using the OS-native ImageIO HEVC encoder (macOS only).
-  /// Rejects on non-macOS platforms.
+  /// Encode to HEIC via the OS-native HEVC encoder — Apple ImageIO on macOS, the Windows Imaging
+  /// Component (WIC) on Windows. Ships no HEVC codec (the OS holds the patent license). Rejects on
+  /// other platforms, and on Windows hosts lacking the OS HEVC/HEIF Store extension. See `HeicConfig`
+  /// for the per-platform quality, bit-depth, and alpha behavior.
   pub fn heic_sync(&mut self, env: Env, options: Option<HeicConfig>) -> Result<Buffer> {
     let mut encoder = EncodeTask {
       image: self.dynamic_image.clone(),

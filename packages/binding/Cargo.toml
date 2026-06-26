@@ -72,6 +72,20 @@ objc2-core-foundation = { version = "0.3", default-features = false, features = 
 objc2-core-graphics   = { version = "0.3", default-features = false, features = ["std", "CGImage", "CGColorSpace", "CGContext", "CGBitmapContext", "CGDataProvider"] }
 objc2-image-io        = { version = "0.3", default-features = false, features = ["std", "CGImageSource", "CGImageProperties", "CGImageDestination", "objc2-core-graphics"] }
 
+# Windows-only HEIC via the Windows Imaging Component (WIC). We ship no HEVC codec — the OS/Store
+# HEVC extension holds the patent license. Target-gated so Linux/macOS/wasm never resolve `windows`.
+# (Same posture as the macOS objc2 block above; inert for the --no-default-features CodSpeed bench.)
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", features = [
+  "Win32_Foundation",                    # HGLOBAL, WINCODEC_ERR_COMPONENTNOTFOUND, HRESULT
+  "Win32_System_Com",                    # CoCreateInstance, CoInitializeEx, IStream, CLSCTX, STREAM_SEEK
+  "Win32_System_Com_StructuredStorage",  # CreateStreamOnHGlobal, GetHGlobalFromStream, IPropertyBag2, PROPBAG2, PROPVARIANT, PropVariantToUInt16
+  "Win32_System_Ole",                    # gates the VARIANT struct + IPropertyBag2::Write
+  "Win32_System_Variant",                # VARENUM / VT_* / VARIANT::from(f32)
+  "Win32_System_Memory",                 # GlobalLock / GlobalUnlock / GlobalSize
+  "Win32_Graphics_Imaging",              # all IWIC* interfaces, GUIDs, WICConvertBitmapSource
+] }
+
 [build-dependencies]
 napi-build = "2"
 
