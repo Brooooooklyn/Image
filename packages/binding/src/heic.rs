@@ -853,13 +853,18 @@ pub(crate) fn encode_heic(img: &DynamicImage, opts: Option<HeicConfig>) -> Resul
 
     frame.Initialize(&bag).map_err(|e| wic_error("frame init", e))?;
     frame.SetSize(width, height).map_err(|e| wic_error("set size", e))?;
-    // The encoder negotiates 32bppRGBA -> its supported opaque format; we accept whatever it picks.
+    // `SetPixelFormat` reports the encoder's chosen format back in `pixel_format` (the HEIF encoder
+    // negotiates 32bppRGBA -> an opaque BGR format). We intentionally do NOT read it back: `WriteSource`
+    // below converts our 32bppRGBA source bitmap to whatever the frame negotiated, itself. Verified on a
+    // real codec — RGBA -> BGR with correct channel order and alpha flattened to opaque (round-trip max
+    // channel error 1/255) — so a manual `IWICFormatConverter` is unnecessary.
     let mut pixel_format = GUID_WICPixelFormat32bppRGBA;
     frame.SetPixelFormat(&mut pixel_format).map_err(|e| wic_error("set pixel format", e))?;
 
     let source = factory
       .CreateBitmapFromMemory(width, height, &GUID_WICPixelFormat32bppRGBA, stride, rgba.as_raw())
       .map_err(|e| wic_error("source bitmap", e))?;
+    // WriteSource performs the source(32bppRGBA) -> frame(negotiated) pixel-format conversion.
     frame.WriteSource(&source, std::ptr::null()).map_err(|e| wic_error("write source", e))?;
     frame.Commit().map_err(|e| wic_error("frame commit", e))?;
     encoder.Commit().map_err(|e| wic_error("encoder commit", e))?;

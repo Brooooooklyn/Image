@@ -188,6 +188,29 @@ onCodec('encodes png -> heic (round-trip)', async (t) => {
   t.is(meta.height, 681)
 })
 
+onCodec('heic encode preserves channel order (no R/B swap)', async (t) => {
+  // A solid asymmetric color (r > g > b) must survive encode->decode WITHOUT a channel swap. Guards both
+  // backends' RGBA handling — notably Windows WIC, where the HEIF encoder negotiates 32bppRGBA to an
+  // opaque BGR format and `WriteSource` performs the conversion (a swap would surface here as b > r).
+  // HEVC is lossy, so assert the channel ordering plus loose magnitude bounds rather than exact values.
+  const WIDTH = 32
+  const HEIGHT = 32
+  const pixels = Buffer.alloc(WIDTH * HEIGHT * 4)
+  for (let i = 0; i < WIDTH * HEIGHT; i++) {
+    pixels[i * 4] = 210 // R (max)
+    pixels[i * 4 + 1] = 90 // G (mid)
+    pixels[i * 4 + 2] = 40 // B (min)
+    pixels[i * 4 + 3] = 255
+  }
+  const buf = Transformer.fromRgbaPixels(pixels, WIDTH, HEIGHT).heicSync()
+  const raw = new Transformer(Buffer.from(buf)).rawPixelsSync()
+  const c = (Math.floor(HEIGHT / 2) * WIDTH + Math.floor(WIDTH / 2)) * 4
+  const [r, g, b] = [raw[c], raw[c + 1], raw[c + 2]]
+  t.true(r > g && g > b, `channel order not preserved (got r=${r} g=${g} b=${b}, expected r>g>b)`)
+  t.true(r > 150, `red should stay dominant, got ${r}`)
+  t.true(b < 110, `blue should stay the minimum, got ${b}`)
+})
+
 onCodec('heic max quality (quality 100)', async (t) => {
   // `quality: 100` is valid on both backends but maps differently: macOS ImageIO CLAMPS its
   // compression quality to 0.9 (no truly-lossless mode; compression 1.0 engages a near-lossless path
