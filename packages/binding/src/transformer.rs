@@ -142,11 +142,12 @@ pub enum BlendMode {
 }
 
 #[napi]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 /// Where to anchor the overlay relative to the base image when no explicit
 /// `left`/`top` is given.
 pub enum Gravity {
   /// Center of the base image.
+  #[default]
   Center,
   /// Top edge, horizontally centered.
   North,
@@ -583,11 +584,14 @@ pub struct ResizeOptions {
 #[napi(object)]
 #[derive(Clone, Default)]
 pub struct CompositeOptions {
-  /// Pixel offset from the top edge. Takes precedence over `gravity` when set.
+  /// Pixel offset from the top edge. Provide both `top` and `left` together;
+  /// supplying only one is an error. When set, takes precedence over `gravity`.
   pub top: Option<i64>,
-  /// Pixel offset from the left edge. Takes precedence over `gravity` when set.
+  /// Pixel offset from the left edge. Provide both `left` and `top` together;
+  /// supplying only one is an error. When set, takes precedence over `gravity`.
   pub left: Option<i64>,
-  /// Anchor position; used only when neither `left` nor `top` is provided.
+  /// Anchor position. Defaults to `Center`; used only when neither `left` nor
+  /// `top` is set.
   pub gravity: Option<Gravity>,
   /// Blend / compositing operator. Defaults to `Over` (source-over).
   pub blend: Option<BlendMode>,
@@ -606,7 +610,8 @@ struct CompositeItem {
   buffer: Arc<Uint8Array>,
   left: i64,
   top: i64,
-  gravity: Option<Gravity>,
+  has_offset: bool, // both left & top were given (or legacy overlay())
+  gravity: Gravity, // used only when !has_offset; defaults to Center
   blend: BlendMode,
   tile: bool,
   opacity: f32, // 1.0 == no-op
@@ -853,7 +858,10 @@ impl Task for EncodeTask {
         let top = ThreadsafeDynamicImage::new(item.buffer.clone());
         let top_image_meta = top.get(true)?;
         let (x, y) = resolve_position(
-          &item,
+          item.has_offset,
+          item.left,
+          item.top,
+          item.gravity,
           img.width(),
           img.height(),
           top_image_meta.image.width(),
@@ -1323,7 +1331,8 @@ impl Transformer {
       buffer: Arc::new(on_top),
       left: x,
       top: y,
-      gravity: None,
+      has_offset: true,         // legacy overlay() is always an explicit offset
+      gravity: Gravity::Center, // unused when has_offset
       blend: BlendMode::Over,
       tile: false,
       opacity: 1.0,
@@ -1334,6 +1343,10 @@ impl Transformer {
   #[napi]
   /// Composite `on_top` onto this image with a sharp-style blend mode, gravity-based
   /// positioning, tiling, and per-overlay opacity. See `CompositeOptions`.
+  ///
+  /// Placement (sharp parity): when neither `left` nor `top` is given the overlay is
+  /// anchored by `gravity`, which defaults to the CENTRE of the base image. `left` and
+  /// `top` must be provided together — supplying only one is an error.
   ///
   /// Source-over (`blend: Over`, no tiling, full opacity) composites at 8-bit, identical
   /// to `overlay`. Other blend modes / tiling / opacity < 1 run at the base image's native
@@ -1347,14 +1360,31 @@ impl Transformer {
     options: Option<CompositeOptions>,
   ) -> Result<&Self> {
     let o = options.unwrap_or_default();
+    let has_offset = match (o.left, o.top) {
+      (Some(_), Some(_)) => true,
+      (None, None) => false,
+      _ => {
+        return Err(Error::new(
+          Status::InvalidArg,
+          "composite: `left` and `top` must be provided together".to_owned(),
+        ));
+      }
+    };
+    let opacity = o.opacity.unwrap_or(1.0) as f32;
+    let opacity = if opacity.is_finite() {
+      opacity.clamp(0.0, 1.0)
+    } else {
+      1.0
+    };
     self.image_transform_args.overlay.push(CompositeItem {
       buffer: Arc::new(on_top),
       left: o.left.unwrap_or(0),
       top: o.top.unwrap_or(0),
-      gravity: o.gravity,
+      has_offset,
+      gravity: o.gravity.unwrap_or_default(),
       blend: o.blend.unwrap_or_default(),
       tile: o.tile.unwrap_or(false),
-      opacity: (o.opacity.unwrap_or(1.0) as f32).clamp(0.0, 1.0),
+      opacity,
     });
     Ok(self)
   }
@@ -1904,20 +1934,29 @@ fn apply_opacity(image: &mut DynamicImage, factor: f32) {
   }
 }
 
-/// Resolve the top-left placement of an overlay. Explicit `left`/`top` take precedence over
-/// `gravity` (sharp semantics): gravity is honored only when it is set AND both offsets are 0.
-/// Computed in i64; negative results are valid (the overlay is clipped by the compositor).
-fn resolve_position(item: &CompositeItem, bw: u32, bh: u32, tw: u32, th: u32) -> (i64, i64) {
-  if item.left != 0 || item.top != 0 || item.gravity.is_none() {
-    // explicit offset (or default 0,0 when neither offset nor gravity given)
-    return (item.left, item.top);
+/// Resolve the top-left placement of an overlay (sharp semantics). When an explicit offset was
+/// given (`has_offset`), `left`/`top` are used verbatim; otherwise the overlay is anchored by
+/// `gravity` (default Center). Computed in i64; negative results are valid (the overlay is
+/// clipped by the compositor).
+fn resolve_position(
+  has_offset: bool,
+  left: i64,
+  top: i64,
+  gravity: Gravity,
+  bw: u32,
+  bh: u32,
+  tw: u32,
+  th: u32,
+) -> (i64, i64) {
+  if has_offset {
+    return (left, top);
   }
   let (bw, bh, tw, th) = (bw as i64, bh as i64, tw as i64, th as i64);
   let cx = (bw - tw) / 2;
   let cy = (bh - th) / 2;
   let right = bw - tw;
   let bottom = bh - th;
-  match item.gravity.unwrap() {
+  match gravity {
     Gravity::NorthWest => (0, 0),
     Gravity::North => (cx, 0),
     Gravity::NorthEast => (right, 0),
@@ -2049,6 +2088,22 @@ fn norm_f32(v: f32) -> f32 {
   if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) }
 }
 
+/// True for modes whose output, when the source is fully transparent (`a_s == 0`), is NOT the
+/// untouched backdrop (they clear / replace the overlapped region). For all other modes `a_s == 0`
+/// is a destination-preserving no-op, so the pixel can be skipped to avoid clamping HDR / NaN
+/// destinations in the f32 path.
+fn clears_dest_when_source_transparent(mode: BlendMode) -> bool {
+  matches!(
+    mode,
+    BlendMode::Clear
+      | BlendMode::Source
+      | BlendMode::In
+      | BlendMode::Out
+      | BlendMode::DestIn
+      | BlendMode::DestAtop
+  )
+}
+
 /// Overlap rectangle of `top` placed at `(x, y)` over a `bw x bh` base, clamped exactly like the
 /// `image` crate's `overlay_bounds_ext` (handles negative offsets and tops larger than the base).
 /// Returns `(origin_bottom_x, origin_bottom_y, origin_top_x, origin_top_y, x_range, y_range)`.
@@ -2087,9 +2142,11 @@ fn overlap_bounds(
   )
 }
 
-/// Placement offsets for an overlay. A single `(x, y)` normally; for tiling, top-left origins
-/// stepping by the overlay size across the whole base starting at `(0, 0)` (ignoring `x/y`).
-fn placement_offsets(
+/// Invoke `f(ox, oy)` for each placement: once at `(x, y)` normally; for tiling, at every
+/// top-left origin stepping by the overlay size across the whole base from `(0,0)` (ignoring x/y).
+/// Streams the origins instead of materializing a `Vec` — a 1x1 tile over a large base would
+/// otherwise allocate one tuple per pixel.
+fn for_each_placement(
   tile: bool,
   bw: u32,
   bh: u32,
@@ -2097,25 +2154,25 @@ fn placement_offsets(
   th: u32,
   x: i64,
   y: i64,
-) -> Vec<(i64, i64)> {
+  mut f: impl FnMut(i64, i64),
+) {
   if !tile {
-    return vec![(x, y)];
+    f(x, y);
+    return;
   }
-  let mut offsets = Vec::new();
   // Caller guards `tw > 0 && th > 0`; keep a defensive check so the loop always terminates.
   if tw == 0 || th == 0 {
-    return offsets;
+    return;
   }
   let mut oy = 0u32;
   while oy < bh {
     let mut ox = 0u32;
     while ox < bw {
-      offsets.push((ox as i64, oy as i64));
+      f(ox as i64, oy as i64);
       ox += tw;
     }
     oy += th;
   }
-  offsets
 }
 
 /// Composite `top` onto an 8-bit RGBA `base` in place. Channels normalize `/255`, denormalize
@@ -2134,7 +2191,7 @@ fn composite_into_u8(
   if tw == 0 || th == 0 {
     return;
   }
-  for (ox, oy) in placement_offsets(tile, bw, bh, tw, th, x, y) {
+  for_each_placement(tile, bw, bh, tw, th, x, y, |ox, oy| {
     let (obx, oby, otx, oty, rw, rh) = overlap_bounds(bw, bh, tw, th, ox, oy);
     for ry in 0..rh {
       for rx in 0..rw {
@@ -2165,7 +2222,7 @@ fn composite_into_u8(
         );
       }
     }
-  }
+  });
 }
 
 /// Composite `top` onto a 16-bit RGBA `base` in place. Channels normalize `/65535`, denormalize
@@ -2184,7 +2241,7 @@ fn composite_into_u16(
   if tw == 0 || th == 0 {
     return;
   }
-  for (ox, oy) in placement_offsets(tile, bw, bh, tw, th, x, y) {
+  for_each_placement(tile, bw, bh, tw, th, x, y, |ox, oy| {
     let (obx, oby, otx, oty, rw, rh) = overlap_bounds(bw, bh, tw, th, ox, oy);
     for ry in 0..rh {
       for rx in 0..rw {
@@ -2215,7 +2272,7 @@ fn composite_into_u16(
         );
       }
     }
-  }
+  });
 }
 
 /// Composite `top` onto a 32-bit float RGBA `base` in place. Channels are clamped to `[0,1]` for
@@ -2235,11 +2292,19 @@ fn composite_into_f32(
   if tw == 0 || th == 0 {
     return;
   }
-  for (ox, oy) in placement_offsets(tile, bw, bh, tw, th, x, y) {
+  for_each_placement(tile, bw, bh, tw, th, x, y, |ox, oy| {
     let (obx, oby, otx, oty, rw, rh) = overlap_bounds(bw, bh, tw, th, ox, oy);
     for ry in 0..rh {
       for rx in 0..rw {
         let s = top.get_pixel(otx + rx, oty + ry).0;
+        // Compute the effective source alpha first. When it is 0 and the mode does not clear
+        // based on the source, the output equals the backdrop — skip the pixel so `norm_f32`
+        // does NOT clamp / sanitize the (possibly HDR > 1 or NaN) destination for a true no-op
+        // overlay. Only the f32 path needs this; u8/u16 normalize losslessly.
+        let a_s = (norm_f32(s[3]) * opacity).clamp(0.0, 1.0);
+        if a_s == 0.0 && !clears_dest_when_source_transparent(mode) {
+          continue;
+        }
         let cs = [
           norm_f32(s[0]),
           norm_f32(s[1]),
@@ -2257,7 +2322,7 @@ fn composite_into_f32(
         base.put_pixel(obx + rx, oby + ry, Rgba(out));
       }
     }
-  }
+  });
 }
 
 /// Convert the composited RGBA `DynamicImage` back to the base's `original` color family, so an
@@ -2279,6 +2344,41 @@ fn restore_color_type(img: DynamicImage, original: ColorType) -> DynamicImage {
   }
 }
 
+/// Flatten an RGBA8 working buffer onto black: premultiply RGB by the result alpha, then force the
+/// alpha opaque. Used before dropping the alpha channel for an opaque base so a coverage-reducing
+/// result (e.g. `DestOut`) is actually visible instead of keeping the untouched straight RGB.
+fn flatten_on_black_u8(img: &mut RgbaImage) {
+  for p in img.pixels_mut() {
+    let a = p.0[3] as f32 / 255.0;
+    for c in 0..3 {
+      p.0[c] = (p.0[c] as f32 * a).round().clamp(0.0, 255.0) as u8;
+    }
+    p.0[3] = 255;
+  }
+}
+
+/// 16-bit counterpart of `flatten_on_black_u8`.
+fn flatten_on_black_u16(img: &mut ImageBuffer<Rgba<u16>, Vec<u16>>) {
+  for p in img.pixels_mut() {
+    let a = p.0[3] as f32 / 65535.0;
+    for c in 0..3 {
+      p.0[c] = (p.0[c] as f32 * a).round().clamp(0.0, 65535.0) as u16;
+    }
+    p.0[3] = 65535;
+  }
+}
+
+/// 32-bit float counterpart of `flatten_on_black_u8` (alpha already normalized to `[0,1]`).
+fn flatten_on_black_f32(img: &mut Rgba32FImage) {
+  for p in img.pixels_mut() {
+    let a = p.0[3];
+    for c in 0..3 {
+      p.0[c] *= a;
+    }
+    p.0[3] = 1.0;
+  }
+}
+
 /// Composite `top` onto `base` at `(x, y)` (or tiled) with `mode`/`opacity`. Works at the base's
 /// native channel depth (8/16-bit or 32-bit float), then restores the base's ORIGINAL color type.
 fn apply_composite(
@@ -2296,16 +2396,25 @@ fn apply_composite(
     ColorType::Rgba16 | ColorType::Rgb16 | ColorType::La16 | ColorType::L16 => {
       let mut work = base.to_rgba16();
       composite_into_u16(&mut work, &top.to_rgba16(), x, y, mode, opacity, tile);
+      if !original.has_alpha() {
+        flatten_on_black_u16(&mut work);
+      }
       *base = restore_color_type(DynamicImage::ImageRgba16(work), original);
     }
     ColorType::Rgb32F | ColorType::Rgba32F => {
       let mut work = base.to_rgba32f();
       composite_into_f32(&mut work, &top.to_rgba32f(), x, y, mode, opacity, tile);
+      if !original.has_alpha() {
+        flatten_on_black_f32(&mut work);
+      }
       *base = restore_color_type(DynamicImage::ImageRgba32F(work), original);
     }
     _ => {
       let mut work = base.to_rgba8();
       composite_into_u8(&mut work, &top.to_rgba8(), x, y, mode, opacity, tile);
+      if !original.has_alpha() {
+        flatten_on_black_u8(&mut work);
+      }
       *base = restore_color_type(DynamicImage::ImageRgba8(work), original);
     }
   }
@@ -2389,8 +2498,8 @@ mod tests {
   }
 
   use super::{
-    BlendMode, ImageTransformArgs, apply_composite, apply_contrast, apply_huerotate, apply_opacity,
-    apply_transforms,
+    BlendMode, Gravity, ImageTransformArgs, apply_composite, apply_contrast, apply_huerotate,
+    apply_opacity, apply_transforms, resolve_position,
   };
   use image::{ColorType, DynamicImage, ImageBuffer, RgbImage, RgbaImage};
 
@@ -3018,5 +3127,107 @@ mod tests {
       );
     }
     assert_eq!(px[3], 65535, "opaque alpha preserved at 16-bit");
+  }
+
+  #[test]
+  fn resolve_position_defaults_to_center() {
+    // No explicit offset + default Center gravity: a 2x2 top on a 4x4 base lands at (1, 1).
+    assert_eq!(
+      resolve_position(false, 0, 0, Gravity::Center, 4, 4, 2, 2),
+      (1, 1)
+    );
+  }
+
+  #[test]
+  fn resolve_position_southeast_gravity() {
+    // SouthEast anchors the 2x2 top at the bottom-right corner of a 4x4 base: (2, 2).
+    assert_eq!(
+      resolve_position(false, 0, 0, Gravity::SouthEast, 4, 4, 2, 2),
+      (2, 2)
+    );
+  }
+
+  #[test]
+  fn resolve_position_offset_overrides_gravity() {
+    // has_offset = true: the explicit (left, top) wins, gravity is ignored (negatives allowed).
+    assert_eq!(
+      resolve_position(true, 3, -2, Gravity::SouthEast, 4, 4, 2, 2),
+      (3, -2)
+    );
+  }
+
+  #[test]
+  fn composite_tile_streams_1x1_over_large_base() {
+    // A 1x1 opaque top tiled over an 8x8 base must paint every one of the 64 pixels. Proves the
+    // streaming `for_each_placement` loop is correct AND bounded (no per-pixel Vec allocation).
+    let mut base =
+      DynamicImage::ImageRgba8(RgbaImage::from_raw(8, 8, vec![1, 2, 3, 255].repeat(64)).unwrap());
+    let top = DynamicImage::ImageRgba8(RgbaImage::from_raw(1, 1, vec![7, 8, 9, 255]).unwrap());
+    apply_composite(&mut base, &top, 0, 0, BlendMode::Over, 1.0, true);
+    let out = base.to_rgba8();
+    for y in 0..8 {
+      for x in 0..8 {
+        assert_eq!(
+          out.get_pixel(x, y).0,
+          [7, 8, 9, 255],
+          "tile must cover pixel ({x}, {y})"
+        );
+      }
+    }
+  }
+
+  #[test]
+  fn composite_f32_transparent_overlay_is_identity() {
+    // A fully transparent top over an HDR Rgba32F base (channel > 1.0) must leave the destination
+    // byte-for-byte untouched — the f32 no-op short-circuit must NOT clamp the highlight to 1.0.
+    let mut base = DynamicImage::ImageRgba32F(
+      image::ImageBuffer::<image::Rgba<f32>, _>::from_raw(1, 1, vec![4.0, 2.0, 0.5, 1.0]).unwrap(),
+    );
+    let top = DynamicImage::ImageRgba32F(
+      image::ImageBuffer::<image::Rgba<f32>, _>::from_raw(1, 1, vec![0.0, 0.0, 0.0, 0.0]).unwrap(),
+    );
+    apply_composite(&mut base, &top, 0, 0, BlendMode::Over, 1.0, false);
+    assert_eq!(base.color(), ColorType::Rgba32F, "must stay Rgba32F");
+    let px = base.to_rgba32f().get_pixel(0, 0).0;
+    assert_eq!(
+      px[0], 4.0,
+      "HDR highlight must survive a no-op overlay (not clamped to 1.0)"
+    );
+    assert_eq!(px[1], 2.0);
+    assert_eq!(px[2], 0.5);
+    assert_eq!(px[3], 1.0);
+  }
+
+  #[test]
+  fn composite_dest_out_flattens_opaque_rgb_to_black() {
+    // DestOut with an opaque top fully clears coverage (ao -> 0). On an Rgb8 (no-alpha) base the
+    // overlapped region must flatten to black rather than keep the original RGB, and stay Rgb8.
+    let mut base = DynamicImage::ImageRgb8(RgbImage::from_raw(1, 1, vec![200, 200, 200]).unwrap());
+    let top = DynamicImage::ImageRgba8(RgbaImage::from_raw(1, 1, vec![123, 45, 67, 255]).unwrap());
+    apply_composite(&mut base, &top, 0, 0, BlendMode::DestOut, 1.0, false);
+    assert_eq!(base.color(), ColorType::Rgb8, "opaque base stays Rgb8");
+    assert_eq!(
+      base.to_rgb8().get_pixel(0, 0).0,
+      [0, 0, 0],
+      "fully cleared coverage must flatten to black"
+    );
+  }
+
+  #[test]
+  fn composite_dest_out_half_flattens_opaque_rgb() {
+    // A 50%-opaque DestOut top halves coverage (ao ~= 0.5). Flatten-on-black scales the kept RGB
+    // by that alpha: 200 * 0.5 ~= 100. Stays Rgb8.
+    let mut base = DynamicImage::ImageRgb8(RgbImage::from_raw(1, 1, vec![200, 200, 200]).unwrap());
+    let top = DynamicImage::ImageRgba8(RgbaImage::from_raw(1, 1, vec![10, 20, 30, 128]).unwrap());
+    apply_composite(&mut base, &top, 0, 0, BlendMode::DestOut, 1.0, false);
+    assert_eq!(base.color(), ColorType::Rgb8);
+    let px = base.to_rgb8().get_pixel(0, 0).0;
+    for c in 0..3 {
+      assert!(
+        (98..=102).contains(&px[c]),
+        "channel {c}: ~100 after half-flatten; got {}",
+        px[c]
+      );
+    }
   }
 }

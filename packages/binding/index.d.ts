@@ -97,6 +97,10 @@ export declare class Transformer {
    * Composite `on_top` onto this image with a sharp-style blend mode, gravity-based
    * positioning, tiling, and per-overlay opacity. See `CompositeOptions`.
    *
+   * Placement (sharp parity): when neither `left` nor `top` is given the overlay is
+   * anchored by `gravity`, which defaults to the CENTRE of the base image. `left` and
+   * `top` must be provided together — supplying only one is an error.
+   *
    * Source-over (`blend: Over`, no tiling, full opacity) composites at 8-bit, identical
    * to `overlay`. Other blend modes / tiling / opacity < 1 run at the base image's native
    * channel depth (8/16-bit, or 32-bit float), then the result is converted back to the
@@ -273,11 +277,20 @@ export declare enum ChromaSubsampling {
 }
 
 export interface CompositeOptions {
-  /** Pixel offset from the top edge. Takes precedence over `gravity` when set. */
+  /**
+   * Pixel offset from the top edge. Provide both `top` and `left` together;
+   * supplying only one is an error. When set, takes precedence over `gravity`.
+   */
   top?: number
-  /** Pixel offset from the left edge. Takes precedence over `gravity` when set. */
+  /**
+   * Pixel offset from the left edge. Provide both `left` and `top` together;
+   * supplying only one is an error. When set, takes precedence over `gravity`.
+   */
   left?: number
-  /** Anchor position; used only when neither `left` nor `top` is provided. */
+  /**
+   * Anchor position. Defaults to `Center`; used only when neither `left` nor
+   * `top` is set.
+   */
   gravity?: Gravity
   /** Blend / compositing operator. Defaults to `Over` (source-over). */
   blend?: BlendMode

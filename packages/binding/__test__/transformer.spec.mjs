@@ -587,3 +587,43 @@ test('composite opacity fades the overlay (#138)', async (t) => {
   t.true(raw[2] >= 127 && raw[2] <= 129, `remaining blue ~= 128; got ${raw[2]}`)
   t.is(raw[3], 255, 'opaque base stays opaque')
 })
+
+// sharp parity: with NO options the overlay anchors at the CENTRE of the base. A 2x2 top on a
+// 4x4 base lands at (1,1)..(2,2), so the centre pixel is painted and the corner is untouched.
+test('composite default placement is the centre of the base (#138)', async (t) => {
+  const base = Uint8Array.from(Array.from({ length: 4 * 4 }, () => [0, 0, 0, 255]).flat())
+  const top = Uint8Array.from(Array.from({ length: 2 * 2 }, () => [10, 20, 30, 255]).flat())
+  const topPng = await Transformer.fromRgbaPixels(top, 2, 2).png()
+  const raw = await Transformer.fromRgbaPixels(base, 4, 4).composite(topPng).rawPixels()
+  // centre pixel (2,2) -> offset (2*4+2)*4 = 40 carries the overlay color.
+  t.is(raw[40], 10)
+  t.is(raw[41], 20)
+  t.is(raw[42], 30)
+  t.is(raw[43], 255)
+  // corner (0,0) -> offset 0 stays the untouched base color.
+  t.is(raw[0], 0)
+  t.is(raw[1], 0)
+  t.is(raw[2], 0)
+  t.is(raw[3], 255)
+})
+
+// sharp parity: `left` and `top` must be provided together — supplying exactly one throws.
+test('composite throws when only one of left/top is set (#138)', async (t) => {
+  const top = Uint8Array.from([10, 20, 30, 255])
+  const topPng = await Transformer.fromRgbaPixels(top, 1, 1).png()
+  const base = Uint8Array.from([0, 0, 0, 255])
+  t.throws(() => Transformer.fromRgbaPixels(base, 1, 1).composite(topPng, { left: 1 }))
+  t.throws(() => Transformer.fromRgbaPixels(base, 1, 1).composite(topPng, { top: 1 }))
+})
+
+// A non-finite opacity is sanitized to 1.0 (identity), matching opacity()/apply_opacity — the
+// overlay applies in full instead of corrupting the result to black/NaN.
+test('composite sanitizes NaN opacity to a full overlay (#138)', async (t) => {
+  const blue = Uint8Array.from([0, 0, 255, 255])
+  const red = Uint8Array.from([255, 0, 0, 255])
+  const topPng = await Transformer.fromRgbaPixels(red, 1, 1).png()
+  const raw = await Transformer.fromRgbaPixels(blue, 1, 1).composite(topPng, { opacity: NaN }).rawPixels()
+  t.true(raw[0] >= 254, `NaN opacity -> full red overlay; got ${raw[0]}`)
+  t.true(raw[2] <= 1, `blue fully covered; got ${raw[2]}`)
+  t.is(raw[3], 255, 'opaque base stays opaque')
+})
