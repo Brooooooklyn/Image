@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import test from 'ava'
 import { decode } from 'blurhash'
 
-import { JsColorType, ResizeFit, Transformer } from '../index.js'
+import { BlendMode, Gravity, JsColorType, ResizeFit, Transformer } from '../index.js'
 
 const __DIRNAME = join(fileURLToPath(import.meta.url), '..')
 const ROOT_DIR = join(__DIRNAME, '..', '..', '..')
@@ -518,4 +518,162 @@ test('reuse: rotate metadata is stable across raw pixels + encode (#158)', async
   const after = transformer.metadataSync()
   t.is(after.width, upright.width, 'rotate applied once, not re-rotated by the prior encode')
   t.is(after.height, upright.height)
+})
+
+// composite() with a Multiply blend: two mid-grays multiply to ~quarter brightness.
+// 0.502^2 * 255 ≈ 64. Alpha stays fully opaque.
+test('composite Multiply halves two mid-grays (#138)', async (t) => {
+  const gray = Uint8Array.from([128, 128, 128, 255])
+  const topPng = await Transformer.fromRgbaPixels(gray, 1, 1).png()
+  const raw = await Transformer.fromRgbaPixels(gray, 1, 1).composite(topPng, { blend: BlendMode.Multiply }).rawPixels()
+  t.true(raw[0] >= 63 && raw[0] <= 65, `Multiply of two mid-grays ~= 64; got ${raw[0]}`)
+  t.is(raw[3], 255, 'opaque base stays opaque')
+})
+
+// composite() with Gravity.SouthEast anchors a small overlay at the bottom-right corner,
+// leaving the rest of the base untouched.
+test('composite Gravity.SouthEast places the overlay bottom-right (#138)', async (t) => {
+  const base = Uint8Array.from(Array.from({ length: 4 * 4 }, () => [0, 0, 0, 255]).flat())
+  const top = Uint8Array.from(Array.from({ length: 2 * 2 }, () => [10, 20, 30, 255]).flat())
+  const topPng = await Transformer.fromRgbaPixels(top, 2, 2).png()
+  const raw = await Transformer.fromRgbaPixels(base, 4, 4).composite(topPng, { gravity: Gravity.SouthEast }).rawPixels()
+  // bottom-right pixel (3,3) -> offset (3*4+3)*4 = 60 carries the overlay color.
+  t.is(raw[60], 10)
+  t.is(raw[61], 20)
+  t.is(raw[62], 30)
+  t.is(raw[63], 255)
+  // top-left pixel (0,0) -> offset 0 is untouched base color.
+  t.is(raw[0], 0)
+  t.is(raw[1], 0)
+  t.is(raw[2], 0)
+  t.is(raw[3], 255)
+})
+
+// composite() with tile: true repeats the overlay across the whole base.
+test('composite tile covers the whole base (#138)', async (t) => {
+  const base = Uint8Array.from(Array.from({ length: 4 * 4 }, () => [50, 60, 70, 255]).flat())
+  const top = Uint8Array.from(Array.from({ length: 2 * 2 }, () => [10, 20, 30, 255]).flat())
+  const topPng = await Transformer.fromRgbaPixels(top, 2, 2).png()
+  const raw = await Transformer.fromRgbaPixels(base, 4, 4).composite(topPng, { tile: true }).rawPixels()
+  for (let i = 0; i < 16; i++) {
+    const o = i * 4
+    t.is(raw[o], 10, `pixel ${i} R`)
+    t.is(raw[o + 1], 20, `pixel ${i} G`)
+    t.is(raw[o + 2], 30, `pixel ${i} B`)
+    t.is(raw[o + 3], 255, `pixel ${i} A`)
+  }
+})
+
+// composite() with BlendMode.DestOver keeps the (opaque) backdrop: Fa = 1 - ab = 0,
+// so the base shows through unchanged.
+test('composite DestOver keeps the opaque backdrop (#138)', async (t) => {
+  const red = Uint8Array.from([255, 0, 0, 255])
+  const blue = Uint8Array.from([0, 0, 255, 255])
+  const topPng = await Transformer.fromRgbaPixels(blue, 1, 1).png()
+  const raw = await Transformer.fromRgbaPixels(red, 1, 1).composite(topPng, { blend: BlendMode.DestOver }).rawPixels()
+  t.is(raw[0], 255)
+  t.is(raw[1], 0)
+  t.is(raw[2], 0)
+  t.is(raw[3], 255)
+})
+
+test('composite chains preserve intermediate alpha on an opaque base (#138)', async (t) => {
+  // RGB8 (no-alpha) base from a JPEG decode
+  const baseJpeg = await fs.readFile(join(ROOT_DIR, 'un-optimized.jpg'))
+  const px = (n, c) => Uint8Array.from(Array.from({ length: n * n }, () => c).flat())
+  const red = await Transformer.fromRgbaPixels(px(40, [255, 0, 0, 255]), 40, 40).png()
+  const green = await Transformer.fromRgbaPixels(px(40, [0, 255, 0, 255]), 40, 40).png()
+  const raw = await new Transformer(baseJpeg)
+    .composite(red, { left: 0, top: 0, blend: BlendMode.DestOut })
+    .composite(green, { left: 0, top: 0, blend: BlendMode.DestOver })
+    .rawPixels()
+  // The DestOver fills the hole DestOut punched -> green, not flattened black.
+  t.true(raw[1] > 200 && raw[0] < 60 && raw[2] < 60, `expected green at (0,0), got [${raw[0]},${raw[1]},${raw[2]}]`)
+})
+
+test('composite alpha persists across an interleaved legacy overlay() on a no-alpha base (#138)', async (t) => {
+  // Persistent-RGBA-across-the-whole-chain semantics (matches sharp's flatten-at-end model):
+  // a DestOut hole survives a legacy overlay() and is still fillable by a later DestOver, instead
+  // of being flattened to opaque black between items. RGB8 (no-alpha) base from a JPEG decode.
+  const baseJpeg = await fs.readFile(join(ROOT_DIR, 'un-optimized.jpg'))
+  const fill = (n, c) => Uint8Array.from(Array.from({ length: n * n }, () => c).flat())
+  const opaque = await Transformer.fromRgbaPixels(fill(40, [10, 20, 30, 255]), 40, 40).png()
+  const red50 = await Transformer.fromRgbaPixels(fill(40, [255, 0, 0, 128]), 40, 40).png()
+  const green = await Transformer.fromRgbaPixels(fill(40, [0, 255, 0, 255]), 40, 40).png()
+  const raw = await new Transformer(baseJpeg)
+    .composite(opaque, { left: 0, top: 0, blend: BlendMode.DestOut })  // punch a transparent hole
+    .overlay(red50, 0, 0)                                              // legacy overlay sees the hole
+    .composite(green, { left: 0, top: 0, blend: BlendMode.DestOver })  // fills behind -> green shows
+    .rawPixels()
+  // Green must show through (DestOver filled the still-translucent area). The old per-item-flatten
+  // bug gave [128,0,0] (green lost). sharp gives ~[128,126,0]; allow tolerance.
+  t.true(raw[1] > 100, `expected green to persist through the chain, got [${raw[0]},${raw[1]},${raw[2]}]`)
+  t.true(raw[2] < 30, `blue should be ~0, got [${raw[0]},${raw[1]},${raw[2]}]`)
+})
+
+// composite() opacity fades the OVERLAY, so a 50%-faded red over blue blends to ~purple.
+test('composite opacity fades the overlay (#138)', async (t) => {
+  const blue = Uint8Array.from([0, 0, 255, 255])
+  const red = Uint8Array.from([255, 0, 0, 255])
+  const topPng = await Transformer.fromRgbaPixels(red, 1, 1).png()
+  const raw = await Transformer.fromRgbaPixels(blue, 1, 1).composite(topPng, { opacity: 0.5 }).rawPixels()
+  t.true(raw[0] >= 127 && raw[0] <= 129, `faded red ~= 128; got ${raw[0]}`)
+  t.true(raw[2] >= 127 && raw[2] <= 129, `remaining blue ~= 128; got ${raw[2]}`)
+  t.is(raw[3], 255, 'opaque base stays opaque')
+})
+
+// sharp parity: with NO options the overlay anchors at the CENTRE of the base. A 2x2 top on a
+// 4x4 base lands at (1,1)..(2,2), so the centre pixel is painted and the corner is untouched.
+test('composite default placement is the centre of the base (#138)', async (t) => {
+  const base = Uint8Array.from(Array.from({ length: 4 * 4 }, () => [0, 0, 0, 255]).flat())
+  const top = Uint8Array.from(Array.from({ length: 2 * 2 }, () => [10, 20, 30, 255]).flat())
+  const topPng = await Transformer.fromRgbaPixels(top, 2, 2).png()
+  const raw = await Transformer.fromRgbaPixels(base, 4, 4).composite(topPng).rawPixels()
+  // centre pixel (2,2) -> offset (2*4+2)*4 = 40 carries the overlay color.
+  t.is(raw[40], 10)
+  t.is(raw[41], 20)
+  t.is(raw[42], 30)
+  t.is(raw[43], 255)
+  // corner (0,0) -> offset 0 stays the untouched base color.
+  t.is(raw[0], 0)
+  t.is(raw[1], 0)
+  t.is(raw[2], 0)
+  t.is(raw[3], 255)
+})
+
+// sharp parity: `left` and `top` must be provided together — supplying exactly one throws.
+test('composite throws when only one of left/top is set (#138)', async (t) => {
+  const top = Uint8Array.from([10, 20, 30, 255])
+  const topPng = await Transformer.fromRgbaPixels(top, 1, 1).png()
+  const base = Uint8Array.from([0, 0, 0, 255])
+  t.throws(() => Transformer.fromRgbaPixels(base, 1, 1).composite(topPng, { left: 1 }))
+  t.throws(() => Transformer.fromRgbaPixels(base, 1, 1).composite(topPng, { top: 1 }))
+})
+
+// A non-finite opacity is sanitized to 1.0 (identity), matching opacity()/apply_opacity — the
+// overlay applies in full instead of corrupting the result to black/NaN.
+test('composite sanitizes NaN opacity to a full overlay (#138)', async (t) => {
+  const blue = Uint8Array.from([0, 0, 255, 255])
+  const red = Uint8Array.from([255, 0, 0, 255])
+  const topPng = await Transformer.fromRgbaPixels(red, 1, 1).png()
+  const raw = await Transformer.fromRgbaPixels(blue, 1, 1).composite(topPng, { opacity: NaN }).rawPixels()
+  t.true(raw[0] >= 254, `NaN opacity -> full red overlay; got ${raw[0]}`)
+  t.true(raw[2] <= 1, `blue fully covered; got ${raw[2]}`)
+  t.is(raw[3], 255, 'opaque base stays opaque')
+})
+
+// sharp parity: composite() rejects an overlay larger than the base in either dimension, throwing
+// "Image to composite must have same dimensions or smaller". Legacy overlay() keeps its historical
+// silent clipping and must NOT throw on the same oversized top.
+test('composite rejects an oversized overlay while overlay() clips (#138)', async (t) => {
+  const base = Uint8Array.from(Array.from({ length: 2 * 2 }, () => [0, 0, 0, 255]).flat())
+  const top = Uint8Array.from(Array.from({ length: 4 * 4 }, () => [10, 20, 30, 255]).flat())
+  const topPng = await Transformer.fromRgbaPixels(top, 4, 4).png()
+  const err = await t.throwsAsync(() => Transformer.fromRgbaPixels(base, 2, 2).composite(topPng).png())
+  t.true(
+    /same dimensions or smaller/.test(err.message),
+    `oversized composite must report the sharp error; got ${err && err.message}`,
+  )
+  // Legacy overlay() with the same oversized top clips instead of throwing.
+  await t.notThrowsAsync(() => Transformer.fromRgbaPixels(base, 2, 2).overlay(topPng, 0, 0).png())
 })

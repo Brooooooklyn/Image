@@ -33,8 +33,8 @@ HEVC codec — **ImageIO** on macOS, the **Windows Imaging Component (WIC)** on 
 the HEVC patent license. This means the package **ships no HEVC/HEIC codec** and incurs no codec
 licensing. On other platforms, HEIC decode and `.heic()` / `.heicSync()` reject with a clear error.
 
-> **Windows codec:** WIC's HEVC support comes from the OS *HEVC Video Extensions* / *HEIF Image
-> Extension* Store packages. They are absent on stock Windows Server / CI runners; on such a host
+> **Windows codec:** WIC's HEVC support comes from the OS _HEVC Video Extensions_ / _HEIF Image
+> Extension_ Store packages. They are absent on stock Windows Server / CI runners; on such a host
 > HEIC decode and encode reject with a clear "codec not installed" error.
 
 - **Decode:** reads `.heic` / `.heif` (HEVC-in-HEIF, e.g. iPhone photos). Image orientation (HEIF's
@@ -132,6 +132,8 @@ import {
   Transformer,
   ResizeFilterType,
   ChromaSubsampling,
+  BlendMode,
+  Gravity,
 } from '@napi-rs/image'
 import chalk from 'chalk'
 
@@ -195,7 +197,16 @@ writeFileSync('output-overlay-png.png', await new Transformer(PNG).overlay(PNG, 
 
 console.info(chalk.green('Overlay an image done'))
 
+writeFileSync(
+  'output-composite-png.png',
+  await new Transformer(PNG).composite(PNG, { gravity: Gravity.SouthEast, blend: BlendMode.Multiply }).png(),
+)
+
+console.info(chalk.green('Composite an image done'))
+
 writeFileSync('output-debian.jpeg', await Transformer.fromSvg(SVG, 'rgba(238, 235, 230, .9)').jpeg())
 
 console.info(chalk.green('Encoding jpeg from SVG done'))
 ```
+
+`composite()` uses W3C/CSS blend semantics (the same model as CSS `mix-blend-mode`, SVG, and Canvas) and matches sharp for opaque inputs and the default `Over` mode, differing only for translucent inputs combined with a separable blend mode (Multiply, Screen, HardLight, etc.).

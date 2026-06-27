@@ -109,12 +109,14 @@ const { instance: __napiInstance, module: __wasiModule, napiModule: __napiModule
 })
 module.exports = __napiModule.exports
 module.exports.Transformer = __napiModule.exports.Transformer
+module.exports.BlendMode = __napiModule.exports.BlendMode
 module.exports.ChromaSubsampling = __napiModule.exports.ChromaSubsampling
 module.exports.CompressionType = __napiModule.exports.CompressionType
 module.exports.compressJpeg = __napiModule.exports.compressJpeg
 module.exports.compressJpegSync = __napiModule.exports.compressJpegSync
 module.exports.FastResizeFilter = __napiModule.exports.FastResizeFilter
 module.exports.FilterType = __napiModule.exports.FilterType
+module.exports.Gravity = __napiModule.exports.Gravity
 module.exports.JsColorType = __napiModule.exports.JsColorType
 module.exports.losslessCompressPng = __napiModule.exports.losslessCompressPng
 module.exports.losslessCompressPngSync = __napiModule.exports.losslessCompressPngSync
