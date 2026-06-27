@@ -856,6 +856,10 @@ impl Task for EncodeTask {
     } else {
       let mut img = meta.image.clone();
       apply_transforms(&mut img, &self.image_transform_args, meta.orientation, true)?;
+      // Defer the composite flatten/restore to the end of the chain so intermediate alpha (e.g. a
+      // `DestOut` hole) survives for later items (#138). Capture the pre-composite color type.
+      let pre_composite_color = img.color();
+      let mut did_composite = false;
       for item in std::mem::take(&mut self.image_transform_args.overlay).into_iter() {
         let top = ThreadsafeDynamicImage::new(item.buffer.clone());
         let top_image_meta = top.get(true)?;
@@ -885,8 +889,11 @@ impl Task for EncodeTask {
           overlay(&mut img, &top_image_meta.image, x, y);
         } else {
           // composite(): always depth-aware at the base's native depth (8/16-bit or f32), so a
-          // default `Over` on an HDR base is not clamped to 8-bit and no-op guards apply.
-          apply_composite(
+          // default `Over` on an HDR base is not clamped to 8-bit and no-op guards apply. Keep the
+          // RGBA working buffer across the chain so intermediate alpha (e.g. a `DestOut` hole)
+          // survives for later items; flatten/restore happens once after the loop (#138).
+          did_composite = true;
+          composite_step(
             &mut img,
             &top_image_meta.image,
             x,
@@ -896,6 +903,11 @@ impl Task for EncodeTask {
             item.tile,
           );
         }
+      }
+      // Collapse the RGBA working buffer back to the pre-composite color type once, after the whole
+      // chain (flatten onto black first if that type had no alpha). Legacy overlay() is unaffected.
+      if did_composite {
+        finalize_composite(&mut img, pre_composite_color);
       }
       owned = img;
       &owned
@@ -2425,8 +2437,59 @@ fn flatten_on_black_f32(img: &mut Rgba32FImage) {
   }
 }
 
-/// Composite `top` onto `base` at `(x, y)` (or tiled) with `mode`/`opacity`. Works at the base's
-/// native channel depth (8/16-bit or 32-bit float), then restores the base's ORIGINAL color type.
+/// One composite step: composite `top` onto `base` at the base's native depth and leave `base`
+/// as the RGBA working image (Rgba8/Rgba16/Rgba32F). Does NOT flatten or restore the color type,
+/// so chained composites keep intermediate alpha. Call `finalize_composite` once after the chain.
+fn composite_step(
+  base: &mut DynamicImage,
+  top: &DynamicImage,
+  x: i64,
+  y: i64,
+  mode: BlendMode,
+  opacity: f32,
+  tile: bool,
+) {
+  // Choose working depth from the base. 16-bit -> Rgba16; 32-bit float -> Rgba32F; else Rgba8.
+  match base.color() {
+    ColorType::Rgba16 | ColorType::Rgb16 | ColorType::La16 | ColorType::L16 => {
+      let mut work = base.to_rgba16();
+      composite_into_u16(&mut work, &top.to_rgba16(), x, y, mode, opacity, tile);
+      *base = DynamicImage::ImageRgba16(work);
+    }
+    ColorType::Rgb32F | ColorType::Rgba32F => {
+      let mut work = base.to_rgba32f();
+      composite_into_f32(&mut work, &top.to_rgba32f(), x, y, mode, opacity, tile);
+      *base = DynamicImage::ImageRgba32F(work);
+    }
+    _ => {
+      let mut work = base.to_rgba8();
+      composite_into_u8(&mut work, &top.to_rgba8(), x, y, mode, opacity, tile);
+      *base = DynamicImage::ImageRgba8(work);
+    }
+  }
+}
+
+/// Collapse the RGBA working image back to `original` after the composite chain. If `original`
+/// has no alpha channel, flatten the accumulated alpha onto black first (so a coverage-reducing
+/// final result is visible), then restore the original color type.
+fn finalize_composite(base: &mut DynamicImage, original: ColorType) {
+  if !original.has_alpha() {
+    match base {
+      DynamicImage::ImageRgba16(work) => flatten_on_black_u16(work),
+      DynamicImage::ImageRgba32F(work) => flatten_on_black_f32(work),
+      DynamicImage::ImageRgba8(work) => flatten_on_black_u8(work),
+      _ => {}
+    }
+  }
+  let working = std::mem::replace(base, DynamicImage::ImageRgba8(ImageBuffer::new(0, 0)));
+  *base = restore_color_type(working, original);
+}
+
+/// Composite a single overlay end-to-end (step + finalize). Used by the unit tests and any
+/// single-shot caller; the encode pipeline uses `composite_step` across the chain + one
+/// `finalize_composite` at the end (see `compute`). Works at the base's native channel depth
+/// (8/16-bit or 32-bit float), then restores the base's ORIGINAL color type.
+#[cfg_attr(not(test), allow(dead_code))]
 fn apply_composite(
   base: &mut DynamicImage,
   top: &DynamicImage,
@@ -2437,33 +2500,8 @@ fn apply_composite(
   tile: bool,
 ) {
   let original = base.color();
-  // Choose working depth from the base. 16-bit -> Rgba16; 32-bit float -> Rgba32F; else Rgba8.
-  match original {
-    ColorType::Rgba16 | ColorType::Rgb16 | ColorType::La16 | ColorType::L16 => {
-      let mut work = base.to_rgba16();
-      composite_into_u16(&mut work, &top.to_rgba16(), x, y, mode, opacity, tile);
-      if !original.has_alpha() {
-        flatten_on_black_u16(&mut work);
-      }
-      *base = restore_color_type(DynamicImage::ImageRgba16(work), original);
-    }
-    ColorType::Rgb32F | ColorType::Rgba32F => {
-      let mut work = base.to_rgba32f();
-      composite_into_f32(&mut work, &top.to_rgba32f(), x, y, mode, opacity, tile);
-      if !original.has_alpha() {
-        flatten_on_black_f32(&mut work);
-      }
-      *base = restore_color_type(DynamicImage::ImageRgba32F(work), original);
-    }
-    _ => {
-      let mut work = base.to_rgba8();
-      composite_into_u8(&mut work, &top.to_rgba8(), x, y, mode, opacity, tile);
-      if !original.has_alpha() {
-        flatten_on_black_u8(&mut work);
-      }
-      *base = restore_color_type(DynamicImage::ImageRgba8(work), original);
-    }
-  }
+  composite_step(base, top, x, y, mode, opacity, tile);
+  finalize_composite(base, original);
 }
 
 #[inline]
@@ -2545,7 +2583,8 @@ mod tests {
 
   use super::{
     BlendMode, Gravity, ImageTransformArgs, apply_composite, apply_contrast, apply_huerotate,
-    apply_opacity, apply_transforms, for_each_placement, resolve_position,
+    apply_opacity, apply_transforms, composite_step, finalize_composite, for_each_placement,
+    resolve_position,
   };
   use image::{ColorType, DynamicImage, ImageBuffer, RgbImage, RgbaImage};
 
@@ -3273,6 +3312,35 @@ mod tests {
         (98..=102).contains(&px[c]),
         "channel {c}: ~100 after half-flatten; got {}",
         px[c]
+      );
+    }
+  }
+
+  #[test]
+  fn composite_chain_preserves_intermediate_alpha_on_opaque_base() {
+    // Two chained composites on a no-alpha Rgb8 base, mirroring the compute() flow (step xN +
+    // finalize once). `DestOut` with an opaque top punches a full hole (ao -> 0); the later
+    // `DestOver` must fill that hole with green. Deferring flatten/restore to `finalize_composite`
+    // keeps the intermediate alpha alive between steps so the green shows through instead of being
+    // flattened to black per-item (#138).
+    let fill = |px: [u8; 4]| -> Vec<u8> { px.iter().copied().cycle().take(2 * 2 * 4).collect() };
+    let mut base = DynamicImage::ImageRgb8(RgbImage::from_raw(2, 2, vec![255; 2 * 2 * 3]).unwrap());
+    let top_a =
+      DynamicImage::ImageRgba8(RgbaImage::from_raw(2, 2, fill([10, 20, 30, 255])).unwrap());
+    let top_b =
+      DynamicImage::ImageRgba8(RgbaImage::from_raw(2, 2, fill([0, 255, 0, 255])).unwrap());
+    let original = base.color();
+    composite_step(&mut base, &top_a, 0, 0, BlendMode::DestOut, 1.0, false);
+    composite_step(&mut base, &top_b, 0, 0, BlendMode::DestOver, 1.0, false);
+    finalize_composite(&mut base, original);
+    assert_eq!(base.color(), ColorType::Rgb8, "opaque base stays Rgb8");
+    let img = base.to_rgb8();
+    for px in img.pixels() {
+      assert_eq!(
+        px.0,
+        [0, 255, 0],
+        "DestOver must fill the DestOut hole with green, not flattened black; got {:?}",
+        px.0
       );
     }
   }

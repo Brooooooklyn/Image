@@ -577,6 +577,20 @@ test('composite DestOver keeps the opaque backdrop (#138)', async (t) => {
   t.is(raw[3], 255)
 })
 
+test('composite chains preserve intermediate alpha on an opaque base (#138)', async (t) => {
+  // RGB8 (no-alpha) base from a JPEG decode
+  const baseJpeg = await fs.readFile(join(ROOT_DIR, 'un-optimized.jpg'))
+  const px = (n, c) => Uint8Array.from(Array.from({ length: n * n }, () => c).flat())
+  const red = await Transformer.fromRgbaPixels(px(40, [255, 0, 0, 255]), 40, 40).png()
+  const green = await Transformer.fromRgbaPixels(px(40, [0, 255, 0, 255]), 40, 40).png()
+  const raw = await new Transformer(baseJpeg)
+    .composite(red, { left: 0, top: 0, blend: BlendMode.DestOut })
+    .composite(green, { left: 0, top: 0, blend: BlendMode.DestOver })
+    .rawPixels()
+  // The DestOver fills the hole DestOut punched -> green, not flattened black.
+  t.true(raw[1] > 200 && raw[0] < 60 && raw[2] < 60, `expected green at (0,0), got [${raw[0]},${raw[1]},${raw[2]}]`)
+})
+
 // composite() opacity fades the OVERLAY, so a 50%-faded red over blue blends to ~purple.
 test('composite opacity fades the overlay (#138)', async (t) => {
   const blue = Uint8Array.from([0, 0, 255, 255])
