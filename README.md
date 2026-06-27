@@ -208,3 +208,5 @@ writeFileSync('output-debian.jpeg', await Transformer.fromSvg(SVG, 'rgba(238, 23
 
 console.info(chalk.green('Encoding jpeg from SVG done'))
 ```
+
+`composite()` uses W3C/CSS blend semantics (the same model as CSS `mix-blend-mode`, SVG, and Canvas) and matches sharp for opaque inputs and the default `Over` mode, differing only for translucent inputs combined with a separable blend mode (Multiply, Screen, HardLight, etc.).

@@ -115,6 +115,12 @@ export declare class Transformer {
    * (where the W3C blend modes are defined), so HDR channel values outside `[0,1]` in the
    * composited region are clamped; fully-transparent sources, `Dest`, and `DestOver` over an
    * opaque backdrop are preserved exactly.
+   *
+   * Blending follows the W3C "Compositing and Blending Level 1" model (the same one used by CSS
+   * `mix-blend-mode`, SVG, and Canvas). Results match sharp/libvips for opaque inputs and for
+   * `Over` at any alpha; for a translucent source or backdrop combined with a separable blend mode
+   * (Multiply, Screen, HardLight, etc.), per-pixel values differ from sharp, which uses
+   * premultiplied-alpha math.
    */
   composite(onTop: Uint8Array, options?: CompositeOptions | undefined | null): this
   /** Return this image's pixels as a native endian byte slice. */
