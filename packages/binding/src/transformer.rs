@@ -906,6 +906,9 @@ impl Task for EncodeTask {
       }
       // Collapse the RGBA working buffer back to the pre-composite color type once, after the whole
       // chain (flatten onto black first if that type had no alpha). Legacy overlay() is unaffected.
+      // Any legacy overlay() interleaved among composite() items also draws onto this same live RGBA
+      // buffer, so alpha from an earlier composite is visible to later overlay()/composite() items —
+      // matching sharp's flatten-at-encode model.
       if did_composite {
         finalize_composite(&mut img, pre_composite_color);
       }

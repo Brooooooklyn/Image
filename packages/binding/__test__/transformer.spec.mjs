@@ -591,6 +591,26 @@ test('composite chains preserve intermediate alpha on an opaque base (#138)', as
   t.true(raw[1] > 200 && raw[0] < 60 && raw[2] < 60, `expected green at (0,0), got [${raw[0]},${raw[1]},${raw[2]}]`)
 })
 
+test('composite alpha persists across an interleaved legacy overlay() on a no-alpha base (#138)', async (t) => {
+  // Persistent-RGBA-across-the-whole-chain semantics (matches sharp's flatten-at-end model):
+  // a DestOut hole survives a legacy overlay() and is still fillable by a later DestOver, instead
+  // of being flattened to opaque black between items. RGB8 (no-alpha) base from a JPEG decode.
+  const baseJpeg = await fs.readFile(join(ROOT_DIR, 'un-optimized.jpg'))
+  const fill = (n, c) => Uint8Array.from(Array.from({ length: n * n }, () => c).flat())
+  const opaque = await Transformer.fromRgbaPixels(fill(40, [10, 20, 30, 255]), 40, 40).png()
+  const red50 = await Transformer.fromRgbaPixels(fill(40, [255, 0, 0, 128]), 40, 40).png()
+  const green = await Transformer.fromRgbaPixels(fill(40, [0, 255, 0, 255]), 40, 40).png()
+  const raw = await new Transformer(baseJpeg)
+    .composite(opaque, { left: 0, top: 0, blend: BlendMode.DestOut })  // punch a transparent hole
+    .overlay(red50, 0, 0)                                              // legacy overlay sees the hole
+    .composite(green, { left: 0, top: 0, blend: BlendMode.DestOver })  // fills behind -> green shows
+    .rawPixels()
+  // Green must show through (DestOver filled the still-translucent area). The old per-item-flatten
+  // bug gave [128,0,0] (green lost). sharp gives ~[128,126,0]; allow tolerance.
+  t.true(raw[1] > 100, `expected green to persist through the chain, got [${raw[0]},${raw[1]},${raw[2]}]`)
+  t.true(raw[2] < 30, `blue should be ~0, got [${raw[0]},${raw[1]},${raw[2]}]`)
+})
+
 // composite() opacity fades the OVERLAY, so a 50%-faded red over blue blends to ~purple.
 test('composite opacity fades the overlay (#138)', async (t) => {
   const blue = Uint8Array.from([0, 0, 255, 255])
