@@ -2466,6 +2466,10 @@ fn flatten_on_black_f32(img: &mut Rgba32FImage) {
 /// One composite step: composite `top` onto `base` at the base's native depth and leave `base`
 /// as the RGBA working image (Rgba8/Rgba16/Rgba32F). Does NOT flatten or restore the color type,
 /// so chained composites keep intermediate alpha. Call `finalize_composite` once after the chain.
+///
+/// When `base` is already an RGBA working buffer (every step after the first, and any RGBA-input
+/// base) it is mutated IN PLACE — no full-frame copy. Only the first non-RGBA base is converted
+/// (copied) once to the matching depth; later steps then reuse that same backing buffer (#138).
 fn composite_step(
   base: &mut DynamicImage,
   top: &DynamicImage,
@@ -2475,23 +2479,38 @@ fn composite_step(
   opacity: f32,
   tile: bool,
 ) {
-  // Choose working depth from the base. 16-bit -> Rgba16; 32-bit float -> Rgba32F; else Rgba8.
-  match base.color() {
-    ColorType::Rgba16 | ColorType::Rgb16 | ColorType::La16 | ColorType::L16 => {
-      let mut work = base.to_rgba16();
-      composite_into_u16(&mut work, &top.to_rgba16(), x, y, mode, opacity, tile);
-      *base = DynamicImage::ImageRgba16(work);
+  match base {
+    // Already an RGBA working buffer (every step after the first, and any RGBA-input base): mutate
+    // in place — no full-frame copy. Only the top is converted (it differs each item and is small).
+    DynamicImage::ImageRgba8(work) => {
+      composite_into_u8(work, &top.to_rgba8(), x, y, mode, opacity, tile)
     }
-    ColorType::Rgb32F | ColorType::Rgba32F => {
-      let mut work = base.to_rgba32f();
-      composite_into_f32(&mut work, &top.to_rgba32f(), x, y, mode, opacity, tile);
-      *base = DynamicImage::ImageRgba32F(work);
+    DynamicImage::ImageRgba16(work) => {
+      composite_into_u16(work, &top.to_rgba16(), x, y, mode, opacity, tile)
     }
-    _ => {
-      let mut work = base.to_rgba8();
-      composite_into_u8(&mut work, &top.to_rgba8(), x, y, mode, opacity, tile);
-      *base = DynamicImage::ImageRgba8(work);
+    DynamicImage::ImageRgba32F(work) => {
+      composite_into_f32(work, &top.to_rgba32f(), x, y, mode, opacity, tile)
     }
+    // First step on a non-RGBA base: convert ONCE to the matching depth, composite, store back. The
+    // working depth follows the base's native depth (16-bit -> Rgba16, 32-bit float -> Rgba32F, else
+    // Rgba8) exactly as before; subsequent steps then hit the in-place arms above.
+    _ => match base.color() {
+      ColorType::Rgba16 | ColorType::Rgb16 | ColorType::La16 | ColorType::L16 => {
+        let mut work = base.to_rgba16();
+        composite_into_u16(&mut work, &top.to_rgba16(), x, y, mode, opacity, tile);
+        *base = DynamicImage::ImageRgba16(work);
+      }
+      ColorType::Rgb32F | ColorType::Rgba32F => {
+        let mut work = base.to_rgba32f();
+        composite_into_f32(&mut work, &top.to_rgba32f(), x, y, mode, opacity, tile);
+        *base = DynamicImage::ImageRgba32F(work);
+      }
+      _ => {
+        let mut work = base.to_rgba8();
+        composite_into_u8(&mut work, &top.to_rgba8(), x, y, mode, opacity, tile);
+        *base = DynamicImage::ImageRgba8(work);
+      }
+    },
   }
 }
 
@@ -3369,6 +3388,50 @@ mod tests {
         px.0
       );
     }
+  }
+
+  #[test]
+  fn composite_step_reuses_rgba_working_buffer_in_place() {
+    // After the first step promotes the base to an RGBA working buffer, later steps must mutate that
+    // SAME buffer instead of reallocating a full-frame copy per item (#223 perf). The old code did
+    // `*base = ImageRgba8(base.to_rgba8())` every call, which reallocates, so the backing pointer would
+    // change between steps; the in-place path keeps it stable.
+    let red = DynamicImage::ImageRgba8(RgbaImage::from_pixel(2, 2, Rgba([255, 0, 0, 255])));
+    let green = DynamicImage::ImageRgba8(RgbaImage::from_pixel(2, 2, Rgba([0, 255, 0, 255])));
+    let mut base = DynamicImage::ImageRgb8(RgbImage::from_pixel(4, 4, image::Rgb([0, 0, 0])));
+
+    // First step: converts Rgb8 -> Rgba8 (one allocation expected).
+    composite_step(&mut base, &red, 0, 0, BlendMode::Over, 1.0, false);
+    assert!(
+      matches!(base, DynamicImage::ImageRgba8(_)),
+      "promoted to Rgba8 working buffer"
+    );
+    let ptr_after_first = base.as_rgba8().unwrap().as_raw().as_ptr();
+
+    // Second step: must reuse the same backing buffer (no realloc) and composite correctly.
+    composite_step(&mut base, &green, 2, 2, BlendMode::Over, 1.0, false);
+    let ptr_after_second = base.as_rgba8().unwrap().as_raw().as_ptr();
+    assert_eq!(
+      ptr_after_first, ptr_after_second,
+      "second composite_step must mutate the buffer in place"
+    );
+
+    let img = base.to_rgba8();
+    assert_eq!(
+      img.get_pixel(0, 0).0,
+      [255, 0, 0, 255],
+      "first overlay applied"
+    );
+    assert_eq!(
+      img.get_pixel(2, 2).0,
+      [0, 255, 0, 255],
+      "second overlay applied"
+    );
+    assert_eq!(
+      img.get_pixel(0, 2).0,
+      [0, 0, 0, 255],
+      "untouched region stays black/opaque"
+    );
   }
 
   #[test]
