@@ -26,7 +26,12 @@ export declare class Transformer {
    * The image is scaled to the maximum possible size that fits
    * within the bounds specified by `width` and `height`.
    */
-  resize(widthOrOptions: number | ResizeOptions, height?: number | undefined | null, filter?: ResizeFilterType | undefined | null, fit?: ResizeFit | undefined | null): this
+  resize(
+    widthOrOptions: number | ResizeOptions,
+    height?: number | undefined | null,
+    filter?: ResizeFilterType | undefined | null,
+    fit?: ResizeFit | undefined | null,
+  ): this
   /**
    * Resize this image using the specified filter algorithm.
    * The image is scaled to the maximum possible size that fits
@@ -86,8 +91,38 @@ export declare class Transformer {
   opacity(factor: number): this
   /** Crop a cut-out of this image delimited by the bounding rectangle. */
   crop(x: number, y: number, width: number, height: number): this
-  /** Overlay an image at a given coordinate (x, y) */
+  /** Overlay an image at a given coordinate (x, y) using source-over blending. */
   overlay(onTop: Uint8Array, x: number, y: number): this
+  /**
+   * Composite `on_top` onto this image with a sharp-style blend mode, gravity-based
+   * positioning, tiling, and per-overlay opacity. See `CompositeOptions`.
+   *
+   * Placement (sharp parity): when neither `left` nor `top` is given the overlay is
+   * anchored by `gravity`, which defaults to the CENTRE of the base image. `left` and
+   * `top` must be provided together — supplying only one is an error. The overlay must be
+   * the same size as the base or smaller in both dimensions; a larger overlay is an error
+   * (`Image to composite must have same dimensions or smaller`). When `tile` is set the
+   * overlay repeats to fill the whole base, phased so one tile aligns with the resolved
+   * `left`/`top` or `gravity`.
+   *
+   * `composite()` always composites at the base image's native channel depth (8/16-bit, or
+   * 32-bit float), then converts the result back to the base's original color type — so an
+   * opaque base never gains an alpha channel. (Even a default `Over` runs through this depth-
+   * aware path; its 8-bit output may differ from `overlay`'s by at most 1 per channel due to
+   * rounding vs truncation.) On an opaque base, coverage-reducing modes (Clear/Out/DestOut/Xor)
+   * flatten the overlapped region toward black, since the removed alpha can't be stored without
+   * an alpha channel. For 32-bit-float (HDR) bases, blend-mode compositing operates in `[0,1]`
+   * (where the W3C blend modes are defined), so HDR channel values outside `[0,1]` in the
+   * composited region are clamped; fully-transparent sources, `Dest`, and `DestOver` over an
+   * opaque backdrop are preserved exactly.
+   *
+   * Blending follows the W3C "Compositing and Blending Level 1" model (the same one used by CSS
+   * `mix-blend-mode`, SVG, and Canvas). Results match sharp/libvips for opaque inputs and for
+   * `Over` at any alpha; for a translucent source or backdrop combined with a separable blend mode
+   * (Multiply, Screen, HardLight, etc.), per-pixel values differ from sharp, which uses
+   * premultiplied-alpha math.
+   */
+  composite(onTop: Uint8Array, options?: CompositeOptions | undefined | null): this
   /** Return this image's pixels as a native endian byte slice. */
   rawPixels(signal?: AbortSignal | undefined | null): Promise<Buffer>
   /** Return this image's pixels as a native endian byte slice. */
@@ -156,6 +191,63 @@ export interface AvifConfig {
 }
 
 /**
+ * Compositing / blending operator for `Transformer.composite`. Mirrors sharp/libvips
+ * blend modes: Porter-Duff operators plus the W3C separable blend modes.
+ */
+export declare enum BlendMode {
+  /** Source-over (default) — the overlay is drawn on top of the base. */
+  Over = 0,
+  /** Clear — neither source nor destination is shown. */
+  Clear = 1,
+  /** Source — only the overlay is shown. */
+  Source = 2,
+  /** Source-in — the overlay clipped to the base's shape. */
+  In = 3,
+  /** Source-out — the overlay where the base is transparent. */
+  Out = 4,
+  /** Source-atop — the overlay drawn only where the base is opaque. */
+  Atop = 5,
+  /** Destination — only the base is shown (overlay ignored). */
+  Dest = 6,
+  /** Destination-over — the base drawn on top of the overlay. */
+  DestOver = 7,
+  /** Destination-in — the base clipped to the overlay's shape. */
+  DestIn = 8,
+  /** Destination-out — the base where the overlay is transparent. */
+  DestOut = 9,
+  /** Destination-atop — the base drawn only where the overlay is opaque. */
+  DestAtop = 10,
+  /** Exclusive-or of the two coverage regions. */
+  Xor = 11,
+  /** Additive blending. */
+  Add = 12,
+  /** Saturating additive blending. */
+  Saturate = 13,
+  /** Multiply the channels. */
+  Multiply = 14,
+  /** Screen (inverse-multiply) the channels. */
+  Screen = 15,
+  /** Overlay (multiply or screen depending on the backdrop). */
+  Overlay = 16,
+  /** Keep the darker of the two channels. */
+  Darken = 17,
+  /** Keep the lighter of the two channels. */
+  Lighten = 18,
+  /** Brighten the backdrop to reflect the source. */
+  ColorDodge = 19,
+  /** Darken the backdrop to reflect the source. */
+  ColorBurn = 20,
+  /** Hard light (overlay with swapped operands). */
+  HardLight = 21,
+  /** Soft light. */
+  SoftLight = 22,
+  /** Absolute difference of the channels. */
+  Difference = 23,
+  /** Like difference but with lower contrast. */
+  Exclusion = 24,
+}
+
+/**
  * https://en.wikipedia.org/wiki/Chroma_subsampling#Types_of_sampling_and_subsampling
  * https://developer.mozilla.org/en-US/docs/Web/Media/Formats/Video_concepts
  */
@@ -195,7 +287,37 @@ export declare enum ChromaSubsampling {
    * What if the chroma subsampling model is 4:0:0?
    * That says to use every pixel of luma data, but that each row has 0 chroma samples applied to it. The resulting image, then, is comprised solely of the luminance data—a greyscale image.
    */
-  Yuv400 = 3
+  Yuv400 = 3,
+}
+
+export interface CompositeOptions {
+  /**
+   * Pixel offset from the top edge. Provide both `top` and `left` together;
+   * supplying only one is an error. When set, takes precedence over `gravity`.
+   */
+  top?: number
+  /**
+   * Pixel offset from the left edge. Provide both `left` and `top` together;
+   * supplying only one is an error. When set, takes precedence over `gravity`.
+   */
+  left?: number
+  /**
+   * Anchor position. Defaults to `Center`; used only when neither `left` nor
+   * `top` is set.
+   */
+  gravity?: Gravity
+  /** Blend / compositing operator. Defaults to `Over` (source-over). */
+  blend?: BlendMode
+  /**
+   * Repeat the overlay to fill the whole base, phased so a tile aligns with the resolved
+   * `left`/`top` or `gravity`.
+   */
+  tile?: boolean
+  /**
+   * Multiply the overlay's alpha by this factor (0.0..=1.0). Fades the OVERLAY
+   * (distinct from `Transformer.opacity`, which fades the base).
+   */
+  opacity?: number
 }
 
 export declare enum CompressionType {
@@ -204,10 +326,14 @@ export declare enum CompressionType {
   /** Fast, minimal compression */
   Fast = 1,
   /** High compression level */
-  Best = 2
+  Best = 2,
 }
 
-export declare function compressJpeg(input: Uint8Array, options?: JpegCompressOptions | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>
+export declare function compressJpeg(
+  input: Uint8Array,
+  options?: JpegCompressOptions | undefined | null,
+  signal?: AbortSignal | undefined | null,
+): Promise<Buffer>
 
 export declare function compressJpegSync(input: Uint8Array, options?: JpegCompressOptions | undefined | null): Buffer
 
@@ -248,7 +374,7 @@ export declare enum FastResizeFilter {
    * Lanczos filter (a truncated sinc) on all pixels that may contribute
    * to the output value.
    */
-  Lanczos3 = 5
+  Lanczos3 = 5,
 }
 
 export interface FastResizeOptions {
@@ -276,7 +402,32 @@ export declare enum FilterType {
    * Uses a heuristic to select one of the preceding filters for each
    * scanline rather than one filter for the entire image
    */
-  Adaptive = 5
+  Adaptive = 5,
+}
+
+/**
+ * Where to anchor the overlay relative to the base image when no explicit
+ * `left`/`top` is given.
+ */
+export declare enum Gravity {
+  /** Center of the base image. */
+  Center = 0,
+  /** Top edge, horizontally centered. */
+  North = 1,
+  /** Top-right corner. */
+  NorthEast = 2,
+  /** Right edge, vertically centered. */
+  East = 3,
+  /** Bottom-right corner. */
+  SouthEast = 4,
+  /** Bottom edge, horizontally centered. */
+  South = 5,
+  /** Bottom-left corner. */
+  SouthWest = 6,
+  /** Left edge, vertically centered. */
+  West = 7,
+  /** Top-left corner. */
+  NorthWest = 8,
 }
 
 /**
@@ -337,10 +488,14 @@ export declare enum JsColorType {
   /** Pixel is 32-bit float RGB */
   Rgb32F = 8,
   /** Pixel is 32-bit float RGBA */
-  Rgba32F = 9
+  Rgba32F = 9,
 }
 
-export declare function losslessCompressPng(input: Uint8Array, options?: PNGLosslessOptions | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>
+export declare function losslessCompressPng(
+  input: Uint8Array,
+  options?: PNGLosslessOptions | undefined | null,
+  signal?: AbortSignal | undefined | null,
+): Promise<Buffer>
 
 export declare function losslessCompressPngSync(input: Buffer, options?: PNGLosslessOptions | undefined | null): Buffer
 
@@ -362,7 +517,7 @@ export declare enum Orientation {
   MirrorHorizontalAndRotate270Cw = 5,
   Rotate90Cw = 6,
   MirrorHorizontalAndRotate90Cw = 7,
-  Rotate270Cw = 8
+  Rotate270Cw = 8,
 }
 
 export interface PngEncodeOptions {
@@ -415,7 +570,11 @@ export interface PNGLosslessOptions {
   strip?: boolean
 }
 
-export declare function pngQuantize(input: Uint8Array, options?: PngQuantOptions | undefined | null, signal?: AbortSignal | undefined | null): Promise<Buffer>
+export declare function pngQuantize(
+  input: Uint8Array,
+  options?: PngQuantOptions | undefined | null,
+  signal?: AbortSignal | undefined | null,
+): Promise<Buffer>
 
 export declare function pngQuantizeSync(input: Uint8Array, options?: PngQuantOptions | undefined | null): Buffer
 
@@ -442,7 +601,7 @@ export declare enum PngRowFilter {
   Sub = 1,
   Up = 2,
   Average = 3,
-  Paeth = 4
+  Paeth = 4,
 }
 
 /**
@@ -523,7 +682,7 @@ export declare enum ResizeFilterType {
   /** Gaussian Filter */
   Gaussian = 3,
   /** Lanczos with window 3 */
-  Lanczos3 = 4
+  Lanczos3 = 4,
 }
 
 export declare enum ResizeFit {
@@ -538,7 +697,7 @@ export declare enum ResizeFit {
    * Preserving aspect ratio
    * resize the image to be as large as possible while ensuring its dimensions are less than or equal to both those specified.
    */
-  Inside = 2
+  Inside = 2,
 }
 
 export interface ResizeOptions {

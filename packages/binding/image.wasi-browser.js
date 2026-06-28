@@ -58,12 +58,14 @@ const {
 })
 export default __napiModule.exports
 export const Transformer = __napiModule.exports.Transformer
+export const BlendMode = __napiModule.exports.BlendMode
 export const ChromaSubsampling = __napiModule.exports.ChromaSubsampling
 export const CompressionType = __napiModule.exports.CompressionType
 export const compressJpeg = __napiModule.exports.compressJpeg
 export const compressJpegSync = __napiModule.exports.compressJpegSync
 export const FastResizeFilter = __napiModule.exports.FastResizeFilter
 export const FilterType = __napiModule.exports.FilterType
+export const Gravity = __napiModule.exports.Gravity
 export const JsColorType = __napiModule.exports.JsColorType
 export const losslessCompressPng = __napiModule.exports.losslessCompressPng
 export const losslessCompressPngSync = __napiModule.exports.losslessCompressPngSync
