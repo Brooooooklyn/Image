@@ -2261,6 +2261,16 @@ fn composite_into_u8(
           d[2] as f32 / 255.0,
           d[3] as f32 / 255.0,
         ];
+        let a_s = (cs[3] * opacity).clamp(0.0, 1.0);
+        // Mirror composite_into_f32's destination-preserving skip so a no-op composite
+        // (Dest, transparent-source no-op, DestOver over an opaque backdrop) keeps the
+        // destination's color stored under alpha 0 instead of canonicalizing it to black.
+        let preserves_dest = mode == BlendMode::Dest
+          || (a_s == 0.0 && !clears_dest_when_source_transparent(mode))
+          || (mode == BlendMode::DestOver && cb[3] >= 1.0);
+        if preserves_dest {
+          continue;
+        }
         let out = blend_rgba_f32(cb, cs, mode, opacity);
         base.put_pixel(
           obx + rx,
@@ -2311,6 +2321,16 @@ fn composite_into_u16(
           d[2] as f32 / 65535.0,
           d[3] as f32 / 65535.0,
         ];
+        let a_s = (cs[3] * opacity).clamp(0.0, 1.0);
+        // Mirror composite_into_f32's destination-preserving skip so a no-op composite
+        // (Dest, transparent-source no-op, DestOver over an opaque backdrop) keeps the
+        // destination's color stored under alpha 0 instead of canonicalizing it to black.
+        let preserves_dest = mode == BlendMode::Dest
+          || (a_s == 0.0 && !clears_dest_when_source_transparent(mode))
+          || (mode == BlendMode::DestOver && cb[3] >= 1.0);
+        if preserves_dest {
+          continue;
+        }
         let out = blend_rgba_f32(cb, cs, mode, opacity);
         base.put_pixel(
           obx + rx,
@@ -2586,10 +2606,10 @@ mod tests {
 
   use super::{
     BlendMode, Gravity, ImageTransformArgs, apply_composite, apply_contrast, apply_huerotate,
-    apply_opacity, apply_transforms, composite_step, finalize_composite, for_each_placement,
-    resolve_position,
+    apply_opacity, apply_transforms, composite_into_u8, composite_into_u16, composite_step,
+    finalize_composite, for_each_placement, resolve_position,
   };
-  use image::{ColorType, DynamicImage, ImageBuffer, RgbImage, RgbaImage};
+  use image::{ColorType, DynamicImage, ImageBuffer, RgbImage, Rgba, RgbaImage};
 
   #[test]
   fn huerotate_preserves_16bit_color_through_pipeline() {
@@ -3390,6 +3410,64 @@ mod tests {
     assert_eq!(px[1], 2.0);
     assert_eq!(px[2], 0.5);
     assert_eq!(px[3], 1.0);
+  }
+
+  #[test]
+  fn composite_u8_preserves_color_under_transparent_alpha() {
+    // A destination pixel can carry non-black color UNDER a fully-transparent alpha. A no-op
+    // composite (Dest, or Over with opacity 0) must keep that color exactly, instead of letting
+    // blend_rgba_f32 canonicalize it to [0,0,0,0] when the result alpha is 0. This guard brings the
+    // u8 integer path to parity with the f32 path's destination-preserving skip.
+    let top = RgbaImage::from_pixel(2, 2, Rgba([255, 255, 255, 255]));
+
+    // Dest ignores the overlay entirely: every covered pixel must be preserved.
+    let mut base = RgbaImage::from_pixel(2, 2, Rgba([200, 100, 50, 0]));
+    composite_into_u8(&mut base, &top, 0, 0, BlendMode::Dest, 1.0, false);
+    for px in base.pixels() {
+      assert_eq!(
+        px.0,
+        [200, 100, 50, 0],
+        "Dest must preserve color under alpha 0"
+      );
+    }
+
+    // Over with opacity 0 is a no-op (a_s == 0, Over does not clear): preserve the same way.
+    let mut base = RgbaImage::from_pixel(2, 2, Rgba([200, 100, 50, 0]));
+    composite_into_u8(&mut base, &top, 0, 0, BlendMode::Over, 0.0, false);
+    for px in base.pixels() {
+      assert_eq!(
+        px.0,
+        [200, 100, 50, 0],
+        "Over with opacity 0 must preserve color under alpha 0"
+      );
+    }
+
+    // Sanity: a real Over (opaque top, opacity 1) over an opaque base MUST still change — the guard
+    // must not over-skip normal composites.
+    let mut base = RgbaImage::from_pixel(2, 2, Rgba([10, 20, 30, 255]));
+    composite_into_u8(&mut base, &top, 0, 0, BlendMode::Over, 1.0, false);
+    for px in base.pixels() {
+      assert_eq!(
+        px.0,
+        [255, 255, 255, 255],
+        "an opaque Over must still paint white (guard must not over-skip)"
+      );
+    }
+  }
+
+  #[test]
+  fn composite_u16_preserves_color_under_transparent_alpha() {
+    // 16-bit counterpart: Dest must keep the 16-bit color stored under alpha 0 exactly.
+    let top = ImageBuffer::<Rgba<u16>, _>::from_pixel(2, 2, Rgba([65535, 65535, 65535, 65535]));
+    let mut base = ImageBuffer::<Rgba<u16>, _>::from_pixel(2, 2, Rgba([40000, 20000, 10000, 0]));
+    composite_into_u16(&mut base, &top, 0, 0, BlendMode::Dest, 1.0, false);
+    for px in base.pixels() {
+      assert_eq!(
+        px.0,
+        [40000, 20000, 10000, 0],
+        "Dest must preserve 16-bit color under alpha 0"
+      );
+    }
   }
 
   #[test]

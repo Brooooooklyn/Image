@@ -591,6 +591,17 @@ test('composite chains preserve intermediate alpha on an opaque base (#138)', as
   t.true(raw[1] > 200 && raw[0] < 60 && raw[2] < 60, `expected green at (0,0), got [${raw[0]},${raw[1]},${raw[2]}]`)
 })
 
+test('composite Dest preserves destination color stored under alpha 0 (#138)', async (t) => {
+  // Base carries non-black color under a fully-transparent alpha; Dest ignores the overlay, so
+  // those covered pixels must be preserved exactly (integer path parity with the f32 path).
+  const n = 8
+  const base = Uint8Array.from(Array.from({ length: n * n }, () => [200, 100, 50, 0]).flat())
+  const top = await Transformer.fromRgbaPixels(
+    Uint8Array.from(Array.from({ length: n * n }, () => [255, 255, 255, 255]).flat()), n, n).png()
+  const raw = await Transformer.fromRgbaPixels(base, n, n).composite(top, { left: 0, top: 0, blend: BlendMode.Dest }).rawPixels()
+  t.deepEqual(Array.from(raw.slice(0, 4)), [200, 100, 50, 0], `Dest must preserve color under alpha 0, got [${raw.slice(0,4)}]`)
+})
+
 test('composite alpha persists across an interleaved legacy overlay() on a no-alpha base (#138)', async (t) => {
   // Persistent-RGBA-across-the-whole-chain semantics (matches sharp's flatten-at-end model):
   // a DestOut hole survives a legacy overlay() and is still fillable by a later DestOver, instead
