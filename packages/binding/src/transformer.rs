@@ -859,8 +859,13 @@ impl Task for EncodeTask {
       // Defer the composite flatten/restore to the end of the chain so intermediate alpha (e.g. a
       // `DestOut` hole) survives for later items (#138). Capture the pre-composite color type.
       let pre_composite_color = img.color();
-      let mut did_composite = false;
-      for item in std::mem::take(&mut self.image_transform_args.overlay).into_iter() {
+      let items = std::mem::take(&mut self.image_transform_args.overlay);
+      // If the chain contains any composite(), run the WHOLE chain through the depth-aware path so a
+      // chained legacy overlay() also blends at the working depth (16/32-bit) instead of being crushed
+      // to 8-bit by image::imageops::overlay. A pure overlay()-only chain (no composite present) keeps
+      // the byte-identical legacy fast path.
+      let has_composite = items.iter().any(|item| !item.simple_overlay);
+      for item in items.into_iter() {
         let top = ThreadsafeDynamicImage::new(item.buffer.clone());
         let top_image_meta = top.get(true)?;
         // Fix D: composite() rejects an overlay larger than the base in either dimension (sharp
@@ -884,15 +889,13 @@ impl Task for EncodeTask {
           top_image_meta.image.width(),
           top_image_meta.image.height(),
         );
-        if item.simple_overlay {
+        if item.simple_overlay && !has_composite {
           // Legacy overlay(): byte-identical 8-bit source-over (clips oversized overlays).
           overlay(&mut img, &top_image_meta.image, x, y);
         } else {
-          // composite(): always depth-aware at the base's native depth (8/16-bit or f32), so a
-          // default `Over` on an HDR base is not clamped to 8-bit and no-op guards apply. Keep the
-          // RGBA working buffer across the chain so intermediate alpha (e.g. a `DestOut` hole)
-          // survives for later items; flatten/restore happens once after the loop (#138).
-          did_composite = true;
+          // Depth-aware at the base's native depth (8/16-bit or f32). An interleaved legacy overlay()
+          // (Over, opacity 1, no tile) is promoted here too so 16/32-bit precision is preserved across
+          // the chain. The RGBA working buffer is kept; flatten/restore happens once after the loop (#138).
           composite_step(
             &mut img,
             &top_image_meta.image,
@@ -909,7 +912,7 @@ impl Task for EncodeTask {
       // Any legacy overlay() interleaved among composite() items also draws onto this same live RGBA
       // buffer, so alpha from an earlier composite is visible to later overlay()/composite() items —
       // matching sharp's flatten-at-encode model.
-      if did_composite {
+      if has_composite {
         finalize_composite(&mut img, pre_composite_color);
       }
       owned = img;
@@ -3468,6 +3471,42 @@ mod tests {
         "Dest must preserve 16-bit color under alpha 0"
       );
     }
+  }
+
+  #[test]
+  fn mixed_chain_overlay_promoted_to_depth_aware_preserves_16bit() {
+    // 258 is NOT representable in 8-bit: round(258/65535*255) = 1 -> back to u16 = 257. So an 8-bit
+    // overlay crushes it, a depth-aware composite_step(Over) keeps it. This is why compute() routes a
+    // chained overlay() through composite_step when the chain contains a composite().
+    let top16 = DynamicImage::ImageRgba16(ImageBuffer::<Rgba<u16>, _>::from_pixel(
+      2,
+      2,
+      Rgba([258, 258, 258, 65535]),
+    ));
+    // depth-aware path (what mixed-chain overlay now uses):
+    let mut a = DynamicImage::ImageRgba16(ImageBuffer::<Rgba<u16>, _>::from_pixel(
+      2,
+      2,
+      Rgba([0, 0, 0, 65535]),
+    ));
+    composite_step(&mut a, &top16, 0, 0, BlendMode::Over, 1.0, false);
+    assert_eq!(
+      a.to_rgba16().get_pixel(0, 0).0[0],
+      258,
+      "depth-aware Over preserves 16-bit precision"
+    );
+    // legacy 8-bit overlay path (what a chained overlay() used to do):
+    let mut b = DynamicImage::ImageRgba16(ImageBuffer::<Rgba<u16>, _>::from_pixel(
+      2,
+      2,
+      Rgba([0, 0, 0, 65535]),
+    ));
+    image::imageops::overlay(&mut b, &top16, 0, 0);
+    assert_eq!(
+      b.to_rgba16().get_pixel(0, 0).0[0],
+      257,
+      "legacy 8-bit overlay crushes 16-bit precision"
+    );
   }
 
   #[test]
