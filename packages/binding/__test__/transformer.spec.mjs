@@ -549,6 +549,21 @@ test('composite Gravity.SouthEast places the overlay bottom-right (#138)', async
   t.is(raw[3], 255)
 })
 
+test('composite clearing modes clear pixels outside a sub-base overlay (sharp parity #138)', async (t) => {
+  // sharp places the overlay on a full transparent canvas; DestIn keeps dest only where the overlay
+  // covers, clearing the rest to transparent. RGBA base so the output keeps alpha.
+  const W = 4, H = 4
+  const base = new Uint8Array(W * H * 4)
+  for (let i = 0; i < W * H; i++) { base.set([20 + i * 10, 200 - i * 8, 50 + i * 5, 255], i * 4) }
+  const overlay = await Transformer.fromRgbaPixels(Uint8Array.from([255, 255, 255, 255]), 1, 1).png()
+  const raw = await Transformer.fromRgbaPixels(base.slice(), W, H)
+    .composite(overlay, { left: 0, top: 0, blend: BlendMode.DestIn })
+    .rawPixels()
+  const at = (x, y) => Array.from(raw.slice((y * W + x) * 4, (y * W + x) * 4 + 4))
+  t.deepEqual(at(0, 0), [20, 200, 50, 255], 'covered pixel keeps the destination (DestIn)')
+  t.deepEqual(at(3, 3), [0, 0, 0, 0], 'uncovered pixel is cleared to transparent (matches sharp)')
+})
+
 // composite() with tile: true repeats the overlay across the whole base.
 test('composite tile covers the whole base (#138)', async (t) => {
   const base = Uint8Array.from(Array.from({ length: 4 * 4 }, () => [50, 60, 70, 255]).flat())

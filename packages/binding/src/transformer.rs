@@ -2288,6 +2288,21 @@ fn composite_into_u8(
       }
     }
   });
+  // sharp parity: for clearing Porter-Duff modes the overlay sits on a full transparent canvas,
+  // so the area the (non-tiled) overlay does NOT cover is blended against a transparent source —
+  // which clears it to [0,0,0,0]. (Tiling already covers the whole base, so there is no outside.)
+  if !tile && clears_dest_when_source_transparent(mode) {
+    let (obx, oby, _, _, rw, rh) = overlap_bounds(bw, bh, tw, th, x, y);
+    for py in 0..bh {
+      let inside_y = py >= oby && py < oby + rh;
+      for px in 0..bw {
+        if inside_y && px >= obx && px < obx + rw {
+          continue; // covered by the overlay -> already blended above
+        }
+        base.put_pixel(px, py, Rgba([0, 0, 0, 0]));
+      }
+    }
+  }
 }
 
 /// Composite `top` onto a 16-bit RGBA `base` in place. Channels normalize `/65535`, denormalize
@@ -2348,6 +2363,21 @@ fn composite_into_u16(
       }
     }
   });
+  // sharp parity: for clearing Porter-Duff modes the overlay sits on a full transparent canvas,
+  // so the area the (non-tiled) overlay does NOT cover is blended against a transparent source —
+  // which clears it to [0,0,0,0]. (Tiling already covers the whole base, so there is no outside.)
+  if !tile && clears_dest_when_source_transparent(mode) {
+    let (obx, oby, _, _, rw, rh) = overlap_bounds(bw, bh, tw, th, x, y);
+    for py in 0..bh {
+      let inside_y = py >= oby && py < oby + rh;
+      for px in 0..bw {
+        if inside_y && px >= obx && px < obx + rw {
+          continue; // covered by the overlay -> already blended above
+        }
+        base.put_pixel(px, py, Rgba([0u16, 0, 0, 0]));
+      }
+    }
+  }
 }
 
 /// Composite `top` onto a 32-bit float RGBA `base` in place. The W3C blend modes are defined in
@@ -2407,6 +2437,21 @@ fn composite_into_f32(
       }
     }
   });
+  // sharp parity: for clearing Porter-Duff modes the overlay sits on a full transparent canvas,
+  // so the area the (non-tiled) overlay does NOT cover is blended against a transparent source —
+  // which clears it to [0,0,0,0]. (Tiling already covers the whole base, so there is no outside.)
+  if !tile && clears_dest_when_source_transparent(mode) {
+    let (obx, oby, _, _, rw, rh) = overlap_bounds(bw, bh, tw, th, x, y);
+    for py in 0..bh {
+      let inside_y = py >= oby && py < oby + rh;
+      for px in 0..bw {
+        if inside_y && px >= obx && px < obx + rw {
+          continue; // covered by the overlay -> already blended above
+        }
+        base.put_pixel(px, py, Rgba([0.0f32, 0.0, 0.0, 0.0]));
+      }
+    }
+  }
 }
 
 /// Convert the composited RGBA `DynamicImage` back to the base's `original` color family, so an
@@ -3187,6 +3232,126 @@ mod tests {
         assert_eq!(
           out.get_pixel(x, y).0,
           [10, 20, 30, 255],
+          "tile must cover pixel ({x}, {y})"
+        );
+      }
+    }
+  }
+
+  #[test]
+  fn composite_u8_clearing_mode_clears_outside_overlay() {
+    // sharp places a composite overlay on a full transparent canvas, so for the clearing
+    // Porter-Duff modes a sub-base overlay clears the area it does NOT cover to transparent
+    // [0,0,0,0]. The overlap pixel still blends normally; non-clearing modes preserve the outside.
+    let make_base = || {
+      RgbaImage::from_fn(2, 2, |x, y| {
+        let i = (y * 2 + x) as u8;
+        Rgba([10 + i * 30, 200 - i * 20, 50 + i * 10, 255])
+      })
+    };
+    let white = RgbaImage::from_pixel(1, 1, Rgba([255, 255, 255, 255]));
+    let orig00 = make_base().get_pixel(0, 0).0;
+
+    // DestIn keeps the dest where an opaque source is present; clears the uncovered outside.
+    let mut base = make_base();
+    composite_into_u8(&mut base, &white, 0, 0, BlendMode::DestIn, 1.0, false);
+    assert_eq!(
+      base.get_pixel(0, 0).0,
+      orig00,
+      "DestIn keeps the covered dest"
+    );
+    assert_eq!(base.get_pixel(1, 0).0, [0, 0, 0, 0]);
+    assert_eq!(base.get_pixel(0, 1).0, [0, 0, 0, 0]);
+    assert_eq!(base.get_pixel(1, 1).0, [0, 0, 0, 0]);
+
+    // Source replaces the covered pixel with the source; clears the outside.
+    let mut base = make_base();
+    composite_into_u8(&mut base, &white, 0, 0, BlendMode::Source, 1.0, false);
+    assert_eq!(base.get_pixel(0, 0).0, [255, 255, 255, 255]);
+    assert_eq!(base.get_pixel(1, 0).0, [0, 0, 0, 0]);
+    assert_eq!(base.get_pixel(0, 1).0, [0, 0, 0, 0]);
+    assert_eq!(base.get_pixel(1, 1).0, [0, 0, 0, 0]);
+
+    // Clear clears the overlap AND the outside.
+    let mut base = make_base();
+    composite_into_u8(&mut base, &white, 0, 0, BlendMode::Clear, 1.0, false);
+    for y in 0..2 {
+      for x in 0..2 {
+        assert_eq!(
+          base.get_pixel(x, y).0,
+          [0, 0, 0, 0],
+          "Clear clears ({x},{y})"
+        );
+      }
+    }
+
+    // Control: Over is NOT a clearing mode, so the outside must stay the ORIGINAL base.
+    let mut base = make_base();
+    composite_into_u8(&mut base, &white, 0, 0, BlendMode::Over, 1.0, false);
+    assert_eq!(
+      base.get_pixel(0, 0).0,
+      [255, 255, 255, 255],
+      "Over composites the covered pixel"
+    );
+    let orig = make_base();
+    assert_eq!(
+      base.get_pixel(1, 0).0,
+      orig.get_pixel(1, 0).0,
+      "Over preserves outside"
+    );
+    assert_eq!(
+      base.get_pixel(0, 1).0,
+      orig.get_pixel(0, 1).0,
+      "Over preserves outside"
+    );
+    assert_eq!(
+      base.get_pixel(1, 1).0,
+      orig.get_pixel(1, 1).0,
+      "Over preserves outside"
+    );
+  }
+
+  #[test]
+  fn composite_u16_clearing_mode_clears_outside_overlay() {
+    // u16 variant: a clearing mode (DestIn) clears the uncovered outside to u16 zeros while the
+    // covered pixel keeps the original 16-bit destination.
+    let make_base = || {
+      ImageBuffer::<Rgba<u16>, Vec<u16>>::from_fn(2, 2, |x, y| {
+        let i = (y * 2 + x) as u16;
+        Rgba([1000 + i * 5000, 60000 - i * 4000, 2000 + i * 1000, 65535])
+      })
+    };
+    let white =
+      ImageBuffer::<Rgba<u16>, Vec<u16>>::from_pixel(1, 1, Rgba([65535, 65535, 65535, 65535]));
+    let orig00 = make_base().get_pixel(0, 0).0;
+
+    let mut base = make_base();
+    composite_into_u16(&mut base, &white, 0, 0, BlendMode::DestIn, 1.0, false);
+    assert_eq!(
+      base.get_pixel(0, 0).0,
+      orig00,
+      "DestIn keeps the covered dest"
+    );
+    assert_eq!(base.get_pixel(1, 0).0, [0, 0, 0, 0]);
+    assert_eq!(base.get_pixel(0, 1).0, [0, 0, 0, 0]);
+    assert_eq!(base.get_pixel(1, 1).0, [0, 0, 0, 0]);
+  }
+
+  #[test]
+  fn composite_tiled_clearing_mode_covers_whole_base() {
+    // Tiling already covers the whole base, so the outside-clear must NOT run for tile: every
+    // pixel is painted by the (Source) tile, none cleared to transparent.
+    let mut base = RgbaImage::from_fn(2, 2, |x, y| {
+      let i = (y * 2 + x) as u8;
+      Rgba([10 + i * 30, 200 - i * 20, 50 + i * 10, 255])
+    });
+    let white = RgbaImage::from_pixel(1, 1, Rgba([255, 255, 255, 255]));
+    composite_into_u8(&mut base, &white, 0, 0, BlendMode::Source, 1.0, true);
+    for y in 0..2 {
+      for x in 0..2 {
+        assert_eq!(
+          base.get_pixel(x, y).0,
+          [255, 255, 255, 255],
           "tile must cover pixel ({x}, {y})"
         );
       }
