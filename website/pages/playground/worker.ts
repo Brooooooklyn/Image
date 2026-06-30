@@ -26,6 +26,35 @@ if (typeof (globalThis as { Buffer?: unknown }).Buffer === 'undefined') {
 
 type Mod = typeof import('@napi-rs/image')
 
+// SVG is XML text, so it has no binary magic bytes: the generic `new Transformer(bytes)` path
+// routes through the wasm's `image::guess_format`, which has no SVG signature and throws
+// "Guess format from input image failed". The binding decodes SVG only through the dedicated
+// `Transformer.fromSvg`, which rasterizes via resvg. Sniff the bytes here and pick that path.
+//
+// Detection: every raster format the binding handles starts with binary magic bytes (never '<'),
+// so first require the markup to open with '<' (after an optional UTF-8 BOM and leading
+// whitespace), then look for an <svg> root element. The element name may carry an XML namespace
+// prefix (e.g. `<s:svg xmlns:s="http://www.w3.org/2000/svg">`), which usvg/fromSvg accepts, so
+// match an optional `prefix:` and require the name to be exactly `svg` (the trailing [\s/>] rules
+// out longer names like `<svgfoo>`). A plain `<svg ...>`, an `<?xml?>`/`<!DOCTYPE>` prolog, or a
+// BOM-prefixed document all reach this test.
+const SVG_ROOT = /<(?:[A-Za-z_][\w.-]*:)?svg[\s/>]/i
+function looksLikeSvg(u8: Uint8Array): boolean {
+  let i = 0
+  if (u8[0] === 0xef && u8[1] === 0xbb && u8[2] === 0xbf) i = 3 // skip UTF-8 BOM
+  while (i < u8.length && (u8[i] === 0x09 || u8[i] === 0x0a || u8[i] === 0x0d || u8[i] === 0x20)) i++
+  if (u8[i] !== 0x3c /* '<' */) return false
+  const head = new TextDecoder('utf-8', { fatal: false }).decode(u8.subarray(i, i + 65536))
+  return SVG_ROOT.test(head)
+}
+
+// Build the base Transformer, decoding SVG inputs through `fromSvg` and everything else through
+// the raster constructor. Both yield a Transformer whose metadata()/encoders/transforms work the
+// same, so callers stay format-agnostic.
+function makeTransformer(mod: Mod, u8: Uint8Array) {
+  return looksLikeSvg(u8) ? mod.Transformer.fromSvg(u8) : new mod.Transformer(u8)
+}
+
 function toArrayBuffer(out: Uint8Array): ArrayBuffer {
   // Copy into a FRESH regular ArrayBuffer. The wasm runs with threads, so its
   // Memory is `shared: true` and HEAPU8.buffer is a SharedArrayBuffer; if the
@@ -38,7 +67,7 @@ function toArrayBuffer(out: Uint8Array): ArrayBuffer {
 }
 
 async function runConvert(mod: Mod, u8: Uint8Array, op: ConvertOp): Promise<Uint8Array> {
-  const t = new mod.Transformer(u8)
+  const t = makeTransformer(mod, u8)
   switch (op.format) {
     case 'webp': return t.webp(op.quality)
     case 'webpLossless': return t.webpLossless()
@@ -64,7 +93,7 @@ async function runCompress(mod: Mod, u8: Uint8Array, op: CompressOp): Promise<Ui
 }
 
 async function runTransform(mod: Mod, u8: Uint8Array, op: TransformOp): Promise<Uint8Array> {
-  let t = new mod.Transformer(u8)
+  let t = makeTransformer(mod, u8)
   if (op.rotate === 'auto') t = t.rotate()
   else if (typeof op.rotate === 'number') t = t.rotate(op.rotate)
   if (op.resize.enabled) t = t.resize(op.resize.width, op.resize.height, op.resize.filter, op.resize.fit)
@@ -88,7 +117,7 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
     const mod: Mod = await import('@napi-rs/image')
     const u8 = new Uint8Array(bytes)
     if (op.kind === 'metadata') {
-      const m = await new mod.Transformer(u8).metadata(true)
+      const m = await makeTransformer(mod, u8).metadata(true)
       post({ id, ok: true, kind: 'metadata', meta: { width: m.width, height: m.height, format: m.format, orientation: m.orientation } })
       return
     }

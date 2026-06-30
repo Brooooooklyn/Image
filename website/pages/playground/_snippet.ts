@@ -15,12 +15,17 @@ function encodeCall(format: ConvertFormat, quality: number): string {
   }
 }
 
-export function snippetFor(op: Op): string {
-  if (op.kind === 'metadata') return `await new Transformer(input).metadata(true)`
+export function snippetFor(op: Op, inputFormat?: string): string {
+  // SVG has no raster magic bytes, so `new Transformer(input)` can't decode it (image::guess_format
+  // throws); it must be constructed via `Transformer.fromSvg(input)`, matching what the playground
+  // worker does. Compress ops are JPEG/PNG-only and are disabled for SVG, so only the
+  // Transformer-based ops need the swapped constructor.
+  const ctor = inputFormat === 'svg' ? 'Transformer.fromSvg(input)' : 'new Transformer(input)'
+  if (op.kind === 'metadata') return `await ${ctor}.metadata(true)`
   if (op.kind === 'convert') {
     if (op.format === 'avif')
-      return `await new Transformer(input).avif({ quality: ${op.quality}, chromaSubsampling: ChromaSubsampling.${CHROMA_NAME[op.chroma]} })`
-    return `await new Transformer(input)${encodeCall(op.format, op.quality)}`
+      return `await ${ctor}.avif({ quality: ${op.quality}, chromaSubsampling: ChromaSubsampling.${CHROMA_NAME[op.chroma]} })`
+    return `await ${ctor}${encodeCall(op.format, op.quality)}`
   }
   if (op.kind === 'compress') {
     if (op.codec === 'jpeg') return `await compressJpeg(input, { quality: ${op.quality} })`
@@ -28,7 +33,7 @@ export function snippetFor(op: Op): string {
     return `await pngQuantize(input, { maxQuality: ${op.maxQuality} })`
   }
   // transform
-  const parts: string[] = ['new Transformer(input)']
+  const parts: string[] = [ctor]
   if (op.rotate === 'auto') parts.push(`.rotate()`)
   else if (typeof op.rotate === 'number') parts.push(`.rotate(Orientation.${ORI_NAME[op.rotate] ?? 'Horizontal'})`)
   if (op.resize.enabled)

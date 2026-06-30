@@ -489,6 +489,7 @@ export default function Playground() {
                 originalBytes={originalBytesRef.current.byteLength}
                 result={resultData}
                 op={resultOp}
+                inputFormat={meta?.format}
               />
             )}
         </div>

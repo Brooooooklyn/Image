@@ -18,16 +18,18 @@ export default function Result({
   originalBytes,
   result,
   op,
+  inputFormat,
 }: {
   originalUrl: string
   originalBytes: number
   result: { url: string | null; bytes: number; outFormat: string }
   op: Op
+  inputFormat?: string
 }) {
   const [copied, setCopied] = useState(false)
 
   const pct = Math.round((1 - result.bytes / originalBytes) * 100)
-  const snippet = snippetFor(op)
+  const snippet = snippetFor(op, inputFormat)
 
   const handleCopy = () => {
     navigator.clipboard.writeText(snippet).then(() => {
