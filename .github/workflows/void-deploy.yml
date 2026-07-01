@@ -1,0 +1,58 @@
+name: Deploy to Void
+on:
+  push:
+    branches: [main]
+    # The Void app lives in website/. Only deploy when that subtree (or this
+    # workflow) changes — skips deploys for Rust/packages-only commits.
+    paths:
+      - 'website/**'
+      - '.github/workflows/void-deploy.yml'
+
+# Latest push wins: cancel an in-flight deploy for the same repo+branch so a
+# newer commit is never overtaken by an older one.
+concurrency:
+  group: void-deploy-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# id-token: write lets the job mint a GitHub OIDC token. No long-lived
+# VOID_TOKEN secret is stored — the OIDC token below is exchanged for a
+# short-lived, project-scoped deploy token at deploy time.
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  # Override with a VOID_API_URL repository variable to target staging.
+  VOID_API_URL: ${{ vars.VOID_API_URL || 'https://api.void.cloud' }}
+  VOID_PROJECT: napi-image
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      # Activate the repo-pinned yarn@4.17.0 (packageManager field) before any
+      # yarn call, so cache detection and install use Berry, not the runner's
+      # global classic yarn.
+      - run: corepack enable
+      # Install at the repo ROOT — this is a yarn workspaces monorepo, so the
+      # lockfile and workspace graph live at the root, not in website/.
+      - run: yarn install --immutable
+      - name: Exchange GitHub OIDC token for a Void deploy token
+        run: |
+          OIDC_TOKEN="$(curl -sf \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=void" | jq -r '.value')"
+          VOID_TOKEN="$(curl -sf \
+            -H 'Content-Type: application/json' \
+            -d "$(jq -n --arg t "$OIDC_TOKEN" --arg p "$VOID_PROJECT" '{oidcToken: $t, project: $p}')" \
+            "$VOID_API_URL/auth/github-oidc" | jq -r '.token')"
+          echo "::add-mask::$VOID_TOKEN"
+          echo "VOID_TOKEN=$VOID_TOKEN" >> "$GITHUB_ENV"
+      - name: Deploy
+        # The Void app is the website/ workspace, not the repo root.
+        working-directory: website
+        run: yarn void deploy --project "$VOID_PROJECT"
