@@ -14,9 +14,9 @@ concurrency:
   group: void-deploy-${{ github.repository }}-${{ github.ref }}
   cancel-in-progress: true
 
-# id-token: write lets the job mint a GitHub OIDC token. No long-lived
-# VOID_TOKEN secret is stored — the OIDC token below is exchanged for a
-# short-lived, project-scoped deploy token at deploy time.
+# id-token: write lets `void deploy` mint a GitHub OIDC token and exchange it
+# (audience "void") for a short-lived, project-scoped deploy token at deploy
+# time — no long-lived VOID_TOKEN secret is stored.
 permissions:
   id-token: write
   contents: read
@@ -41,17 +41,9 @@ jobs:
       # Install at the repo ROOT — this is a yarn workspaces monorepo, so the
       # lockfile and workspace graph live at the root, not in website/.
       - run: yarn install --immutable
-      - name: Exchange GitHub OIDC token for a Void deploy token
-        run: |
-          OIDC_TOKEN="$(curl -sf \
-            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=void" | jq -r '.value')"
-          VOID_TOKEN="$(curl -sf \
-            -H 'Content-Type: application/json' \
-            -d "$(jq -n --arg t "$OIDC_TOKEN" --arg p "$VOID_PROJECT" '{oidcToken: $t, project: $p}')" \
-            "$VOID_API_URL/auth/github-oidc" | jq -r '.token')"
-          echo "::add-mask::$VOID_TOKEN"
-          echo "VOID_TOKEN=$VOID_TOKEN" >> "$GITHUB_ENV"
+      # Single step: `void deploy` (>= 0.10.2) detects GitHub Actions, mints the
+      # OIDC token itself, exchanges it for a deploy token, and deploys — no
+      # curl/jq, no VOID_TOKEN secret.
       - name: Deploy
         # The Void app is the website/ workspace, not the repo root.
         working-directory: website
