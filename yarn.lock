@@ -4644,9 +4644,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@void/md@npm:0.9.3":
-  version: 0.9.3
-  resolution: "@void/md@npm:0.9.3"
+"@void/md@npm:0.10.1":
+  version: 0.10.1
+  resolution: "@void/md@npm:0.10.1"
   dependencies:
     "@shikijs/engine-javascript": "npm:^4.0.2"
     "@shikijs/transformers": "npm:^4.0.2"
@@ -4661,22 +4661,22 @@ __metadata:
     tinyglobby: "npm:^0.2.16"
   peerDependencies:
     vite: ^8.0.0
-    void: 0.9.3
-  checksum: 10c0/a2e5c3b73d29934933c2326e96b8e3fe6ed962a4f1b4610b4e9205a39c7668d415c0e740907edd70fdb3aafd3734dace3c35001dfab5d0acebd6ad0c757d17fe
+    void: 0.10.1
+  checksum: 10c0/b947a68450dbb77f96ce8e2869d139c07e70e095740d3c61c2bf9a78d42101c9e946aabb63488d228d96e12d12896fbcb005fbeee10afe885619d9675ab69bd8
   languageName: node
   linkType: hard
 
-"@void/react@npm:0.9.3":
-  version: 0.9.3
-  resolution: "@void/react@npm:0.9.3"
+"@void/react@npm:0.10.1":
+  version: 0.10.1
+  resolution: "@void/react@npm:0.10.1"
   dependencies:
     "@vitejs/plugin-react": "npm:^6.0.1"
   peerDependencies:
     react: ^19.0.0
     react-dom: ^19.0.0
     vite: ^8.0.0
-    void: 0.9.3
-  checksum: 10c0/8c0b8d2f756f8f0f610fafa8f24a888fd69c3ebe332a81c459d8f3aab6f2d39a065946fceae3c2efb586fdaa99533bfd2af36e706d5932392a9044eba911744c
+    void: 0.10.1
+  checksum: 10c0/240a7bcc9e9efdbc4bf52fc3b1ecd282506a86e2185e85a817320cd0bf09c14d7eec80c21a66115c592153d85b65e4d528a558c58aa6deb9c166e1b576a4c5a3
   languageName: node
   linkType: hard
 
@@ -11938,9 +11938,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"void@npm:0.9.3":
-  version: 0.9.3
-  resolution: "void@npm:0.9.3"
+"void@npm:0.10.1":
+  version: 0.10.1
+  resolution: "void@npm:0.10.1"
   dependencies:
     "@cloudflare/sandbox": "npm:^0.10.0"
     "@cloudflare/vite-plugin": "npm:^1.36.3"
@@ -11962,7 +11962,7 @@ __metadata:
     pg: "npm:^8.20.0"
     wrangler: "npm:^4.90.0"
   peerDependencies:
-    "@void/md": 0.9.3
+    "@void/md": 0.10.1
     arktype: ">=2.0.0"
     valibot: ">=1.0.0-beta.7"
     vite: ^8.0.0
@@ -11978,7 +11978,7 @@ __metadata:
       optional: true
   bin:
     void: dist/cli/cli.mjs
-  checksum: 10c0/0a6b8f3f6d947c3a1a6ae44261fabed4334f46f4133858178fdb7a1d456db10576b7d5f255d4aee82ae2387afa86cce2fc8dfc2b9949b7e20d163c3ea84de8ba
+  checksum: 10c0/e7adf5b7c87786e9ddfbf891a1f1fa36e6b989d53a38dfbfb09427b80a3f80149c859293c78883d16fd4e5f11d634e4b4858fe2dbf296635cbc250b4f36d3e5e
   languageName: node
   linkType: hard
 
@@ -12020,8 +12020,8 @@ __metadata:
     "@types/node": "npm:^24.10.1"
     "@types/react": "npm:^19.0.0"
     "@types/react-dom": "npm:^19.0.0"
-    "@void/md": "npm:0.9.3"
-    "@void/react": "npm:0.9.3"
+    "@void/md": "npm:0.10.1"
+    "@void/react": "npm:0.10.1"
     buffer: "npm:^6.0.0"
     chalk: "npm:^5.6.2"
     react: "npm:^19.2.1"
@@ -12029,7 +12029,7 @@ __metadata:
     tailwindcss: "npm:4.3.2"
     typescript: "npm:^6.0.3"
     vite: "npm:^8.0.0"
-    void: "npm:0.9.3"
+    void: "npm:0.10.1"
   languageName: unknown
   linkType: soft
 
