@@ -4644,9 +4644,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@void/md@npm:0.10.2":
-  version: 0.10.2
-  resolution: "@void/md@npm:0.10.2"
+"@void/md@npm:0.10.4":
+  version: 0.10.4
+  resolution: "@void/md@npm:0.10.4"
   dependencies:
     "@shikijs/engine-javascript": "npm:^4.0.2"
     "@shikijs/transformers": "npm:^4.0.2"
@@ -4656,27 +4656,28 @@ __metadata:
     markdown-it-attrs: "npm:^4.3.1"
     markdown-it-container: "npm:^4.0.0"
     markdown-it-emoji: "npm:^3.0.0"
+    markdown-it-footnote: "npm:^4.0.0"
     pathe: "npm:^2.0.3"
     shiki: "npm:^4.0.2"
     tinyglobby: "npm:^0.2.16"
   peerDependencies:
     vite: ^8.0.0
-    void: 0.10.2
-  checksum: 10c0/388b4a0ecfc72b31ef67c26156e02ece0a443cd56807aac9f357979d7229bc28cedf7df8f8591d8817f38964b820ea7cabdbce0b8562ad63a11b35588e3ceb23
+    void: 0.10.4
+  checksum: 10c0/3b335229ab43dd26cc3334ea3c22e0cf21bf4041fde8f809e5182a98a7e033c514fde6b6eab90ebd654edf243b1f7e8c92d52277efae56acb3901427042fd446
   languageName: node
   linkType: hard
 
-"@void/react@npm:0.10.2":
-  version: 0.10.2
-  resolution: "@void/react@npm:0.10.2"
+"@void/react@npm:0.10.4":
+  version: 0.10.4
+  resolution: "@void/react@npm:0.10.4"
   dependencies:
     "@vitejs/plugin-react": "npm:^6.0.1"
   peerDependencies:
     react: ^19.0.0
     react-dom: ^19.0.0
     vite: ^8.0.0
-    void: 0.10.2
-  checksum: 10c0/e05cfc1b664614fc2c1a333c8a1250441611a617be1963beb7adeb94d082526431b19cb94550e4041643cfa5a928c99d5979ce5491058be6b2dbb835f908fd69
+    void: 0.10.4
+  checksum: 10c0/1070c84005f4a77c7c5762708678c2a876a10259b30172a7b6abc29ca2b66d56ed51a0e29a9f49ae11c8bb8c7ef1b1f1552a9af22a4a8c706a2b0ea326d49efc
   languageName: node
   linkType: hard
 
@@ -8624,6 +8625,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"markdown-it-footnote@npm:^4.0.0":
+  version: 4.0.0
+  resolution: "markdown-it-footnote@npm:4.0.0"
+  checksum: 10c0/47aa807b143af211d7eca376c724b05e939e8b5960f6e287c63eca7f121be7ac697ff5601d5b7c89cbde7a32713a66b2a6f375251fad1fe989bd05d07f80e4cd
+  languageName: node
+  linkType: hard
+
 "matcher@npm:^6.0.0":
   version: 6.0.0
   resolution: "matcher@npm:6.0.0"
@@ -11938,9 +11946,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"void@npm:0.10.2":
-  version: 0.10.2
-  resolution: "void@npm:0.10.2"
+"void@npm:0.10.4":
+  version: 0.10.4
+  resolution: "void@npm:0.10.4"
   dependencies:
     "@cloudflare/sandbox": "npm:^0.10.0"
     "@cloudflare/vite-plugin": "npm:^1.36.3"
@@ -11962,7 +11970,7 @@ __metadata:
     pg: "npm:^8.20.0"
     wrangler: "npm:^4.90.0"
   peerDependencies:
-    "@void/md": 0.10.2
+    "@void/md": 0.10.4
     arktype: ">=2.0.0"
     valibot: ">=1.0.0-beta.7"
     vite: ^8.0.0
@@ -11978,7 +11986,7 @@ __metadata:
       optional: true
   bin:
     void: dist/cli/cli.mjs
-  checksum: 10c0/3314d7c0d5a804716e1857b0fb81ad396df8b043b09afdab7483741e97d4523eb1aca955e70f87102b4777be6eb83dcde516e10fbf7b0cf67605fd9e0ce0802c
+  checksum: 10c0/97dd0500c4e930a16e44a580cdfda4e023a4615894e913d8a5eff43c4308b0fa7225fadd5743c051a7806d7a76d7d7d788e31392a3e4aa9287ed4431dd53e785
   languageName: node
   linkType: hard
 
@@ -12020,8 +12028,8 @@ __metadata:
     "@types/node": "npm:^24.10.1"
     "@types/react": "npm:^19.0.0"
     "@types/react-dom": "npm:^19.0.0"
-    "@void/md": "npm:0.10.2"
-    "@void/react": "npm:0.10.2"
+    "@void/md": "npm:0.10.4"
+    "@void/react": "npm:0.10.4"
     buffer: "npm:^6.0.0"
     chalk: "npm:^5.6.2"
     react: "npm:^19.2.1"
@@ -12029,7 +12037,7 @@ __metadata:
     tailwindcss: "npm:4.3.2"
     typescript: "npm:^6.0.3"
     vite: "npm:^8.0.0"
-    void: "npm:0.10.2"
+    void: "npm:0.10.4"
   languageName: unknown
   linkType: soft
 
