@@ -6215,9 +6215,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"electron@npm:^42.4.1":
-  version: 42.4.1
-  resolution: "electron@npm:42.4.1"
+"electron@npm:^43.0.0":
+  version: 43.0.0
+  resolution: "electron@npm:43.0.0"
   dependencies:
     "@electron-internal/extract-zip": "npm:^1.0.1"
     "@electron/get": "npm:^5.0.0"
@@ -6225,7 +6225,7 @@ __metadata:
   bin:
     electron: cli.js
     install-electron: install.js
-  checksum: 10c0/e897739a1fc020ff502183c42e3f90fcb7a3205eb0324cb8aa7ebdbe54e85c34cc364d1f676a39e63e923bd002d1bca19c7004bd7127a6c0ef496c130026b450
+  checksum: 10c0/9f0bfb4e55dd97102941d009ce44ea1c5aa82325e877733284d75be8880ead11305ff45198d059e5127b441c94391ed159136cee23f2474e2416e2bbab2e9940
   languageName: node
   linkType: hard
 
@@ -7616,7 +7616,7 @@ __metadata:
     ava: "npm:^8.0.1"
     blurhash: "npm:^2.0.5"
     chalk: "npm:^5.6.2"
-    electron: "npm:^42.4.1"
+    electron: "npm:^43.0.0"
     lerna: "npm:^9.0.7"
     npm-run-all2: "npm:^9.0.0"
     prettier: "npm:^3.8.4"
