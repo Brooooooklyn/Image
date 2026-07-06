@@ -17,12 +17,12 @@
     "@fontsource-variable/space-grotesk": "^5.2.10",
     "@napi-rs/image": "1.12.1",
     "@napi-rs/image-wasm32-wasi": "1.14.0",
-    "@void/md": "0.10.4",
-    "@void/react": "0.10.4",
+    "@void/md": "0.10.5",
+    "@void/react": "0.10.5",
     "buffer": "^6.0.0",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
-    "void": "0.10.4"
+    "void": "0.10.5"
   },
   "devDependencies": {
     "@napi-rs/canvas": "^1.0.0",
