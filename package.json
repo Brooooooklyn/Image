@@ -78,6 +78,6 @@
       "built": true
     }
   },
-  "packageManager": "yarn@4.17.0",
+  "packageManager": "yarn@4.17.1",
   "repository": "git@github.com:Brooooooklyn/Image.git"
 }
