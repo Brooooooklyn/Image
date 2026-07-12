@@ -2172,9 +2172,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@napi-rs/cli@npm:3.7.2":
-  version: 3.7.2
-  resolution: "@napi-rs/cli@npm:3.7.2"
+"@napi-rs/cli@npm:3.7.3":
+  version: 3.7.3
+  resolution: "@napi-rs/cli@npm:3.7.3"
   dependencies:
     "@inquirer/prompts": "npm:^8.5.2"
     "@napi-rs/cross-toolchain": "npm:^1.0.3"
@@ -2196,7 +2196,7 @@ __metadata:
   bin:
     napi: dist/cli.js
     napi-raw: cli.mjs
-  checksum: 10c0/c0ec077d0d2d6cd164e74c8c7a7d8c1075fc0b134ee463b68418f6ffded5a1ef66b3e23a908bb377e02eef7b814bfb3259897e864d1e90000ba2b6af74915b66
+  checksum: 10c0/7f4593975182e9b67dc9fda3b5b03f2cf6374dfd45b31376f8cdd120e95e32f19d4f7a8fded3265d1617c26c1297f00823f001dbf5679fcd00971e1a66f7195e
   languageName: node
   linkType: hard
 
@@ -2408,7 +2408,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@napi-rs/image@workspace:packages/binding"
   dependencies:
-    "@napi-rs/cli": "npm:3.7.2"
+    "@napi-rs/cli": "npm:3.7.3"
     "@napi-rs/wasm-runtime": "npm:^1.1.5"
   languageName: unknown
   linkType: soft
@@ -7354,7 +7354,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "image@workspace:."
   dependencies:
-    "@napi-rs/cli": "npm:3.7.2"
+    "@napi-rs/cli": "npm:3.7.3"
     "@taplo/cli": "npm:^0.7.0"
     "@types/node": "npm:^24.10.1"
     "@types/sharp": "npm:^0.32.0"
