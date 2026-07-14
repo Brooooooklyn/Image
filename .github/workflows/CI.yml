@@ -142,7 +142,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Setup node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: yarn
@@ -244,7 +244,7 @@ jobs:
         with:
           cmake-version: '3.x'
       - name: Setup node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: 24
       - name: Install
@@ -342,14 +342,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Setup node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         if: startsWith(matrix.settings.target, 'x86_64')
         with:
           node-version: ${{ matrix.node }}
           cache: 'yarn'
           architecture: 'x64'
       - name: Setup node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         if: startsWith(matrix.settings.target, 'aarch64')
         with:
           node-version: ${{ matrix.node }}
@@ -394,7 +394,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Setup node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
           cache: yarn
@@ -429,7 +429,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Setup node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
           cache: yarn
@@ -530,7 +530,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Setup node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: 24
       - name: Download artifacts
@@ -653,7 +653,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Setup node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: yarn
