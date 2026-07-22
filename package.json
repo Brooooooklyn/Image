@@ -12,7 +12,7 @@
     "website"
   ],
   "devDependencies": {
-    "@napi-rs/cli": "3.7.3",
+    "@napi-rs/cli": "3.7.4",
     "@taplo/cli": "^0.7.0",
     "@types/node": "^24.10.1",
     "@types/sharp": "^0.32.0",
