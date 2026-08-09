@@ -364,9 +364,10 @@ jobs:
           path: artifacts
       - name: Install artifact
         run: |
-          mapfile -t IMAGE_ARTIFACT_FILES < <(find artifacts -type f -name '*.node')
-          test "${#IMAGE_ARTIFACT_FILES[@]}" -eq 1
-          cp "${IMAGE_ARTIFACT_FILES[0]}" packages/binding/
+          IMAGE_ARTIFACT_FILE=$(find artifacts -type f -name '*.node' -print -quit)
+          test -n "$IMAGE_ARTIFACT_FILE"
+          test "$(find artifacts -type f -name '*.node' | wc -l | tr -d ' ')" -eq 1
+          cp "$IMAGE_ARTIFACT_FILE" packages/binding/
         shell: bash
       - name: List packages
         run: ls -R .
@@ -408,9 +409,10 @@ jobs:
           path: artifacts
       - name: Install artifact
         run: |
-          mapfile -t IMAGE_ARTIFACT_FILES < <(find artifacts -type f -name '*.node')
-          test "${#IMAGE_ARTIFACT_FILES[@]}" -eq 1
-          cp "${IMAGE_ARTIFACT_FILES[0]}" packages/binding/
+          IMAGE_ARTIFACT_FILE=$(find artifacts -type f -name '*.node' -print -quit)
+          test -n "$IMAGE_ARTIFACT_FILE"
+          test "$(find artifacts -type f -name '*.node' | wc -l | tr -d ' ')" -eq 1
+          cp "$IMAGE_ARTIFACT_FILE" packages/binding/
         shell: bash
       - name: List packages
         run: ls -R .
@@ -444,9 +446,10 @@ jobs:
           path: artifacts
       - name: Install artifact
         run: |
-          mapfile -t IMAGE_ARTIFACT_FILES < <(find artifacts -type f -name '*.node')
-          test "${#IMAGE_ARTIFACT_FILES[@]}" -eq 1
-          cp "${IMAGE_ARTIFACT_FILES[0]}" packages/binding/
+          IMAGE_ARTIFACT_FILE=$(find artifacts -type f -name '*.node' -print -quit)
+          test -n "$IMAGE_ARTIFACT_FILE"
+          test "$(find artifacts -type f -name '*.node' | wc -l | tr -d ' ')" -eq 1
+          cp "$IMAGE_ARTIFACT_FILE" packages/binding/
         shell: bash
       - name: List packages
         run: ls -R .
@@ -475,9 +478,10 @@ jobs:
         run: yarn install --immutable --mode=skip-build
       - name: Install artifact
         run: |
-          mapfile -t IMAGE_ARTIFACT_FILES < <(find artifacts -type f -name '*.node')
-          test "${#IMAGE_ARTIFACT_FILES[@]}" -eq 1
-          cp "${IMAGE_ARTIFACT_FILES[0]}" packages/binding/
+          IMAGE_ARTIFACT_FILE=$(find artifacts -type f -name '*.node' -print -quit)
+          test -n "$IMAGE_ARTIFACT_FILE"
+          test "$(find artifacts -type f -name '*.node' | wc -l | tr -d ' ')" -eq 1
+          cp "$IMAGE_ARTIFACT_FILE" packages/binding/
         shell: bash
       - name: List packages
         run: ls -R packages
@@ -509,9 +513,10 @@ jobs:
         run: yarn install --immutable --mode=skip-build
       - name: Install artifact
         run: |
-          mapfile -t IMAGE_ARTIFACT_FILES < <(find artifacts -type f -name '*.node')
-          test "${#IMAGE_ARTIFACT_FILES[@]}" -eq 1
-          cp "${IMAGE_ARTIFACT_FILES[0]}" packages/binding/
+          IMAGE_ARTIFACT_FILE=$(find artifacts -type f -name '*.node' -print -quit)
+          test -n "$IMAGE_ARTIFACT_FILE"
+          test "$(find artifacts -type f -name '*.node' | wc -l | tr -d ' ')" -eq 1
+          cp "$IMAGE_ARTIFACT_FILE" packages/binding/
         shell: bash
       - name: List packages
         run: ls -R packages
