@@ -377,7 +377,7 @@ jobs:
           path: artifacts
       - name: Install artifact
         run: |
-          IMAGE_ARTIFACT_FILE=$(find artifacts -type f -name '*.node' -print -quit)
+          IMAGE_ARTIFACT_FILE=$(find artifacts -type f -name '*.node')
           test -n "$IMAGE_ARTIFACT_FILE"
           test "$(find artifacts -type f -name '*.node' | wc -l | tr -d ' ')" -eq 1
           cp "$IMAGE_ARTIFACT_FILE" packages/binding/
@@ -422,7 +422,7 @@ jobs:
           path: artifacts
       - name: Install artifact
         run: |
-          IMAGE_ARTIFACT_FILE=$(find artifacts -type f -name '*.node' -print -quit)
+          IMAGE_ARTIFACT_FILE=$(find artifacts -type f -name '*.node')
           test -n "$IMAGE_ARTIFACT_FILE"
           test "$(find artifacts -type f -name '*.node' | wc -l | tr -d ' ')" -eq 1
           cp "$IMAGE_ARTIFACT_FILE" packages/binding/
@@ -459,7 +459,7 @@ jobs:
           path: artifacts
       - name: Install artifact
         run: |
-          IMAGE_ARTIFACT_FILE=$(find artifacts -type f -name '*.node' -print -quit)
+          IMAGE_ARTIFACT_FILE=$(find artifacts -type f -name '*.node')
           test -n "$IMAGE_ARTIFACT_FILE"
           test "$(find artifacts -type f -name '*.node' | wc -l | tr -d ' ')" -eq 1
           cp "$IMAGE_ARTIFACT_FILE" packages/binding/
@@ -491,7 +491,7 @@ jobs:
         run: yarn install --immutable --mode=skip-build
       - name: Install artifact
         run: |
-          IMAGE_ARTIFACT_FILE=$(find artifacts -type f -name '*.node' -print -quit)
+          IMAGE_ARTIFACT_FILE=$(find artifacts -type f -name '*.node')
           test -n "$IMAGE_ARTIFACT_FILE"
           test "$(find artifacts -type f -name '*.node' | wc -l | tr -d ' ')" -eq 1
           cp "$IMAGE_ARTIFACT_FILE" packages/binding/
@@ -526,7 +526,7 @@ jobs:
         run: yarn install --immutable --mode=skip-build
       - name: Install artifact
         run: |
-          IMAGE_ARTIFACT_FILE=$(find artifacts -type f -name '*.node' -print -quit)
+          IMAGE_ARTIFACT_FILE=$(find artifacts -type f -name '*.node')
           test -n "$IMAGE_ARTIFACT_FILE"
           test "$(find artifacts -type f -name '*.node' | wc -l | tr -d ' ')" -eq 1
           cp "$IMAGE_ARTIFACT_FILE" packages/binding/
