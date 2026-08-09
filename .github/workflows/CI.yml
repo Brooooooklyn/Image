@@ -653,7 +653,7 @@ jobs:
       - name: Run benchmarks
         # Auth via OIDC (the job's `id-token: write` permission) -- CodSpeed's
         # recommended method, so no long-lived `CODSPEED_TOKEN` secret is needed.
-        uses: CodSpeedHQ/action@v4
+        uses: CodSpeedHQ/action@v5
         with:
           mode: simulation
           run: cargo codspeed run -p napi_rs_image
