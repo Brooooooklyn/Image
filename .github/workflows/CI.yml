@@ -362,10 +362,11 @@ jobs:
         with:
           name: bindings-${{ matrix.settings.target }}
           path: artifacts
-      - name: Create npm dirs
-        run: yarn workspace @napi-rs/image napi create-npm-dirs
-      - name: Move artifacts
-        run: yarn artifacts
+      - name: Install artifact
+        run: |
+          mapfile -t IMAGE_ARTIFACT_FILES < <(find artifacts -type f -name '*.node')
+          test "${#IMAGE_ARTIFACT_FILES[@]}" -eq 1
+          cp "${IMAGE_ARTIFACT_FILES[0]}" packages/binding/
         shell: bash
       - name: List packages
         run: ls -R .
@@ -405,10 +406,11 @@ jobs:
         with:
           name: bindings-x86_64-unknown-linux-gnu
           path: artifacts
-      - name: Create npm dirs
-        run: yarn workspace @napi-rs/image napi create-npm-dirs
-      - name: Move artifacts
-        run: yarn artifacts
+      - name: Install artifact
+        run: |
+          mapfile -t IMAGE_ARTIFACT_FILES < <(find artifacts -type f -name '*.node')
+          test "${#IMAGE_ARTIFACT_FILES[@]}" -eq 1
+          cp "${IMAGE_ARTIFACT_FILES[0]}" packages/binding/
         shell: bash
       - name: List packages
         run: ls -R .
@@ -440,10 +442,11 @@ jobs:
         with:
           name: bindings-x86_64-unknown-linux-musl
           path: artifacts
-      - name: Create npm dirs
-        run: yarn workspace @napi-rs/image napi create-npm-dirs
-      - name: Move artifacts
-        run: yarn artifacts
+      - name: Install artifact
+        run: |
+          mapfile -t IMAGE_ARTIFACT_FILES < <(find artifacts -type f -name '*.node')
+          test "${#IMAGE_ARTIFACT_FILES[@]}" -eq 1
+          cp "${IMAGE_ARTIFACT_FILES[0]}" packages/binding/
         shell: bash
       - name: List packages
         run: ls -R .
@@ -470,10 +473,11 @@ jobs:
           path: artifacts
       - name: Install dependencies
         run: yarn install --immutable --mode=skip-build
-      - name: Create npm dirs
-        run: yarn workspace @napi-rs/image napi create-npm-dirs
-      - name: Move artifacts
-        run: yarn artifacts
+      - name: Install artifact
+        run: |
+          mapfile -t IMAGE_ARTIFACT_FILES < <(find artifacts -type f -name '*.node')
+          test "${#IMAGE_ARTIFACT_FILES[@]}" -eq 1
+          cp "${IMAGE_ARTIFACT_FILES[0]}" packages/binding/
         shell: bash
       - name: List packages
         run: ls -R packages
@@ -503,10 +507,11 @@ jobs:
           path: artifacts
       - name: Install dependencies
         run: yarn install --immutable --mode=skip-build
-      - name: Create npm dirs
-        run: yarn workspace @napi-rs/image napi create-npm-dirs
-      - name: Move artifacts
-        run: yarn artifacts
+      - name: Install artifact
+        run: |
+          mapfile -t IMAGE_ARTIFACT_FILES < <(find artifacts -type f -name '*.node')
+          test "${#IMAGE_ARTIFACT_FILES[@]}" -eq 1
+          cp "${IMAGE_ARTIFACT_FILES[0]}" packages/binding/
         shell: bash
       - name: List packages
         run: ls -R packages
