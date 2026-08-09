@@ -210,13 +210,26 @@ jobs:
         run: ${{ matrix.settings.build }}
         if: ${{ !matrix.settings.docker }}
         shell: bash
-      - name: Upload artifact
+      - name: Upload native artifact
+        if: matrix.settings.target != 'wasm32-wasip1-threads'
+        uses: actions/upload-artifact@v7
+        with:
+          name: bindings-${{ matrix.settings.target }}
+          path: packages/binding/*.node
+          if-no-files-found: error
+      - name: Upload WASI artifact
+        if: matrix.settings.target == 'wasm32-wasip1-threads'
         uses: actions/upload-artifact@v7
         with:
           name: bindings-${{ matrix.settings.target }}
           path: |
-            packages/binding/*.node
             packages/binding/image.wasm32-wasi.wasm
+            packages/binding/image.wasi.cjs
+            packages/binding/image.wasi.d.cts
+            packages/binding/image.wasi-browser.js
+            packages/binding/wasi-worker.mjs
+            packages/binding/wasi-worker-browser.mjs
+            packages/binding/index.js
           if-no-files-found: error
 
   build-armv7-linux-gnueabihf:
@@ -362,10 +375,12 @@ jobs:
         with:
           name: bindings-${{ matrix.settings.target }}
           path: artifacts
-      - name: Create npm dirs
-        run: yarn workspace @napi-rs/image napi create-npm-dirs
-      - name: Move artifacts
-        run: yarn artifacts
+      - name: Install artifact
+        run: |
+          IMAGE_ARTIFACT_FILE=$(find artifacts -type f -name '*.node')
+          test -n "$IMAGE_ARTIFACT_FILE"
+          test "$(find artifacts -type f -name '*.node' | wc -l | tr -d ' ')" -eq 1
+          cp "$IMAGE_ARTIFACT_FILE" packages/binding/
         shell: bash
       - name: List packages
         run: ls -R .
@@ -405,10 +420,12 @@ jobs:
         with:
           name: bindings-x86_64-unknown-linux-gnu
           path: artifacts
-      - name: Create npm dirs
-        run: yarn workspace @napi-rs/image napi create-npm-dirs
-      - name: Move artifacts
-        run: yarn artifacts
+      - name: Install artifact
+        run: |
+          IMAGE_ARTIFACT_FILE=$(find artifacts -type f -name '*.node')
+          test -n "$IMAGE_ARTIFACT_FILE"
+          test "$(find artifacts -type f -name '*.node' | wc -l | tr -d ' ')" -eq 1
+          cp "$IMAGE_ARTIFACT_FILE" packages/binding/
         shell: bash
       - name: List packages
         run: ls -R .
@@ -440,10 +457,12 @@ jobs:
         with:
           name: bindings-x86_64-unknown-linux-musl
           path: artifacts
-      - name: Create npm dirs
-        run: yarn workspace @napi-rs/image napi create-npm-dirs
-      - name: Move artifacts
-        run: yarn artifacts
+      - name: Install artifact
+        run: |
+          IMAGE_ARTIFACT_FILE=$(find artifacts -type f -name '*.node')
+          test -n "$IMAGE_ARTIFACT_FILE"
+          test "$(find artifacts -type f -name '*.node' | wc -l | tr -d ' ')" -eq 1
+          cp "$IMAGE_ARTIFACT_FILE" packages/binding/
         shell: bash
       - name: List packages
         run: ls -R .
@@ -470,10 +489,12 @@ jobs:
           path: artifacts
       - name: Install dependencies
         run: yarn install --immutable --mode=skip-build
-      - name: Create npm dirs
-        run: yarn workspace @napi-rs/image napi create-npm-dirs
-      - name: Move artifacts
-        run: yarn artifacts
+      - name: Install artifact
+        run: |
+          IMAGE_ARTIFACT_FILE=$(find artifacts -type f -name '*.node')
+          test -n "$IMAGE_ARTIFACT_FILE"
+          test "$(find artifacts -type f -name '*.node' | wc -l | tr -d ' ')" -eq 1
+          cp "$IMAGE_ARTIFACT_FILE" packages/binding/
         shell: bash
       - name: List packages
         run: ls -R packages
@@ -503,10 +524,12 @@ jobs:
           path: artifacts
       - name: Install dependencies
         run: yarn install --immutable --mode=skip-build
-      - name: Create npm dirs
-        run: yarn workspace @napi-rs/image napi create-npm-dirs
-      - name: Move artifacts
-        run: yarn artifacts
+      - name: Install artifact
+        run: |
+          IMAGE_ARTIFACT_FILE=$(find artifacts -type f -name '*.node')
+          test -n "$IMAGE_ARTIFACT_FILE"
+          test "$(find artifacts -type f -name '*.node' | wc -l | tr -d ' ')" -eq 1
+          cp "$IMAGE_ARTIFACT_FILE" packages/binding/
         shell: bash
       - name: List packages
         run: ls -R packages
