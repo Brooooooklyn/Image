@@ -72,9 +72,9 @@
   },
   "repository": "git@github.com:Brooooooklyn/Image.git",
   "devDependencies": {
-    "@emnapi/core": "2.0.0-alpha.3",
-    "@emnapi/runtime": "2.0.0-alpha.3",
-    "@napi-rs/cli": "3.8.3",
-    "@napi-rs/wasm-runtime": "1.2.2"
+    "@emnapi/core": "2.0.0-alpha.5",
+    "@emnapi/runtime": "2.0.0-alpha.5",
+    "@napi-rs/cli": "3.9.0",
+    "@napi-rs/wasm-runtime": "1.2.3"
   }
 }
