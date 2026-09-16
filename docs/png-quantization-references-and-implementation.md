@@ -411,3 +411,98 @@ Clean-room MIT implementation; no copyleft source was read. Shipped in **PR #208
 (clean-room quantizer) and accelerated in **PR #211** (runtime-dispatched SIMD,
 byte-identical). Determinism is the invariant that makes the SIMD safe and the output
 reproducible across x86 / aarch64 / wasm.
+
+---
+
+## 10. The 2026-09 optimization pass (branch `perf/quantize-optimizations`)
+
+A full audit → implement cycle. Three waves; byte-identical work is separated from
+output-changing work so each quality commit can be reverted independently.
+Verification harness: `packages/binding/examples/quant_hash.rs` (FNV-1a of
+palette+indices+quality, plus fixed RGBA metrics `cover`/`repro` that stay
+comparable across working-space changes).
+
+### 10a. Byte-identical speed (no output change; 18/18 harness hashes identical)
+
+- `lab.rs`: `f_q16` and `linear_to_srgb8` → exact 64K lookup tables (the per-pixel
+  integer cube-root and binary search are gone; LUT filled by the preserved body,
+  so identical by construction).
+- `quantize.rs`: multiply-xor `FastHasher` for the histogram/memo maps (all are
+  re-sorted, so hasher order never leaks into output); k-means reuses cached entry
+  Oklab values and fuses objective+assignment; fixed-point early exit on
+  converged palettes; `Cow` for `split_entries`; median-cut sort reuse; dither
+  zero-residual early-out and zero-error run memoization; integer quality
+  accumulation; `posterization` clamped `min(7)` (previously a shift ≥ 8 could
+  panic on direct `QuantizeConfig` calls).
+
+### 10b. Deterministic parallelism + general-path SIMD (still byte-identical)
+
+- `std::thread::scope` sharding for histogram, k-means assignment/objective,
+  `remap_nearest`, `quality_score`, and entry-space builds. Every cross-thread
+  merge is integer-associative or per-key-pure, so output is identical for ANY
+  shard count (tested at 1..=T). Error diffusion remains serial — its state is a
+  scan-order recurrence.
+- The translucent/general `nearest` path got an exact f64-lane kernel: every
+  score term is an integer < 2^53 and the divide is correctly-rounded, so the f64
+  scan is bit-identical to the i64 scalar reference. One transparent pixel no
+  longer drops the whole image off SIMD.
+
+### 10c. Quality changes (each its own commit; output changes are deliberate)
+
+1. **Quality gate scores the remap, not the dithered indices** — dithering
+   deliberately picks non-nearest entries; scoring them punished the mechanism
+   that improves perceived quality and could fire pointless 256-retries.
+2. **Importance-weighted histogram** — noisy/high-activity regions get less
+   palette budget; stable content gets more (integer weights, deterministic).
+3. **Oklab working space** replaces CIELAB end-to-end: `rgb_to_oklab` uses the
+   shared Q16 sRGB→linear table + published M1/M2 matrices + `f32::cbrt`
+   (correctly-rounded, deterministic), quantized to Q14 (16383-scale) `i32`
+   triples so ALL
+   downstream machinery (median-cut split space stays RGBA8; k-means centroids,
+   split-merge, `pdist`, both SIMD kernels) is unchanged in shape. Centroid
+   updates now happen in the assignment space via integer `oklab_to_rgb8`.
+   Weights recalibrated to the Oklab scale; `QUALITY_RMSE_DIVISOR` re-tuned so
+   the public `minQuality` 0..100 gate keeps its operating points. Fixed-metric
+   A/B: `repro` improved 6–32% on every harness case; `cover` improved on 8/12.
+4. **Deterministic split-and-merge refinement** after Lloyd (Kaukoranta-style):
+   escapes local optima behind the keep-best guard; Ward-style merge costs,
+   no RNG.
+5. **Ostromoukhov variable-coefficient error diffusion** replaces fixed
+   7/3/5/1 taps: the published 256-entry intensity-indexed 3-tap table
+   (mirrored per the paper's symmetry), indexed by integer Rec.601 luma of the
+   current `want`, serpentine-mirrored. f32 coefficients, normalized rows.
+6. **Palette merge-down** (`QuantizeConfig.merge_down`, ramp-derived sizes
+   only — an explicit `colors` request is a hard contract): merges the
+   cheapest Ward-cost pair while `quality ≥ min_quality + 2`, ≤ 8 steps,
+   recomputes indices wholesale.
+
+### 10d. API & encoding
+
+- `PngQuantOptions.colors?: number` — explicit palette size 1..=256, overrides
+  the `maxQuality` ramp; `minQuality` gate unchanged.
+- `PngQuantOptions.useZopfli?: boolean` — opt-in zopfli deflater for the final
+  oxipng pass (Cargo feature `png_quantize_zopfli`; `true` without it errors).
+- The throwaway intermediate lodepng encode runs at compression level 1 with
+  auto-convert disabled — its DEFLATE output is almost always discarded under
+  oxipng anyway.
+
+### 10e. Measured (1024×681 photo, Apple Silicon)
+
+```
+              baseline  wave-2   notes
+default        ~433ms   ~207ms   (see merge-down note: opt-in cost)
+colors/256     ~435ms   ~208ms   ~2.1x
+no_dither/256  ~365ms   ~166ms   ~2.2x
+colors/16      ~280ms   ~143ms   ~2.0x
+```
+
+The Oklab u16 (Q16, scale 65535) quantization's worst-case ΔE² (4.29e9
+in-gamut; 3·65535² ≈ 1.29e10 over the stored domain) exceeded i32::MAX and
+temporarily forced f64 lanes on the opaque kernel; rescaling the working space
+to Q14 (16383) restores the i32 kernels unconditionally — `3·16383² =
+805_208_067 < i32::MAX` for ANY two stored triples, compile-time asserted in
+`lab.rs`. Measured on this machine (criterion, 100 samples): default
+665.6 → 371.3ms (−44%), max_quality_75 467.0 → 317.2ms (−32%), colors/256
+359.6 → 240.1ms (−33%), no_dither/256 274.4 → 199.1ms (−27%), colors/64
+205.4 → 178.7ms (−13%), colors/16 146.6 → 141.5ms (−3.5%). The sRGB→linear
+lookup table stays Q16 — only the stored Oklab components are Q14.

@@ -9,26 +9,24 @@
 //! squared Oklab distance:
 //!
 //! ```text
-//! d == de == dl² + da² + db²        (dl,da,db = query.OkLab − entry.OkLab, u16 units)
+//! d == de == dl² + da² + db²        (dl,da,db = query.OkLab − entry.OkLab, Q14 units)
 //! ```
 //!
-//! For in-gamut Oklab this reaches `de = MAX_OKLAB_DIST_SQ = 4_294_836_225` — which
-//! EXCEEDS `i32::MAX` (the Oklab u16 components span the full 0..=65535, unlike the
-//! ~±26_000 CIELAB components the i32-lane kernels were sized for). The scan therefore
-//! runs in **f64 lanes**: every operand is an integer ≤ 65535 and `de ≤ 3·65535² ≈
-//! 1.3e10 < 2⁵³`, so the f64 arithmetic is EXACT — bit-identical to the integer
-//! reference, with the same strict-`<` lowest-index tie-break. This module provides the
-//! argmin over Structure-of-Arrays palette Oklab components (`l[]`, `a[]`, `b[]`),
-//! dispatched at runtime to the widest SIMD the host supports (AVX2 4-wide or SSE4.1
-//! 2-wide f64 on x86; NEON 2-wide f64 on aarch64; simd128 2-wide f64 on wasm), with a
-//! scalar reference that defines the result every width reproduces.
+//! The stored Oklab components are Q14 (`0..=16383`, `crate::lab::OKLAB_SCALE`), so for
+//! ANY two stored triples `|Δ| ≤ 16383` and `de ≤ 3·16383² = 805_208_067 < i32::MAX` —
+//! unconditionally, compile-proven in `lab.rs`. The whole scan therefore fits in **i32
+//! lanes** — no divide, no 64-bit, no penalties, no branches. This module provides the
+//! `i32` argmin over Structure-of-Arrays palette Oklab components (`l[]`, `a[]`, `b[]`),
+//! dispatched at runtime to the widest SIMD the host supports (AVX2 8-wide or SSE4.1
+//! 4-wide on x86; NEON 4-wide on aarch64; simd128 4-wide on wasm), with a scalar
+//! reference that defines the result every width reproduces.
 //!
 //! # Determinism is SACRED
 //!
 //! The encoded PNG must stay **byte-identical** across x86_64 / aarch64 / wasm32 and
-//! run-to-run. Every lane value is an integer < 2⁵³, so the f64 arithmetic is exact —
-//! no rounding, no ordering sensitivity, same result at every lane width. Each SIMD
-//! kernel reproduces the scalar reference *bit-for-bit*, including the
+//! run-to-run. Every opaque-scan kernel here is **integer-only** (i32 add/mul/min);
+//! integer arithmetic is associative and exact, so lane order cannot change the result.
+//! Each SIMD kernel reproduces the scalar reference *bit-for-bit*, including the
 //! **lowest-index-wins** tie-break (scalar uses strict `d < best_d`, scanning indices
 //! ascending). The `kernel_matches_scalar*` tests are the gate.
 //!
@@ -39,30 +37,32 @@
 //!
 //! ```text
 //! skip entry if (skip_transparent && pa == 0)
-//! de    = dl² + da² + db²                       (i64, ≤ ~1.3e10)
+//! de    = dl² + da² + db²                       (i64, ≤ 8.05e8)
 //! wa    = query_a + pa                          (0..=510)
-//! score = (de·wa)/510 + da²·64000               (integer floor-div; de·wa ≤ ~6.6e12)
-//!       + (src>0 && pa<src ? 128000·(src−pa)² : 0) // dim_penalty,   src = guard_src_alpha
-//!       + (src>pa         ?    100·(src−pa)³ : 0)  // vanish_penalty
+//! score = (de·wa)/510 + da²·4000                (integer floor-div; de·wa ≤ ~4.1e11)
+//!       + (src>0 && pa<src ? 8000·(src−pa)² : 0)   // dim_penalty,   src = guard_src_alpha
+//!       + (src>pa         ?    7·(src−pa)³ : 0)    // vanish_penalty
 //! argmin by strict `<`, lowest index wins
 //! ```
 //!
 //! plus `nearest_oklab`'s two tiers: tier 1 scans with the transparent-slot exclusion; if
 //! EVERY entry was excluded (all-transparent palette) tier 2 rescans without it.
 //!
-//! The general kernels run this scan in **f64 lanes**, which is still bit-exact:
+//! The general kernels run this scan in **f64 lanes**, which is still bit-exact
+//! (`de·wa` reaches ~4.1e11 — the product does not fit `i32`, so unlike the opaque
+//! scan this path keeps `f64` lanes):
 //!
 //! * Every operand is an integer < 2⁵³ → exactly representable in f64.
-//! * `de·wa ≤ ~6.6e12 < 2⁵³` → the product is exact.
+//! * `de·wa ≤ ~4.1e11 < 2⁵³` → the product is exact.
 //! * `(de·wa)/510` in f64 is the correctly-rounded real quotient, and
 //!   `floor(quotient_f64) == floor(exact rational)`: the exact quotient's fractional
 //!   part is a multiple of 1/510 (~0.002), far larger than the f64 representation error
-//!   (≤ ~2⁻⁵² relative ≈ 6e-6 absolute at a ~2.6e10 quotient) — the correctly-rounded
-//!   value can only cross an integer boundary if the true value is within ~6e-6 of one,
+//!   (≤ ~2⁻⁵² relative ≈ 2e-7 absolute at a ~8e8 quotient) — the correctly-rounded
+//!   value can only cross an integer boundary if the true value is within ~2e-7 of one,
 //!   which is impossible when the nearest fractional values are 0 and ≥1/510 away. So
 //!   `floor` reproduces the integer floor-division exactly.
-//! * `da²·64000`, `128000·d²`, `100·d³` are exact integers < 2⁵³.
-//! * The sum is < ~2.7e10 < 2⁵³ → exact; comparisons are exact. The lowest-index
+//! * `da²·4000`, `8000·d²`, `7·d³` are exact integers < 2⁵³.
+//! * The sum is < ~1.8e9 < 2⁵³ → exact; comparisons are exact. The lowest-index
 //!   tie-break via strict `<` is preserved.
 //! * f64 add/mul/div/floor are IEEE-754 correctly rounded → identical on
 //!   x86/aarch64/wasm (wasm f64x2 ops are IEEE too). The determinism contract holds.
@@ -92,24 +92,24 @@ pub(crate) enum OpaqueKernel {
   /// Portable integer reference. Defines the byte-exact result every other kernel
   /// must reproduce. Always available on every target.
   Scalar,
-  /// NEON (aarch64) 2-wide f64 argmin. NEON is part of the AArch64 baseline, so it is
+  /// NEON (aarch64) 4-wide i32 argmin. NEON is part of the AArch64 baseline, so it is
   /// always present on aarch64 — no runtime probe, no host can lack it.
   #[cfg(target_arch = "aarch64")]
   Neon,
-  /// AVX2 (x86_64) 4-wide f64 argmin — the widest x86 path, preferred when the host reports
-  /// AVX2 (the common case on modern x86 and the CodSpeed runner). Wider lanes than the 2-wide
-  /// kernels, but byte-identical: every operand is an integer < 2⁵³ so the f64 lane math is
-  /// exact and the 4-lane reduction reaches the same lowest-index argmin as scalar (the
-  /// `kernel_matches_scalar_*` tests gate every width against the scalar reference).
+  /// AVX2 (x86_64) 8-wide i32 argmin — the widest x86 path, preferred when the host reports
+  /// AVX2 (the common case on modern x86 and the CodSpeed runner). Wider lanes than the 4-wide
+  /// kernels, but byte-identical: integer add/mul/min are exact, so the 8-lane reduction
+  /// reaches the same lowest-index argmin as scalar (the `kernel_matches_scalar_*` tests gate
+  /// every width against the scalar reference).
   #[cfg(target_arch = "x86_64")]
   Avx2,
-  /// SSE4.1 (x86_64) 2-wide f64 argmin — the pre-AVX2 x86 fallback (older Intel Macs, some
+  /// SSE4.1 (x86_64) 4-wide i32 argmin — the pre-AVX2 x86 fallback (older Intel Macs, some
   /// musl/Windows hosts). Selected when the host reports SSE4.1 but not AVX2; older x86 still
   /// falls back to scalar. Produces the identical argmin as AVX2/scalar — different lane width,
-  /// same exact-f64 result, so the byte-identical cross-arch contract holds across widths.
+  /// same exact-integer result, so the byte-identical cross-arch contract holds across widths.
   #[cfg(target_arch = "x86_64")]
   Sse41,
-  /// wasm32 `simd128` 2-wide f64 argmin — the 128-bit path, uniform with NEON/SSE4.1.
+  /// wasm32 `simd128` 4-wide i32 argmin — the 128-bit 4-lane path, uniform with NEON/SSE4.1.
   /// simd128 is a COMPILE-TIME feature on wasm (no runtime detection exists); the build
   /// enables it via `.cargo/config.toml` (`+simd128`). A wasm build without it uses scalar.
   #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
@@ -147,7 +147,7 @@ fn detect_native() -> OpaqueKernel {
   #[cfg(target_arch = "x86_64")]
   {
     // Probe at runtime, preferring the widest path the host supports so no host ever
-    // executes an unsupported instruction: AVX2 (4-wide f64) on modern x86, SSE4.1 (2-wide)
+    // executes an unsupported instruction: AVX2 (8-wide) on modern x86, SSE4.1 (4-wide)
     // on pre-AVX2 x86, scalar on anything older. All three reach the byte-identical argmin.
     if std::is_x86_feature_detected!("avx2") {
       OpaqueKernel::Avx2
@@ -192,7 +192,7 @@ fn force_scalar() -> bool {
   })
 }
 
-/// Index of the palette entry nearest `q = [L, a, b]` (u16-quantized Oklab) by squared
+/// Index of the palette entry nearest `q = [L, a, b]` (Q14-quantized Oklab) by squared
 /// Oklab distance, over the Structure-of-Arrays palette components. **Opaque fast path
 /// only** — the caller guarantees the palette is fully opaque and the query is opaque,
 /// so this exact `dl²+da²+db²` argmin equals the general `nearest_oklab` result.
@@ -223,11 +223,11 @@ pub(crate) fn opaque_argmin(
   }
 }
 
-/// Portable integer reference for [`opaque_argmin`]. Computed in `i64` — `de` reaches
-/// ~4.3e9 in-gamut (and ~1.3e10 for the full `0..=65535` component domain), which
-/// OVERFLOWS `i32`, so the SIMD kernels evaluate the same `dl²+da²+db²` in exact `f64`
-/// lanes (every operand is an integer < 2⁵³). Scans ascending with strict `<`, so the
-/// lowest index wins on a tie.
+/// Portable integer reference for [`opaque_argmin`]. Computed in `i64` — cheap and
+/// unimpeachable — but the VALUES always fit `i32`: over the whole `0..=16383` Q14
+/// component domain `de ≤ 3·16383² = 805_208_067 < i32::MAX` (the `lab.rs` const
+/// proof), so every SIMD kernel reaches the same argmin in `i32` lanes. Scans
+/// ascending with strict `<`, so the lowest index wins on a tie.
 fn opaque_scan_scalar(l: &[i32], a: &[i32], b: &[i32], q: [i32; 3]) -> usize {
   let [ql, qa, qb] = q;
   let mut best = 0usize;
@@ -245,83 +245,88 @@ fn opaque_scan_scalar(l: &[i32], a: &[i32], b: &[i32], q: [i32; 3]) -> usize {
   best
 }
 
-/// NEON (aarch64) implementation of [`opaque_argmin`]: 2-wide f64 argmin of
-/// `dl²+da²+db²`, bit-identical to [`opaque_scan_scalar`]. The squared distance exceeds
-/// `i32::MAX` under Oklab u16 components (`de ≤ 3·65535² ≈ 1.3e10`), so the lanes are
-/// `f64`: every operand is an integer < 2⁵³, making the f64 math exact. Each lane keeps
-/// the lowest index achieving its running min (strict `vcltq_f64`); then the shared
-/// [`reduce_general_lanes`] fold followed by the `n % 2` scalar tail reproduces the
-/// ascending lowest-index-wins tie-break. SAFETY: only reachable via
-/// `detect`/`opaque_argmin` on aarch64, where NEON is guaranteed.
+/// NEON (aarch64) implementation of [`opaque_argmin`]: 4-wide i32 argmin of
+/// `dl²+da²+db²`, bit-identical to [`opaque_scan_scalar`]. Every value fits `i32`:
+/// stored components are `0..=16383` so `de ≤ 3·16383² = 805_208_067 < i32::MAX`
+/// unconditionally (the `lab.rs` const proof) — the lanes are plain `s32`, no
+/// conversion needed. Each lane keeps the lowest index achieving its running min
+/// (strict `vcltq_s32`); then a lowest-index cross-lane fold followed by the `n % 4`
+/// scalar tail reproduces the ascending lowest-index-wins tie-break. SAFETY: only
+/// reachable via `detect`/`opaque_argmin` on aarch64, where NEON is guaranteed.
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
 unsafe fn opaque_scan_neon(l: &[i32], a: &[i32], b: &[i32], q: [i32; 3]) -> usize {
   use core::arch::aarch64::*;
   unsafe {
     let n = l.len();
-    let vql = vdupq_n_f64(q[0] as f64);
-    let vqa = vdupq_n_f64(q[1] as f64);
-    let vqb = vdupq_n_f64(q[2] as f64);
-    let lane_idx = vld1q_f64([0.0, 1.0].as_ptr());
-    let mut min_d = vdupq_n_f64(f64::INFINITY);
-    let mut min_i = vdupq_n_f64(-1.0);
+    let vql = vdupq_n_s32(q[0]);
+    let vqa = vdupq_n_s32(q[1]);
+    let vqb = vdupq_n_s32(q[2]);
+    let lane_idx = vld1q_s32([0i32, 1, 2, 3].as_ptr());
+    let mut min_d = vdupq_n_s32(i32::MAX);
+    let mut min_i = vdupq_n_s32(i32::MAX);
 
     let mut i = 0usize;
-    while i + 2 <= n {
-      // i32x2 -> i64x2 -> f64x2: every i32 is exactly representable in f64.
-      let lf = vcvtq_f64_s64(vmovl_s32(vld1_s32(l.as_ptr().add(i))));
-      let af = vcvtq_f64_s64(vmovl_s32(vld1_s32(a.as_ptr().add(i))));
-      let bf = vcvtq_f64_s64(vmovl_s32(vld1_s32(b.as_ptr().add(i))));
-      let dl = vsubq_f64(vql, lf);
-      let da = vsubq_f64(vqa, af);
-      let db = vsubq_f64(vqb, bf);
-      let d = vaddq_f64(
-        vaddq_f64(vmulq_f64(dl, dl), vmulq_f64(da, da)),
-        vmulq_f64(db, db),
+    while i + 4 <= n {
+      let lf = vld1q_s32(l.as_ptr().add(i));
+      let af = vld1q_s32(a.as_ptr().add(i));
+      let bf = vld1q_s32(b.as_ptr().add(i));
+      let dl = vsubq_s32(vql, lf);
+      let da = vsubq_s32(vqa, af);
+      let db = vsubq_s32(vqb, bf);
+      let d = vaddq_s32(
+        vaddq_s32(vmulq_s32(dl, dl), vmulq_s32(da, da)),
+        vmulq_s32(db, db),
       );
-      let cur_i = vaddq_f64(vdupq_n_f64(i as f64), lane_idx);
+      let cur_i = vaddq_s32(vdupq_n_s32(i as i32), lane_idx);
       // lanes where d < min_d (STRICT: a later equal value does NOT replace -> lowest
       // index kept within the lane, matching the scalar `<`).
-      let m = vcltq_f64(d, min_d);
-      min_d = vbslq_f64(m, d, min_d);
-      min_i = vbslq_f64(m, cur_i, min_i);
-      i += 2;
+      let m = vcltq_s32(d, min_d);
+      min_d = vbslq_s32(m, d, min_d);
+      min_i = vbslq_s32(m, cur_i, min_i);
+      i += 4;
     }
 
-    // Reduce the 2 lanes: lowest d, tie -> lowest index. An un-run lane holds +INF /
-    // -1.0 and can never win (`reduce_general_lanes` skips non-finite lanes).
-    let mut ld = [0.0f64; 2];
-    let mut li = [0.0f64; 2];
-    vst1q_f64(ld.as_mut_ptr(), min_d);
-    vst1q_f64(li.as_mut_ptr(), min_i);
+    // Reduce the 4 lanes: lowest d, tie -> lowest index. An un-run lane holds
+    // i32::MAX / i32::MAX — `d < i32::MAX` always (de ≤ 805_208_067), so a lane that
+    // saw a real entry always beats the sentinel, and `li[k] < bi` is never true
+    // between two sentinels.
+    let mut ld = [0i32; 4];
+    let mut li = [0i32; 4];
+    vst1q_s32(ld.as_mut_ptr(), min_d);
+    vst1q_s32(li.as_mut_ptr(), min_i);
 
-    let mut best_d = f64::INFINITY;
-    let mut best = 0usize;
-    reduce_general_lanes(&ld, &li, &mut best_d, &mut best);
-    // Tail (n % 2): ascending, strict `<`, so a tail entry only wins on a STRICT
+    let (mut best_d, mut best) = (ld[0], li[0]);
+    for k in 1..4 {
+      if ld[k] < best_d || (ld[k] == best_d && li[k] < best) {
+        best_d = ld[k];
+        best = li[k];
+      }
+    }
+    // Tail (n % 4): ascending, strict `<`, so a tail entry only wins on a STRICT
     // improvement — preserving lowest-index-on-tie against the lower-indexed lane winners.
     while i < n {
-      let dl = (q[0] - l[i]) as i64;
-      let da = (q[1] - a[i]) as i64;
-      let db = (q[2] - b[i]) as i64;
+      let dl = q[0] - l[i];
+      let da = q[1] - a[i];
+      let db = q[2] - b[i];
       let d = dl * dl + da * da + db * db;
-      if (d as f64) < best_d {
-        best_d = d as f64;
-        best = i;
+      if d < best_d {
+        best_d = d;
+        best = i as i32;
       }
       i += 1;
     }
-    best
+    best as usize
   }
 }
 
-/// AVX2 (x86_64) implementation of [`opaque_argmin`]: 4-wide f64 argmin of `dl²+da²+db²`,
-/// the widest x86 path. Bit-identical to [`opaque_scan_scalar`] and to the 2-wide kernels:
-/// the squared distance exceeds `i32::MAX` under Oklab u16 components (`de ≤ 3·65535² ≈
-/// 1.3e10`), so the lanes are `f64` — every operand is an integer < 2⁵³, making the f64
-/// math exact. The per-lane compare is STRICT (`_CMP_LT_OQ` is `d < min_d`), so a later
-/// equal value never displaces the lower index within a lane; the shared
-/// [`reduce_general_lanes`] fold + the `n % 4` scalar tail reproduce the scalar
+/// AVX2 (x86_64) implementation of [`opaque_argmin`]: 8-wide i32 argmin of `dl²+da²+db²`,
+/// the widest x86 path. Bit-identical to [`opaque_scan_scalar`] and to the 4-wide kernels:
+/// stored components are `0..=16383` so `de ≤ 3·16383² = 805_208_067 < i32::MAX`
+/// unconditionally (the `lab.rs` const proof) — the lanes are plain `epi32` and every
+/// add/mul is exact. The per-lane compare is STRICT (`_mm256_cmpgt_epi32(min_d, d)` is
+/// `d < min_d`), so a later equal value never displaces the lower index within a lane;
+/// the 8-lane lowest-index reduction + the `n % 8` scalar tail reproduce the scalar
 /// reference's ascending lowest-index-wins tie-break. SAFETY: only reachable via
 /// `detect`/`opaque_argmin` after `is_x86_feature_detected!("avx2")`.
 #[cfg(target_arch = "x86_64")]
@@ -330,68 +335,72 @@ unsafe fn opaque_scan_avx2(l: &[i32], a: &[i32], b: &[i32], q: [i32; 3]) -> usiz
   use core::arch::x86_64::*;
   unsafe {
     let n = l.len();
-    let vql = _mm256_set1_pd(q[0] as f64);
-    let vqa = _mm256_set1_pd(q[1] as f64);
-    let vqb = _mm256_set1_pd(q[2] as f64);
-    let lane_idx = _mm256_set_pd(3.0, 2.0, 1.0, 0.0); // lane0=0 .. lane3=3
-    let mut min_d = _mm256_set1_pd(f64::INFINITY);
-    let mut min_i = _mm256_set1_pd(-1.0);
+    let vql = _mm256_set1_epi32(q[0]);
+    let vqa = _mm256_set1_epi32(q[1]);
+    let vqb = _mm256_set1_epi32(q[2]);
+    let lane_idx = _mm256_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7);
+    let mut min_d = _mm256_set1_epi32(i32::MAX);
+    let mut min_i = _mm256_set1_epi32(i32::MAX);
 
     let mut i = 0usize;
-    while i + 4 <= n {
-      // 4×i32 -> 4×f64: vcvtdq2pd ymm reads the four i32 lanes of an xmm.
-      let lf = _mm256_cvtepi32_pd(_mm_loadu_si128(l.as_ptr().add(i) as *const __m128i));
-      let af = _mm256_cvtepi32_pd(_mm_loadu_si128(a.as_ptr().add(i) as *const __m128i));
-      let bf = _mm256_cvtepi32_pd(_mm_loadu_si128(b.as_ptr().add(i) as *const __m128i));
-      let dl = _mm256_sub_pd(vql, lf);
-      let da = _mm256_sub_pd(vqa, af);
-      let db = _mm256_sub_pd(vqb, bf);
-      let d = _mm256_add_pd(
-        _mm256_add_pd(_mm256_mul_pd(dl, dl), _mm256_mul_pd(da, da)),
-        _mm256_mul_pd(db, db),
+    while i + 8 <= n {
+      let lf = _mm256_loadu_si256(l.as_ptr().add(i) as *const __m256i);
+      let af = _mm256_loadu_si256(a.as_ptr().add(i) as *const __m256i);
+      let bf = _mm256_loadu_si256(b.as_ptr().add(i) as *const __m256i);
+      let dl = _mm256_sub_epi32(vql, lf);
+      let da = _mm256_sub_epi32(vqa, af);
+      let db = _mm256_sub_epi32(vqb, bf);
+      let d = _mm256_add_epi32(
+        _mm256_add_epi32(_mm256_mullo_epi32(dl, dl), _mm256_mullo_epi32(da, da)),
+        _mm256_mullo_epi32(db, db),
       );
-      let cur_i = _mm256_add_pd(_mm256_set1_pd(i as f64), lane_idx);
-      // lanes where d < min_d (ordered, STRICT): a later equal value does NOT replace.
-      let m = _mm256_cmp_pd::<_CMP_LT_OQ>(d, min_d);
-      min_d = _mm256_blendv_pd(min_d, d, m);
-      min_i = _mm256_blendv_pd(min_i, cur_i, m);
-      i += 4;
+      let cur_i = _mm256_add_epi32(_mm256_set1_epi32(i as i32), lane_idx);
+      // lanes where d < min_d (signed, STRICT): a later equal value does NOT replace.
+      let m = _mm256_cmpgt_epi32(min_d, d);
+      min_d = _mm256_blendv_epi8(min_d, d, m);
+      min_i = _mm256_blendv_epi8(min_i, cur_i, m);
+      i += 8;
     }
 
-    // Reduce the 4 lanes: lowest d, tie -> lowest index. An un-run lane holds +INF /
-    // -1.0 and can never win (`reduce_general_lanes` skips non-finite lanes).
-    let mut ld = [0.0f64; 4];
-    let mut li = [0.0f64; 4];
-    _mm256_storeu_pd(ld.as_mut_ptr(), min_d);
-    _mm256_storeu_pd(li.as_mut_ptr(), min_i);
+    // Reduce the 8 lanes: lowest d, tie -> lowest index. An un-run lane holds
+    // i32::MAX / i32::MAX — `d < i32::MAX` always, so a real entry always beats the
+    // sentinel and two sentinels never swap.
+    let mut ld = [0i32; 8];
+    let mut li = [0i32; 8];
+    _mm256_storeu_si256(ld.as_mut_ptr() as *mut __m256i, min_d);
+    _mm256_storeu_si256(li.as_mut_ptr() as *mut __m256i, min_i);
 
-    let mut best_d = f64::INFINITY;
-    let mut best = 0usize;
-    reduce_general_lanes(&ld, &li, &mut best_d, &mut best);
-    // Tail (n % 4): ascending strict `<` in i64 — a tail entry only wins on a STRICT
+    let (mut best_d, mut best) = (ld[0], li[0]);
+    for k in 1..8 {
+      if ld[k] < best_d || (ld[k] == best_d && li[k] < best) {
+        best_d = ld[k];
+        best = li[k];
+      }
+    }
+    // Tail (n % 8): ascending strict `<` — a tail entry only wins on a STRICT
     // improvement, preserving lowest-index-on-tie against the lane winners.
     while i < n {
-      let dl = (q[0] - l[i]) as i64;
-      let da = (q[1] - a[i]) as i64;
-      let db = (q[2] - b[i]) as i64;
+      let dl = q[0] - l[i];
+      let da = q[1] - a[i];
+      let db = q[2] - b[i];
       let d = dl * dl + da * da + db * db;
-      if (d as f64) < best_d {
-        best_d = d as f64;
-        best = i;
+      if d < best_d {
+        best_d = d;
+        best = i as i32;
       }
       i += 1;
     }
-    best
+    best as usize
   }
 }
 
-/// SSE4.1 (x86_64) implementation of [`opaque_argmin`]: 2-wide f64 argmin of
+/// SSE4.1 (x86_64) implementation of [`opaque_argmin`]: 4-wide i32 argmin of
 /// `dl²+da²+db²`, the pre-AVX2 x86 fallback (older Intel Macs, some musl/Windows hosts).
-/// Bit-identical to [`opaque_scan_scalar`] and to AVX2 — same exact-f64 argmin (every
-/// operand is an integer < 2⁵³; `de ≤ 3·65535² ≈ 1.3e10` exceeds `i32::MAX`, hence f64
-/// lanes), narrower width: strict per-lane compare (`_mm_cmplt_pd`) keeps the lowest
-/// index within a lane, then the shared [`reduce_general_lanes`] fold + the `n % 2`
-/// scalar tail reproduce the ascending tie-break. SAFETY: only reachable via
+/// Bit-identical to [`opaque_scan_scalar`] and to AVX2 — same exact-integer argmin
+/// (`de ≤ 3·16383² = 805_208_067 < i32::MAX` unconditionally), narrower width: strict
+/// per-lane compare (`_mm_cmpgt_epi32(min_d, d)` is `d < min_d`) keeps the lowest index
+/// within a lane, then the 4-lane lowest-index reduction + the `n % 4` scalar tail
+/// reproduce the ascending tie-break. SAFETY: only reachable via
 /// `detect`/`opaque_argmin` after `is_x86_feature_detected!("sse4.1")`.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse4.1")]
@@ -399,127 +408,133 @@ unsafe fn opaque_scan_sse41(l: &[i32], a: &[i32], b: &[i32], q: [i32; 3]) -> usi
   use core::arch::x86_64::*;
   unsafe {
     let n = l.len();
-    let vql = _mm_set1_pd(q[0] as f64);
-    let vqa = _mm_set1_pd(q[1] as f64);
-    let vqb = _mm_set1_pd(q[2] as f64);
-    let lane_idx = _mm_set_pd(1.0, 0.0); // lane0=0, lane1=1
-    let mut min_d = _mm_set1_pd(f64::INFINITY);
-    let mut min_i = _mm_set1_pd(-1.0);
+    let vql = _mm_set1_epi32(q[0]);
+    let vqa = _mm_set1_epi32(q[1]);
+    let vqb = _mm_set1_epi32(q[2]);
+    let lane_idx = _mm_setr_epi32(0, 1, 2, 3);
+    let mut min_d = _mm_set1_epi32(i32::MAX);
+    let mut min_i = _mm_set1_epi32(i32::MAX);
 
     let mut i = 0usize;
-    while i + 2 <= n {
-      // 2×i32 -> 2×f64: movq loads the two i32s, cvtdq2pd converts them.
-      let lf = _mm_cvtepi32_pd(_mm_loadl_epi64(l.as_ptr().add(i) as *const __m128i));
-      let af = _mm_cvtepi32_pd(_mm_loadl_epi64(a.as_ptr().add(i) as *const __m128i));
-      let bf = _mm_cvtepi32_pd(_mm_loadl_epi64(b.as_ptr().add(i) as *const __m128i));
-      let dl = _mm_sub_pd(vql, lf);
-      let da = _mm_sub_pd(vqa, af);
-      let db = _mm_sub_pd(vqb, bf);
-      let d = _mm_add_pd(
-        _mm_add_pd(_mm_mul_pd(dl, dl), _mm_mul_pd(da, da)),
-        _mm_mul_pd(db, db),
+    while i + 4 <= n {
+      let lf = _mm_loadu_si128(l.as_ptr().add(i) as *const __m128i);
+      let af = _mm_loadu_si128(a.as_ptr().add(i) as *const __m128i);
+      let bf = _mm_loadu_si128(b.as_ptr().add(i) as *const __m128i);
+      let dl = _mm_sub_epi32(vql, lf);
+      let da = _mm_sub_epi32(vqa, af);
+      let db = _mm_sub_epi32(vqb, bf);
+      let d = _mm_add_epi32(
+        _mm_add_epi32(_mm_mullo_epi32(dl, dl), _mm_mullo_epi32(da, da)),
+        _mm_mullo_epi32(db, db),
       );
-      let cur_i = _mm_add_pd(_mm_set1_pd(i as f64), lane_idx);
-      let m = _mm_cmplt_pd(d, min_d); // d < min_d, STRICT
-      min_d = _mm_blendv_pd(min_d, d, m);
-      min_i = _mm_blendv_pd(min_i, cur_i, m);
-      i += 2;
+      let cur_i = _mm_add_epi32(_mm_set1_epi32(i as i32), lane_idx);
+      let m = _mm_cmpgt_epi32(min_d, d); // d < min_d, STRICT
+      min_d = _mm_blendv_epi8(min_d, d, m);
+      min_i = _mm_blendv_epi8(min_i, cur_i, m);
+      i += 4;
     }
 
-    // Reduce the 2 lanes: lowest d, tie -> lowest index. An un-run lane holds +INF /
-    // -1.0 and can never win (`reduce_general_lanes` skips non-finite lanes).
-    let mut ld = [0.0f64; 2];
-    let mut li = [0.0f64; 2];
-    _mm_storeu_pd(ld.as_mut_ptr(), min_d);
-    _mm_storeu_pd(li.as_mut_ptr(), min_i);
+    // Reduce the 4 lanes: lowest d, tie -> lowest index. An un-run lane holds
+    // i32::MAX / i32::MAX and can never win a real entry.
+    let mut ld = [0i32; 4];
+    let mut li = [0i32; 4];
+    _mm_storeu_si128(ld.as_mut_ptr() as *mut __m128i, min_d);
+    _mm_storeu_si128(li.as_mut_ptr() as *mut __m128i, min_i);
 
-    let mut best_d = f64::INFINITY;
-    let mut best = 0usize;
-    reduce_general_lanes(&ld, &li, &mut best_d, &mut best);
-    // Tail (n % 2): ascending strict `<` in i64 — a tail entry only wins on a STRICT
+    let (mut best_d, mut best) = (ld[0], li[0]);
+    for k in 1..4 {
+      if ld[k] < best_d || (ld[k] == best_d && li[k] < best) {
+        best_d = ld[k];
+        best = li[k];
+      }
+    }
+    // Tail (n % 4): ascending strict `<` — a tail entry only wins on a STRICT
     // improvement, preserving lowest-index-on-tie against the lane winners.
     while i < n {
-      let dl = (q[0] - l[i]) as i64;
-      let da = (q[1] - a[i]) as i64;
-      let db = (q[2] - b[i]) as i64;
+      let dl = q[0] - l[i];
+      let da = q[1] - a[i];
+      let db = q[2] - b[i];
       let d = dl * dl + da * da + db * db;
-      if (d as f64) < best_d {
-        best_d = d as f64;
-        best = i;
+      if d < best_d {
+        best_d = d;
+        best = i as i32;
       }
       i += 1;
     }
-    best
+    best as usize
   }
 }
 
-/// wasm32 `simd128` implementation of [`opaque_argmin`]: 2-wide f64 argmin of
+/// wasm32 `simd128` implementation of [`opaque_argmin`]: 4-wide i32 argmin of
 /// `dl²+da²+db²`, the 128-bit path uniform with NEON/SSE4.1. Bit-identical to
-/// [`opaque_scan_scalar`]: wasm f64x2 ops are IEEE-754 correctly rounded and every
-/// operand is an integer < 2⁵³ (`de ≤ 3·65535² ≈ 1.3e10` exceeds `i32::MAX`, hence f64
-/// lanes). Strict per-lane compare (`f64x2_lt`) keeps the lowest index within a lane,
-/// then the shared [`reduce_general_lanes`] fold + the `n % 2` scalar tail reproduce the
-/// ascending tie-break. SAFETY: only compiled/reached when `simd128` is statically
-/// enabled (gated by `cfg(target_feature = "simd128")`), so the ops are always legal.
+/// [`opaque_scan_scalar`]: wasm integer lanes are exact on every engine and
+/// `de ≤ 3·16383² = 805_208_067 < i32::MAX` unconditionally (the `lab.rs` const proof).
+/// Strict per-lane compare (`i32x4_lt`) keeps the lowest index within a lane, then the
+/// 4-lane lowest-index reduction + the `n % 4` scalar tail reproduce the ascending
+/// tie-break. SAFETY: only compiled/reached when `simd128` is statically enabled (gated
+/// by `cfg(target_feature = "simd128")`), so the ops are always legal.
 #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
 #[target_feature(enable = "simd128")]
 unsafe fn opaque_scan_simd128(l: &[i32], a: &[i32], b: &[i32], q: [i32; 3]) -> usize {
   use core::arch::wasm32::*;
   unsafe {
     let n = l.len();
-    let vql = f64x2_splat(q[0] as f64);
-    let vqa = f64x2_splat(q[1] as f64);
-    let vqb = f64x2_splat(q[2] as f64);
-    let lane_idx = f64x2(0.0, 1.0);
-    let mut min_d = f64x2_splat(f64::INFINITY);
-    let mut min_i = f64x2_splat(-1.0);
+    let vql = i32x4_splat(q[0]);
+    let vqa = i32x4_splat(q[1]);
+    let vqb = i32x4_splat(q[2]);
+    let lane_idx = i32x4(0, 1, 2, 3);
+    let mut min_d = i32x4_splat(i32::MAX);
+    let mut min_i = i32x4_splat(i32::MAX);
 
     let mut i = 0usize;
-    while i + 2 <= n {
-      // Load 8 bytes (2×i32) into the low half; convert low i32x2 -> f64x2.
-      let lf = f64x2_convert_low_i32x4(v128_load64_zero(l.as_ptr().add(i) as *const u64));
-      let af = f64x2_convert_low_i32x4(v128_load64_zero(a.as_ptr().add(i) as *const u64));
-      let bf = f64x2_convert_low_i32x4(v128_load64_zero(b.as_ptr().add(i) as *const u64));
-      let dl = f64x2_sub(vql, lf);
-      let da = f64x2_sub(vqa, af);
-      let db = f64x2_sub(vqb, bf);
-      let d = f64x2_add(
-        f64x2_add(f64x2_mul(dl, dl), f64x2_mul(da, da)),
-        f64x2_mul(db, db),
+    while i + 4 <= n {
+      let lf = v128_load(l.as_ptr().add(i) as *const v128);
+      let af = v128_load(a.as_ptr().add(i) as *const v128);
+      let bf = v128_load(b.as_ptr().add(i) as *const v128);
+      let dl = i32x4_sub(vql, lf);
+      let da = i32x4_sub(vqa, af);
+      let db = i32x4_sub(vqb, bf);
+      let d = i32x4_add(
+        i32x4_add(i32x4_mul(dl, dl), i32x4_mul(da, da)),
+        i32x4_mul(db, db),
       );
-      let cur_i = f64x2_add(f64x2_splat(i as f64), lane_idx);
+      let cur_i = i32x4_add(i32x4_splat(i as i32), lane_idx);
       // lanes where d < min_d, STRICT. bitselect(a,b,mask): mask lane all-ones -> pick
       // a. So pick d/cur_i exactly where d < min_d -> lowest index kept within lane.
-      let m = f64x2_lt(d, min_d);
+      let m = i32x4_lt(d, min_d);
       min_d = v128_bitselect(d, min_d, m);
       min_i = v128_bitselect(cur_i, min_i, m);
-      i += 2;
+      i += 4;
     }
 
-    // Reduce the 2 lanes: lowest d, tie -> lowest index. An un-run lane holds +INF /
-    // -1.0 and can never win (`reduce_general_lanes` skips non-finite lanes).
-    let mut ld = [0.0f64; 2];
-    let mut li = [0.0f64; 2];
+    // Reduce the 4 lanes: lowest d, tie -> lowest index. An un-run lane holds
+    // i32::MAX / i32::MAX and can never win a real entry.
+    let mut ld = [0i32; 4];
+    let mut li = [0i32; 4];
     v128_store(ld.as_mut_ptr() as *mut v128, min_d);
     v128_store(li.as_mut_ptr() as *mut v128, min_i);
 
-    let mut best_d = f64::INFINITY;
-    let mut best = 0usize;
-    reduce_general_lanes(&ld, &li, &mut best_d, &mut best);
-    // Tail (n % 2): ascending strict `<` in i64 — a tail entry only wins on a STRICT
+    let (mut best_d, mut best) = (ld[0], li[0]);
+    for k in 1..4 {
+      if ld[k] < best_d || (ld[k] == best_d && li[k] < best) {
+        best_d = ld[k];
+        best = li[k];
+      }
+    }
+    // Tail (n % 4): ascending strict `<` — a tail entry only wins on a STRICT
     // improvement, preserving lowest-index-on-tie against the lane winners.
     while i < n {
-      let dl = (q[0] - l[i]) as i64;
-      let da = (q[1] - a[i]) as i64;
-      let db = (q[2] - b[i]) as i64;
+      let dl = q[0] - l[i];
+      let da = q[1] - a[i];
+      let db = q[2] - b[i];
       let d = dl * dl + da * da + db * db;
-      if (d as f64) < best_d {
-        best_d = d as f64;
-        best = i;
+      if d < best_d {
+        best_d = d;
+        best = i as i32;
       }
       i += 1;
     }
-    best
+    best as usize
   }
 }
 
@@ -534,23 +549,23 @@ unsafe fn opaque_scan_simd128(l: &[i32], a: &[i32], b: &[i32], q: [i32; 3]) -> u
 /// Kept private to this module (the `nearest_oklab` original stays in `quantize.rs`);
 /// the `general_matches_scalar_*` tests gate every SIMD kernel against it.
 ///
-/// OVERFLOW: `de ≤ ~1.3e10` (in-gamut `MAX_OKLAB_DIST_SQ ≈ 4.29e9`; over the full
-/// `0..=65535` component domain `|Δ| ≤ 65535` so `de ≤ 3·65535² ≈ 1.29e10`), `wa ≤ 510`
-/// so `de·wa ≤ ~6.6e12`; `da²·64000 ≤ 4.2e9`, `128000·d² ≤ 8.3e9`, `100·d³ ≤ 1.66e9` —
+/// OVERFLOW: `de ≤ 805_208_067` (over the full `0..=16383` Q14 component domain
+/// `|Δ| ≤ 16383` so `de ≤ 3·16383²`, unconditionally), `wa ≤ 510` so
+/// `de·wa ≤ ~4.11e11`; `da²·4000 ≤ 2.6e8`, `8000·d² ≤ 5.2e8`, `7·d³ ≤ 1.17e8` —
 /// all far inside `i64`.
 #[inline]
 #[cfg_attr(not(test), allow(dead_code))] // wired into quantize.rs next
 fn general_score_i64(de: i64, entry_a: i64, query_a: i64, guard_src_alpha: i64) -> i64 {
   let wa = query_a + entry_a; // 0..=510
   let da = query_a - entry_a;
-  let mut d = de * wa / 510 + da * da * 64000; // pdist_oklab: ALPHA_WEIGHT_LAB = 64000
+  let mut d = de * wa / 510 + da * da * 4000; // pdist_oklab: ALPHA_WEIGHT_LAB = 4000
   if guard_src_alpha > 0 && entry_a < guard_src_alpha {
     let drop = guard_src_alpha - entry_a; // 1..=255
-    d += 128000 * drop * drop; // dim_penalty: DIM_WEIGHT = 2 * 64000
+    d += 8000 * drop * drop; // dim_penalty: DIM_WEIGHT = 2 * 4000
   }
   if guard_src_alpha > entry_a {
     let drop = guard_src_alpha - entry_a; // 1..=255
-    d += 100 * drop * drop * drop; // vanish_penalty: VANISH_WEIGHT = 100
+    d += 7 * drop * drop * drop; // vanish_penalty: VANISH_WEIGHT = 7
   }
   d
 }
@@ -559,7 +574,7 @@ fn general_score_i64(de: i64, entry_a: i64, query_a: i64, guard_src_alpha: i64) 
 /// and intermediate is an integer < 2⁵³, so add/mul/div are exact except the
 /// `(de·wa)/510` quotient, which is correctly rounded; `floor` then reproduces the
 /// integer floor-division exactly (the exact rational's fractional part is a multiple
-/// of 1/510 ≈ 2e-3, while the rounding error is ≤ ~6e-6 at a ~2.6e10 quotient — an
+/// of 1/510 ≈ 2e-3, while the rounding error is ≤ ~2e-7 at a ~8.05e8 quotient — an
 /// integer boundary can never be crossed). Used by the SIMD lane math and by the
 /// per-kernel scalar tails.
 #[cfg(any(
@@ -572,21 +587,21 @@ fn general_score_i64(de: i64, entry_a: i64, query_a: i64, guard_src_alpha: i64) 
 fn general_score_f64(de: f64, entry_a: f64, query_a: f64, guard_src_alpha: f64) -> f64 {
   let wa = query_a + entry_a;
   let da = query_a - entry_a;
-  let mut d = (de * wa / 510.0).floor() + da * da * 64000.0;
+  let mut d = (de * wa / 510.0).floor() + da * da * 4000.0;
   if guard_src_alpha > 0.0 && entry_a < guard_src_alpha {
     let drop = guard_src_alpha - entry_a;
-    d += 128000.0 * drop * drop;
+    d += 8000.0 * drop * drop;
   }
   if guard_src_alpha > entry_a {
     let drop = guard_src_alpha - entry_a;
-    d += 100.0 * drop * drop * drop;
+    d += 7.0 * drop * drop * drop;
   }
   d
 }
 
 /// Index of the palette entry nearest the query under `nearest_oklab`'s full perceptual
 /// metric — the GENERAL path for translucent queries / palettes carrying a transparent
-/// slot. `l`, `a`, `b` are the SoA Oklab components (u16-quantized) and `alpha` the
+/// slot. `l`, `a`, `b` are the SoA Oklab components (Q14-quantized) and `alpha` the
 /// parallel per-entry alphas — parallel, equal-length, non-empty (the caller's palette
 /// always has ≥1 entry). `q*` are the query's precomputed Oklab components; `query_a`
 /// the query alpha; `skip_transparent` / `guard_src_alpha` exactly as in
@@ -764,7 +779,7 @@ fn general_scan_tier2(
 /// into the ascending argmin — lowest score wins, tie goes to the lowest index.
 /// `d_lane` non-finite (+INF) means the lane saw only skipped entries (or no block
 /// at all when `n < WIDTH`) — it can never win and is skipped, exactly like the
-/// `i_lane == i32::MAX` sentinel check in the opaque kernels.
+/// `i32::MAX` distance/index sentinel an un-run lane holds in the opaque kernels.
 #[cfg(any(
   target_arch = "aarch64",
   target_arch = "x86_64",
@@ -863,9 +878,9 @@ unsafe fn general_scan_neon(
     let vsrc = vdupq_n_f64(guard_src_alpha as f64);
     let vzero = vdupq_n_f64(0.0);
     let v510 = vdupq_n_f64(510.0);
-    let valpha = vdupq_n_f64(64000.0); // ALPHA_WEIGHT_LAB
-    let vdim = vdupq_n_f64(128000.0); // DIM_WEIGHT
-    let vvan = vdupq_n_f64(100.0); // VANISH_WEIGHT
+    let valpha = vdupq_n_f64(4000.0); // ALPHA_WEIGHT_LAB
+    let vdim = vdupq_n_f64(8000.0); // DIM_WEIGHT
+    let vvan = vdupq_n_f64(7.0); // VANISH_WEIGHT
     let vinf = vdupq_n_f64(f64::INFINITY);
     // Winning index per lane, stored as f64 (indices < 2⁵³ are exact); -1.0 sentinel.
     let lane_idx = vld1q_f64([0.0, 1.0].as_ptr());
@@ -892,12 +907,12 @@ unsafe fn general_scan_neon(
       let term = vrndmq_f64(vdivq_f64(vmulq_f64(de, wa), v510));
       let dalpha = vsubq_f64(vqalpha, paf);
       let mut d = vaddq_f64(term, vmulq_f64(vmulq_f64(dalpha, dalpha), valpha));
-      // dim_penalty: (src > 0 && pa < src) -> 128000·(src−pa)², else 0.
+      // dim_penalty: (src > 0 && pa < src) -> 8000·(src−pa)², else 0.
       let drop = vsubq_f64(vsrc, paf);
       let dim_m = vandq_u64(vcgtq_f64(vsrc, vzero), vcltq_f64(paf, vsrc));
       let dim = vmulq_f64(vdim, vmulq_f64(drop, drop));
       d = vaddq_f64(d, vbslq_f64(dim_m, dim, vzero));
-      // vanish_penalty: (src > pa) -> 100·(src−pa)³, else 0.
+      // vanish_penalty: (src > pa) -> 7·(src−pa)³, else 0.
       let van_m = vcgtq_f64(vsrc, paf);
       let van = vmulq_f64(vvan, vmulq_f64(drop, vmulq_f64(drop, drop)));
       d = vaddq_f64(d, vbslq_f64(van_m, van, vzero));
@@ -974,9 +989,9 @@ unsafe fn general_scan_avx2(
     let vsrc = _mm256_set1_pd(guard_src_alpha as f64);
     let vzero = _mm256_setzero_pd();
     let v510 = _mm256_set1_pd(510.0);
-    let valpha = _mm256_set1_pd(64000.0); // ALPHA_WEIGHT_LAB
-    let vdim = _mm256_set1_pd(128000.0); // DIM_WEIGHT
-    let vvan = _mm256_set1_pd(100.0); // VANISH_WEIGHT
+    let valpha = _mm256_set1_pd(4000.0); // ALPHA_WEIGHT_LAB
+    let vdim = _mm256_set1_pd(8000.0); // DIM_WEIGHT
+    let vvan = _mm256_set1_pd(7.0); // VANISH_WEIGHT
     let vinf = _mm256_set1_pd(f64::INFINITY);
     // Winning index per lane, stored as f64 (indices < 2⁵³ are exact); -1.0 sentinel.
     let lane_idx = _mm256_set_pd(3.0, 2.0, 1.0, 0.0); // lane0=0 .. lane3=3
@@ -1008,7 +1023,7 @@ unsafe fn general_scan_avx2(
       let term = _mm256_floor_pd(_mm256_div_pd(_mm256_mul_pd(de, wa), v510));
       let dalpha = _mm256_sub_pd(vqalpha, paf);
       let mut d = _mm256_add_pd(term, _mm256_mul_pd(_mm256_mul_pd(dalpha, dalpha), valpha));
-      // dim_penalty: (src > 0 && pa < src) -> 128000·(src−pa)², else 0.
+      // dim_penalty: (src > 0 && pa < src) -> 8000·(src−pa)², else 0.
       let drop = _mm256_sub_pd(vsrc, paf);
       let dim_m = _mm256_and_pd(
         _mm256_cmp_pd::<_CMP_GT_OQ>(vsrc, vzero),
@@ -1016,7 +1031,7 @@ unsafe fn general_scan_avx2(
       );
       let dim = _mm256_mul_pd(vdim, _mm256_mul_pd(drop, drop));
       d = _mm256_add_pd(d, _mm256_blendv_pd(vzero, dim, dim_m));
-      // vanish_penalty: (src > pa) -> 100·(src−pa)³, else 0.
+      // vanish_penalty: (src > pa) -> 7·(src−pa)³, else 0.
       let van_m = _mm256_cmp_pd::<_CMP_GT_OQ>(vsrc, paf);
       let van = _mm256_mul_pd(vvan, _mm256_mul_pd(drop, _mm256_mul_pd(drop, drop)));
       d = _mm256_add_pd(d, _mm256_blendv_pd(vzero, van, van_m));
@@ -1091,9 +1106,9 @@ unsafe fn general_scan_sse41(
     let vsrc = _mm_set1_pd(guard_src_alpha as f64);
     let vzero = _mm_setzero_pd();
     let v510 = _mm_set1_pd(510.0);
-    let valpha = _mm_set1_pd(64000.0); // ALPHA_WEIGHT_LAB
-    let vdim = _mm_set1_pd(128000.0); // DIM_WEIGHT
-    let vvan = _mm_set1_pd(100.0); // VANISH_WEIGHT
+    let valpha = _mm_set1_pd(4000.0); // ALPHA_WEIGHT_LAB
+    let vdim = _mm_set1_pd(8000.0); // DIM_WEIGHT
+    let vvan = _mm_set1_pd(7.0); // VANISH_WEIGHT
     let vinf = _mm_set1_pd(f64::INFINITY);
     // Winning index per lane, stored as f64 (indices < 2⁵³ are exact); -1.0 sentinel.
     let lane_idx = _mm_set_pd(1.0, 0.0); // lane0=0, lane1=1
@@ -1120,12 +1135,12 @@ unsafe fn general_scan_sse41(
       let term = _mm_floor_pd(_mm_div_pd(_mm_mul_pd(de, wa), v510));
       let dalpha = _mm_sub_pd(vqalpha, paf);
       let mut d = _mm_add_pd(term, _mm_mul_pd(_mm_mul_pd(dalpha, dalpha), valpha));
-      // dim_penalty: (src > 0 && pa < src) -> 128000·(src−pa)², else 0.
+      // dim_penalty: (src > 0 && pa < src) -> 8000·(src−pa)², else 0.
       let drop = _mm_sub_pd(vsrc, paf);
       let dim_m = _mm_and_pd(_mm_cmpgt_pd(vsrc, vzero), _mm_cmplt_pd(paf, vsrc));
       let dim = _mm_mul_pd(vdim, _mm_mul_pd(drop, drop));
       d = _mm_add_pd(d, _mm_blendv_pd(vzero, dim, dim_m));
-      // vanish_penalty: (src > pa) -> 100·(src−pa)³, else 0.
+      // vanish_penalty: (src > pa) -> 7·(src−pa)³, else 0.
       let van_m = _mm_cmpgt_pd(vsrc, paf);
       let van = _mm_mul_pd(vvan, _mm_mul_pd(drop, _mm_mul_pd(drop, drop)));
       d = _mm_add_pd(d, _mm_blendv_pd(vzero, van, van_m));
@@ -1202,9 +1217,9 @@ unsafe fn general_scan_simd128(
     let vsrc = f64x2_splat(guard_src_alpha as f64);
     let vzero = f64x2_splat(0.0);
     let v510 = f64x2_splat(510.0);
-    let valpha = f64x2_splat(64000.0); // ALPHA_WEIGHT_LAB
-    let vdim = f64x2_splat(128000.0); // DIM_WEIGHT
-    let vvan = f64x2_splat(100.0); // VANISH_WEIGHT
+    let valpha = f64x2_splat(4000.0); // ALPHA_WEIGHT_LAB
+    let vdim = f64x2_splat(8000.0); // DIM_WEIGHT
+    let vvan = f64x2_splat(7.0); // VANISH_WEIGHT
     let vinf = f64x2_splat(f64::INFINITY);
     // Winning index per lane, stored as f64 (indices < 2⁵³ are exact); -1.0 sentinel.
     let lane_idx = f64x2(0.0, 1.0);
@@ -1231,12 +1246,12 @@ unsafe fn general_scan_simd128(
       let term = f64x2_floor(f64x2_div(f64x2_mul(de, wa), v510));
       let dalpha = f64x2_sub(vqalpha, paf);
       let mut d = f64x2_add(term, f64x2_mul(f64x2_mul(dalpha, dalpha), valpha));
-      // dim_penalty: (src > 0 && pa < src) -> 128000·(src−pa)², else 0.
+      // dim_penalty: (src > 0 && pa < src) -> 8000·(src−pa)², else 0.
       let drop = f64x2_sub(vsrc, paf);
       let dim_m = v128_and(f64x2_gt(vsrc, vzero), f64x2_lt(paf, vsrc));
       let dim = f64x2_mul(vdim, f64x2_mul(drop, drop));
       d = f64x2_add(d, v128_bitselect(dim, vzero, dim_m));
-      // vanish_penalty: (src > pa) -> 100·(src−pa)³, else 0.
+      // vanish_penalty: (src > pa) -> 7·(src−pa)³, else 0.
       let van_m = f64x2_gt(vsrc, paf);
       let van = f64x2_mul(vvan, f64x2_mul(drop, f64x2_mul(drop, drop)));
       d = f64x2_add(d, v128_bitselect(van, vzero, van_m));
@@ -1325,11 +1340,13 @@ mod tests {
         .wrapping_add(1442695040888963407);
       (self.0 >> 32) as u32
     }
-    /// A pseudo-random Oklab component: the production domain is `0..=65535` (the
-    /// u16 quantization); sweep slightly past it so out-of-gamut centroid margins
-    /// and values whose squared gaps exceed `i32::MAX` are exercised constantly.
+    /// A pseudo-random Oklab component: the production domain is `0..=16383` (the
+    /// Q14 quantization — `rgb_to_oklab` clamps, k-means centroids are averages of
+    /// in-range values). Sweeping the FULL domain exercises the `de ≤ 3·16383²`
+    /// boundary the i32 opaque lanes rely on; out-of-range values would break that
+    /// kernel's contract, so the sweep stays inside it.
     fn oklab_comp(&mut self) -> i32 {
-      (self.next_u32() % 68_000) as i32 - 1000 // roughly [-1000, 66999]
+      (self.next_u32() % 16_384) as i32 // 0..=16383, the stored domain
     }
   }
 
@@ -1636,15 +1653,14 @@ mod tests {
     //
     // For the transparent entry to win under `skip == false`, the opaque
     // alternative's color distance must exceed entry 0's alpha-mismatch penalty
-    // `255² · ALPHA_WEIGHT_LAB = 4_161_600_000` (query_a=255 vs entry_a=0,
-    // guard=0 so no dim/vanish terms). Oklab's 64000 weight is ~42.7× the old
-    // CIELAB one, so the prior 9999-offset (de ≈ 2.9e8) no longer suffices;
-    // 50_000 per component gives de = 3·49_900² = 7_470_030_000 > the penalty.
-    // (Components are still inside the u16 Oklab encoding range, so this stays
-    // a representable — if extreme — palette.)
-    let l = vec![100, 50_000];
-    let a = vec![100, 50_000];
-    let b = vec![100, 50_000];
+    // `255² · ALPHA_WEIGHT_LAB = 260_100_000` (query_a=255 vs entry_a=0,
+    // guard=0 so no dim/vanish terms). The Q14 domain max is `3·16383² =
+    // 805_208_067` — a full-domain opposite corner clears the penalty:
+    // entry 1 at (16383,16383,16383) vs query (100,100,100) gives
+    // de = 3·16_283² = 795_372_267 > 260_100_000.
+    let l = vec![100, 16_383];
+    let a = vec![100, 16_383];
+    let b = vec![100, 16_383];
     let alpha = vec![0u8, 255];
     assert_eq!(
       general_argmin(
