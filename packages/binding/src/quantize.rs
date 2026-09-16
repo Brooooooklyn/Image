@@ -957,6 +957,96 @@ fn build_histogram(px: &[RGBA8], bits: u8) -> FastMap<RGBA8, u64> {
   hist
 }
 
+/// Nominal FULL importance weight: a pixel with zero local activity counts as
+/// [`IMPORTANCE_FULL`]/256 = 1.0 of a pixel in the clustering histogram. The
+/// weighted entry count is `Σ w_i / IMPORTANCE_FULL`, so this scale keeps flat
+/// regions at their true population.
+const IMPORTANCE_FULL: i64 = 256;
+
+/// Activity (max-4-neighbor `dist2`) at which a pixel carries HALF weight.
+/// Deliberately aligned with [`DITHER_EDGE_ACT`]: the same signal that marks a
+/// hard edge for dither suppression marks it for histogram down-weighting —
+/// both encode "edge/texture pixels, where error is perceptually cheap".
+const IMPORTANCE_MID_ACT: i64 = DITHER_EDGE_ACT as i64;
+
+/// Per-pixel importance weight in `(W/8, W]` for a pixel whose 4-neighbor
+/// [`source_activity`] is `act`, used to build the importance-weighted
+/// clustering histogram. Smooth, monotonically decreasing, pure integer:
+///
+/// ```text
+/// w(act) = (W·M + (W/8)·act) / (M + act)      W = 256, M = 2048
+/// ```
+///
+/// Properties (all provable from the formula): `w(0) == W` — a perfectly flat
+/// pixel counts fully; the curve is strictly decreasing (`num'·den − den'·num
+/// = (W/8)(M) − W·M < 0`); `w > W/8` for every finite `act` (the difference is
+/// `W·(M − M/8)/(M + act) > 0`) with `w → W/8 == 32` as `act → ∞` — a hard
+/// edge or noise pixel still counts, just at ~1/8 weight, so genuinely
+/// edge-dominated regions are never dropped from the histogram. Landmark
+/// values: `act = 256` (a ~9-level step) → 90 %; `act = M = 2048` (the
+/// dither's hard-edge point) → 56 %; `act = 8192` → 30 %; a maximal
+/// black↔white step (`act ≈ 195075`) → ~13 %.
+///
+/// This is the published pngquant-style histogram importance weighting:
+/// palette slots should serve smooth regions, where banding is visible, over
+/// noisy/edge pixels, where the eye can't resolve quantization error.
+#[inline]
+fn importance_weight(act: i64) -> u64 {
+  ((IMPORTANCE_FULL * IMPORTANCE_MID_ACT + (IMPORTANCE_FULL / 8) * act)
+    / (IMPORTANCE_MID_ACT + act)) as u64
+}
+
+/// Builds the per-color IMPORTANCE weight map (canonical key -> Σ w_i over the
+/// color's pixels) used to weight the clustering histogram.
+///
+/// For every VISIBLE source pixel (`a > 0`) this adds its
+/// [`importance_weight`] — a pure function of its posterized color's local
+/// [`source_activity`] — under the pixel's canonical key. Fully-transparent
+/// pixels accumulate nothing: their colors never enter the (visible-only)
+/// clustering entries, so their weight is never read. Sharded like
+/// [`build_histogram`]: per-shard maps merged in shard order by integer add —
+/// identical contents for ANY shard count.
+fn build_importance(
+  px: &[RGBA8],
+  width: usize,
+  height: usize,
+  bits: u8,
+) -> FastMap<RGBA8, u64> {
+  // `source_activity` indexes `px[y*width + x]`, so dims must match the buffer
+  // exactly — the same invariant `remap_dither` already relies on. If a caller
+  // ever broke it, returning an empty map is the safe degradation: every entry
+  // then floors to weight 1 (the `.max(1)` in `quantize_rgba`), never a panic.
+  if px.len() != width * height {
+    debug_assert!(false, "px.len() must equal width*height");
+    return FastMap::default();
+  }
+  let shards = shard_count(px.len(), PAR_MIN_PIXELS);
+  let partials = shard_reduce(px.len(), shards, |s, e| {
+    let mut m: FastMap<RGBA8, u64> = FastMap::default();
+    for i in s..e {
+      let p = px[i];
+      if p.a == 0 {
+        continue;
+      }
+      // For a visible pixel `canonical_key` IS `posterize` — the same value the
+      // activity helper wants as `here` — so one call serves both purposes.
+      let key = canonical_key(p, bits);
+      let act = source_activity(px, width, height, i % width, i / width, key, bits);
+      // w_i ∈ (32, 256]; the sum stays < 256·2^32 < 2^41 for any real image.
+      *m.entry(key).or_insert(0) += importance_weight(act);
+    }
+    m
+  });
+  let mut it = partials.into_iter();
+  let mut wsum = it.next().unwrap_or_default();
+  for m in it {
+    for (k, v) in m {
+      *wsum.entry(k).or_insert(0) += v;
+    }
+  }
+  wsum
+}
+
 /// Unsigned 128×128 → 256-bit product, returned as `(hi, lo)` limbs.
 ///
 /// Schoolbook multiply over four `u64` half-limbs. Used only to compare two
@@ -1259,18 +1349,20 @@ impl MCBox {
     ))
   }
 
-  /// Population-weighted centroid color, rounded to `u8` per channel.
+  /// Weighted centroid color, rounded to `u8` per channel.
   ///
-  /// `true_counts`, when `Some`, maps each member's `packed` color to its TRUE
-  /// (pre-cap) population. The Wu split decisions are computed from the capped
+  /// `true_counts`, when `Some`, maps each member's `packed` color to its
+  /// PRE-CAP clustering weight (the uncapped importance weight — "true" as in
+  /// "what the uncapped `cluster` entries carry", not raw pixel population).
+  /// The Wu split decisions are computed from the capped
   /// `split_entries` (precision/overflow safety), but the final centroid VALUE
-  /// must use the TRUE per-color counts under the SAME box membership — capping
-  /// is proportional but `cap_entry_weights`'s `.max(1)` floor over-represents a
-  /// swarm of rare colors, which can round the centroid to a different `u8`
-  /// (true R=51 vs capped R=52) on >67M-px images. Membership is NOT changed: we
-  /// only re-weight the members this box already owns (no nearest re-assignment),
-  /// so opaque output stays byte-identical. `None` (no cap bit) keeps the capped
-  /// counts, which then equal the true counts anyway.
+  /// must use the uncapped per-color weights under the SAME box membership —
+  /// capping is proportional but `cap_entry_weights`'s `.max(1)` floor
+  /// over-represents a swarm of rare colors, which can round the centroid to a
+  /// different `u8` on >67M-weight images. Membership is NOT changed: we only
+  /// re-weight the members this box already owns (no nearest re-assignment).
+  /// `None` (no cap bit) keeps the capped counts, which then equal the uncapped
+  /// counts anyway.
   fn centroid(&self, true_counts: Option<&FastMap<u32, u64>>) -> RGBA8 {
     let mut sr = 0u64;
     let mut sg = 0u64;
@@ -1334,9 +1426,9 @@ fn channel_of(c: RGBA8, ch: usize) -> u8 {
 /// box's smallest `packed` entry; split ties break on lower axis then position.
 ///
 /// `true_counts` (when `Some`) is threaded into [`MCBox::centroid`] so the final
-/// per-box centroid VALUE uses the TRUE (pre-cap) per-color populations instead of
-/// the capped split copy's counts, while every split DECISION still uses the
-/// passed-in (capped) `entries`. `None` when no cap bit, where capped == true.
+/// per-box centroid VALUE uses the PRE-CAP per-color clustering weights instead
+/// of the capped split copy's counts, while every split DECISION still uses the
+/// passed-in (capped) `entries`. `None` when no cap bit, where capped == uncapped.
 fn median_cut(
   entries: &[ColorCount],
   max_colors: usize,
@@ -1589,6 +1681,10 @@ fn kmeans_objective(
 /// from the nearest current center, scaled by how many pixels carry that color —
 /// biasing new seeds toward underrepresented but well-populated gamut regions. A
 /// fixed-seed LCG makes the sequence fully deterministic across all runs.
+///
+/// "Population"/`count` throughout means the entry's CLUSTERING weight — the
+/// importance-weighted histogram counts built by `build_importance` (flat
+/// regions count ~fully, edges ~1/8), not raw pixel population.
 ///
 /// KEEP-BEST GUARD: the assignment minimizes alpha-weighted `dist2`, but the
 /// centroid update is the plain count-weighted RGBA mean, which is NOT that
@@ -2061,8 +2157,12 @@ fn dither_clamp_err(v: f32) -> f32 {
 /// color edge. Visible neighbors (`a > 0`, including partial alpha) use their
 /// real posterized color, so soft anti-aliased edges still get proportional
 /// treatment. O(1) per pixel.
+///
+/// Returns the raw `dist2` as `i64` — the integer core behind
+/// [`dither_source_activity`] (which casts to `f32` for the strength ramp) and
+/// the signal [`importance_weight`] consumes for the clustering histogram.
 #[inline]
-fn dither_source_activity(
+fn source_activity(
   px: &[RGBA8],
   width: usize,
   height: usize,
@@ -2070,7 +2170,7 @@ fn dither_source_activity(
   y: usize,
   here: RGBA8,
   bits: u8,
-) -> f32 {
+) -> i64 {
   let mut act: i64 = 0;
   let consider = |nx: usize, ny: usize, act: &mut i64| {
     let n = px[ny * width + nx];
@@ -2107,7 +2207,24 @@ fn dither_source_activity(
   if y + 1 < height {
     consider(x, y + 1, &mut act);
   }
-  act as f32
+  act
+}
+
+/// `f32` form of [`source_activity`] for the dither strength ramp — the ONLY
+/// caller that wants the signal as a float. The cast is a single exact
+/// `i64 -> f32` conversion (the value is ≤ ~390150, exactly representable), so
+/// the ramp sees identical bits to before this refactor.
+#[inline]
+fn dither_source_activity(
+  px: &[RGBA8],
+  width: usize,
+  height: usize,
+  x: usize,
+  y: usize,
+  here: RGBA8,
+  bits: u8,
+) -> f32 {
+  source_activity(px, width, height, x, y, here, bits) as f32
 }
 
 /// Maps a post-quantization residual `dist2` and a source-activity `dist2` to a
@@ -2554,16 +2671,25 @@ struct PassInput<'a> {
   height: usize,
   has_transparent: bool,
   bits: u8,
-  /// Distinct VISIBLE (`a > 0`) colors with their true populations, sorted by
-  /// `packed` — the deterministic seed for both clustering stages.
+  /// Distinct VISIBLE (`a > 0`) colors with their TRUE pixel populations,
+  /// sorted by `packed`. Used ONLY where real population semantics matter —
+  /// [`quality_score`]'s coverage denominator. Clustering reads `cluster`.
   entries: Vec<ColorCount>,
-  /// Population-capped copy of `entries` fed to the Wu split, or `None` when
-  /// the cap did not bite — then `entries` itself is the split input (capped ==
-  /// true, identical values). Building it lazily skips an unconditional clone
-  /// that is a no-op for every image <= 2^26 px.
+  /// The same distinct visible colors, same `packed` order, but with
+  /// IMPORTANCE-WEIGHTED counts (`count = Σ w_i / 256`, floored, min 1): each
+  /// pixel counts in proportion to how smooth its neighborhood is
+  /// ([`importance_weight`]), so palette slots serve flat regions where banding
+  /// shows rather than noisy edges. This is the sole input to median_cut (via
+  /// `split_entries`), k-means, the D² reseed, and the keep-best objective.
+  cluster: Vec<ColorCount>,
+  /// Population-capped copy of `cluster` fed to the Wu split, or `None` when
+  /// the cap did not bite — then `cluster` itself is the split input (capped ==
+  /// uncapped, identical values). Building it lazily skips an unconditional
+  /// clone that is a no-op for every image <= 2^26 weighted px.
   split_entries: Option<Vec<ColorCount>>,
-  /// `packed` color -> TRUE population, present iff `split_entries` is `Some`
-  /// (the cap bit); lets `median_cut` value centroids with real counts.
+  /// `packed` color -> pre-cap CLUSTERING weight, present iff `split_entries`
+  /// is `Some` (the cap bit); lets `median_cut` value centroids with the
+  /// uncapped importance weights.
   true_counts: Option<FastMap<u32, u64>>,
 }
 
@@ -2595,19 +2721,21 @@ fn quantize_pass(
   let reserve = has_transparent && max_colors >= 2;
   let cut_colors = if reserve { max_colors - 1 } else { max_colors };
 
-  // `entries`/`split_entries`/`true_counts` were built once by the caller (they
-  // are max_colors-invariant; see `PassInput`). `None` split_entries means the
-  // cap was a no-op, so `entries` — capped == true for every color — is the Wu
-  // split input and `true_counts` is `None`: the centroid reads the same counts
-  // either way and q75 stays 262053.
+  // `cluster`/`split_entries`/`true_counts` were built once by the caller
+  // (they are max_colors-invariant; see `PassInput`). `None` split_entries
+  // means the cap was a no-op, so `cluster` — capped == uncapped for every
+  // color — is the Wu split input and `true_counts` is `None`: the centroid
+  // reads the same counts either way. All clustering stages see the
+  // IMPORTANCE-WEIGHTED counts; the true-population `entries` feed only
+  // `quality_score`.
   let mut palette = median_cut(
-    input.split_entries.as_deref().unwrap_or(&input.entries),
+    input.split_entries.as_deref().unwrap_or(&input.cluster),
     cut_colors.max(1),
     input.true_counts.as_ref(),
   );
-  // k-means must see the TRUE populations (never the capped copy) so centroids
-  // and D² reseeding reflect the real image.
-  kmeans_refine(&mut palette, &input.entries, kmeans_iters);
+  // k-means must see the uncapped importance weights (never the capped copy)
+  // so centroids and D² reseeding reflect the real weighted histogram.
+  kmeans_refine(&mut palette, &input.cluster, kmeans_iters);
 
   if reserve {
     // Clustering above only saw a>0 colors, so no centroid is transparent;
@@ -2728,29 +2856,53 @@ pub fn quantize_rgba(
     v
   };
 
-  // Proportionally pre-scale the total population weight so the Wu split's
+  // Importance-weighted clustering histogram: one O(P) pre-pass computes each
+  // visible pixel's local source activity (the same signal the dither's edge
+  // suppressor uses) and folds its importance weight into its canonical color's
+  // bucket. An entry's clustering count is `Σ w_i / 256` — flat-area pixels
+  // count ~fully, hard-edge/noise pixels as little as ~1/8 — so palette slots
+  // go to smooth regions where banding shows. The `.max(1)` floor keeps every
+  // distinct color present (a lone edge pixel can never round to zero weight
+  // and vanish from clustering). `entries` keeps TRUE populations for
+  // `quality_score`; only clustering reads `cluster`.
+  let importance = build_importance(px, width, height, bits);
+  let cluster: Vec<ColorCount> = entries
+    .iter()
+    .map(|e| {
+      // Every visible entry has at least one contributing pixel, so the map
+      // always holds the key; `unwrap_or(0)` is just totality.
+      let w = *importance.get(&e.color).unwrap_or(&0);
+      ColorCount {
+        color: e.color,
+        count: (w / IMPORTANCE_FULL as u64).max(1),
+      }
+    })
+    .collect();
+
+  // Proportionally pre-scale the total CLUSTERING weight so the Wu split's
   // exact-integer SSE moments (`red_num ~ 2^19 · N^4`, formed in i128) stay
   // precise on huge CONCENTRATED-weight images. This is a precision aid, not the
   // overflow guard — `split_reduction`'s checked arithmetic is what makes
   // overflow impossible regardless of entry count. A no-op for any normal image
   // (the bundled test PNG is ~697k px, far below the cap).
   //
-  // Cap only the COPY fed to the Wu split; k-means must see the TRUE populations
-  // so centroids and D² reseeding reflect the real image (the `.max(1)` cap floor
-  // would otherwise over-weight rare colors). The capped copy is built ONLY when
-  // the cap genuinely bites (`true_total > cap`), so the common case pays no
-  // clone; `None` tells `median_cut` capped == true — byte-identical. When the
-  // cap bit, `cap_entry_weights` rewrote `.count` 1:1 by color, so each capped
-  // entry maps to a unique TRUE count: build the packed-color -> true-count map
-  // (probe-only; never iterated) so `median_cut`'s final centroids use the real
-  // populations while the Wu SPLIT still scores the capped copy.
+  // Cap only the COPY fed to the Wu split; k-means must see the uncapped
+  // importance weights so centroids and D² reseeding reflect the real weighted
+  // histogram (the `.max(1)` cap floor would otherwise over-weight rare
+  // colors). The capped copy is built ONLY when the cap genuinely bites
+  // (`cluster_total > cap`), so the common case pays no clone; `None` tells
+  // `median_cut` capped == uncapped — byte-identical. When the cap bit,
+  // `cap_entry_weights` rewrote `.count` 1:1 by color, so each capped entry
+  // maps to a unique uncapped weight: build the packed-color -> weight map
+  // (probe-only; never iterated) so `median_cut`'s final centroids use the
+  // uncapped weights while the Wu SPLIT still scores the capped copy.
   let cap: u128 = 1 << 26;
-  let true_total: u128 = entries.iter().map(|e| e.count as u128).sum();
-  let (split_entries, true_counts) = if true_total > cap {
-    let mut capped = entries.clone();
+  let cluster_total: u128 = cluster.iter().map(|e| e.count as u128).sum();
+  let (split_entries, true_counts) = if cluster_total > cap {
+    let mut capped = cluster.clone();
     cap_entry_weights(&mut capped, cap);
     let true_counts: FastMap<u32, u64> =
-      entries.iter().map(|e| (packed(e.color), e.count)).collect();
+      cluster.iter().map(|e| (packed(e.color), e.count)).collect();
     (Some(capped), Some(true_counts))
   } else {
     (None, None)
@@ -2763,6 +2915,7 @@ pub fn quantize_rgba(
     has_transparent,
     bits,
     entries,
+    cluster,
     split_entries,
     true_counts,
   };
@@ -3396,6 +3549,71 @@ mod tests {
     // bits == 0 is the identity (all 256 levels preserved).
     let identity: HashSet<u8> = (0..=255u8).map(|v| posterize_channel(v, 0)).collect();
     assert_eq!(identity.len(), 256);
+  }
+
+  // ---- Importance-weighted histogram tests ----
+
+  #[test]
+  fn importance_weight_curve_shape() {
+    // The published-formula invariants: full weight at zero activity, strictly
+    // decreasing, never below (and asymptoting to) W/8 — a hard edge still
+    // counts, just less.
+    assert_eq!(
+      importance_weight(0),
+      IMPORTANCE_FULL as u64,
+      "flat pixels count fully"
+    );
+    assert_eq!(
+      importance_weight(IMPORTANCE_MID_ACT),
+      144,
+      "half weight at the midpoint activity (W·M + W/8·M)/(2M) = (W + W/8)/2 = 144"
+    );
+    let mut prev = u64::MAX;
+    for act in [1i64, 64, 256, 1024, 4096, 16384, 65536, 195_075, 390_150] {
+      let w = importance_weight(act);
+      assert!(w < prev, "strictly decreasing: w({act})={w} !< {prev}");
+      assert!(
+        w > IMPORTANCE_FULL as u64 / 8,
+        "floor: w({act})={w} must exceed W/8"
+      );
+      prev = w;
+    }
+    // Maximal dist2 activity (the whole domain, ~390150) stays above the floor.
+    let max_act = 195_075 + 65_025 * ALPHA_WEIGHT; // 3·255² color + alpha term
+    assert!(importance_weight(max_act) > IMPORTANCE_FULL as u64 / 8);
+  }
+
+  #[test]
+  fn build_importance_downweights_edge_pixels_only() {
+    // 16×8 image, left half solid red / right half solid blue: only the two
+    // columns adjacent to the seam see nonzero activity, so only those pixels
+    // are down-weighted — the interior keeps full weight.
+    let (w, h) = (16usize, 8usize);
+    let red = rgba(200, 0, 0, 255);
+    let blue = rgba(0, 0, 200, 255);
+    let mut px = Vec::with_capacity(w * h);
+    for _ in 0..h {
+      for x in 0..w {
+        px.push(if x < w / 2 { red } else { blue });
+      }
+    }
+    let wsum = build_importance(&px, w, h, 0);
+    // dist2 is symmetric here (both opaque), so the seam columns carry the
+    // same per-pixel weight.
+    let edge_w = importance_weight(dist2(red, blue));
+    let full = IMPORTANCE_FULL as u64;
+    // Per row: 7 flat red + 1 seam red; 1 seam blue + 7 flat blue.
+    assert_eq!(wsum.get(&red), Some(&(7 * h as u64 * full + h as u64 * edge_w)));
+    assert_eq!(
+      wsum.get(&blue),
+      Some(&(7 * h as u64 * full + h as u64 * edge_w))
+    );
+    // The seam weight really is below full (sanity for the assertion above).
+    assert!(edge_w < full);
+    // Effective clustering count: floored mean weight, min 1 — the seam
+    // pixels drag it below the true population of 64.
+    let eff = (wsum[&red] / full).max(1);
+    assert!(eff < 64 && eff > 64 * 7 / 8, "weighted count {eff}");
   }
 
   // ---- D²-weighted reseed tests ----
