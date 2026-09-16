@@ -17,7 +17,8 @@ use std::hash::BuildHasherDefault;
 use rgb::RGBA8;
 
 use crate::lab::{
-  Lab, MAX_DELTA_E76_SQ, delta_e76_sq, lab_to_rgb8, linear_to_srgb8, rgb_to_lab, srgb_to_linear_f,
+  MAX_OKLAB_DIST_SQ, OkLab, linear_to_srgb8, oklab_dist_sq, oklab_to_rgb8, rgb_to_oklab,
+  srgb_to_linear_f,
 };
 use crate::quantize_simd::{self, OpaqueKernel};
 
@@ -33,40 +34,43 @@ const ALPHA_WEIGHT: i64 = 3;
 
 /// Alpha-error weight for the PERCEPTUAL [`pdist`] metric (color ASSIGNMENT).
 ///
-/// `pdist`'s color term is a CIE76 ΔE² in (×[`crate::lab::LAB_SCALE`])² units, so
-/// its magnitude is on a completely different scale than `dist2`'s RGB squared
-/// distance — `ALPHA_WEIGHT` (=3) cannot be reused. A "very different colors" gap
-/// is ΔE ≈ 100, i.e. `(100 · LAB_SCALE)² = 1e8`; a full alpha flip is `da² = 255² =
-/// 65025`. To rank a full alpha flip COMPARABLE to that maximal color gap we need
-/// `da² · ALPHA_WEIGHT_LAB ≈ 1e8`, i.e. `ALPHA_WEIGHT_LAB ≈ 1e8 / 65025 ≈ 1538`.
-/// We use 1500: it puts a full alpha flip (`255² · 1500 ≈ 9.75e7`) just under a
-/// maximal ΔE≈100 color gap, so a large color change is never out-ranked by an
-/// alpha flip, yet a full alpha flip still dwarfs any realistic small color change
-/// (e.g. ΔE 2 ≈ `(2·100)² = 4e4`). Tuned against the transparency tests (fully
-/// -transparent collapse, partial-alpha preservation) and the A/B measurement; see
-/// the report. `ALPHA_WEIGHT` (the RGB one, =3) is unchanged and still used by
-/// `dist2`.
-const ALPHA_WEIGHT_LAB: i64 = 1500;
+/// `pdist`'s color term is a squared Oklab distance in ([`crate::lab::OKLAB_SCALE`])²
+/// units, so its magnitude is on a completely different scale than `dist2`'s RGB squared
+/// distance — `ALPHA_WEIGHT` (=3) cannot be reused. The maximal color gap is the gamut
+/// diameter [`MAX_OKLAB_DIST_SQ`] ≈ 4.29e9 (black↔white, the Oklab analogue of the
+/// ΔE≈100 "very different colors" gap); a full alpha flip is `da² = 255² = 65025`. To
+/// rank a full alpha flip COMPARABLE to that maximal color gap we need
+/// `da² · ALPHA_WEIGHT_LAB ≈ 4.29e9`, i.e. `ALPHA_WEIGHT_LAB ≈ 4.29e9 / 65025 ≈ 66049`.
+/// We use 64000: it puts a full alpha flip (`255² · 64000 ≈ 4.16e9`, ~97 % of the
+/// diameter) just under a maximal color gap, so a large color change is never
+/// out-ranked by an alpha flip, yet a full alpha flip still dwarfs any realistic small
+/// color change (a modest Oklab gap like L:0.1 is `(0.1·65535)² ≈ 4.3e7`, ~1 % of it).
+/// Tuned against the transparency tests (fully-transparent collapse, partial-alpha
+/// preservation) and the A/B measurement; see the report. `ALPHA_WEIGHT` (the RGB one,
+/// =3) is unchanged and still used by `dist2`.
+const ALPHA_WEIGHT_LAB: i64 = 64000;
 
 /// One-sided "visibility-loss" weight for the FINAL REMAP assignment only.
 ///
-/// Added to the assignment score (in [`nearest_lab`]) ONLY when a candidate palette
+/// Added to the assignment score (in [`nearest_oklab`]) ONLY when a candidate palette
 /// entry is strictly DIMMER than the SOURCE pixel, as `DIM_WEIGHT · (src_a − entry_a)²`;
 /// it is ZERO when the entry is as opaque or more. It exists to stop a VISIBLE source
 /// pixel being assigned to a non-zero-but-near-invisible SAME-HUE entry and VANISHING:
-/// `pdist_lab`'s color term `de · wa/510` is discounted up to ~2× for a low-alpha entry
+/// `pdist_oklab`'s color term `de · wa/510` is discounted up to ~2× for a low-alpha entry
 /// (`wa = query_a + entry_a` shrinks), and `da² · ALPHA_WEIGHT_LAB` alone is too small
-/// versus Lab color gaps (~1e8), so an opaque query is otherwise pulled onto a dim entry.
+/// versus Oklab color gaps (~4.3e9), so an opaque query is otherwise pulled onto a dim
+/// entry.
 ///
-/// It is `2 · ALPHA_WEIGHT_LAB` (= 3000), i.e. dimming a pixel costs 3× the symmetric
-/// alpha penalty (1500 base + 3000 one-sided) while brightening stays at 1×. Lower bound:
+/// It is `2 · ALPHA_WEIGHT_LAB` (= 128000), i.e. dimming a pixel costs 3× the symmetric
+/// alpha penalty (64000 base + 128000 one-sided) while brightening stays at 1×. Lower bound:
 /// flipping the verified repro (opaque green must rank red@255 over green@11) needs
-/// `(1500 + DIM_WEIGHT) · 244² > 212.5e6`, i.e. `DIM_WEIGHT > 2070`; 3000 clears it with
-/// margin. It is NOT bounded above by any pinned test because the penalty is applied ONLY
+/// `(64000 + DIM_WEIGHT) · 244² > de(green,red) ≈ 1.16e9`, i.e. `DIM_WEIGHT > -44_500`;
+/// 128000 clears it with two orders of magnitude. It is NOT bounded above by any pinned
+/// test because the penalty is applied ONLY
 /// at the two remap sites (`remap_nearest`, `remap_dither`) — clustering, `kmeans_objective`,
 /// the D² reseed, the Wu split, and `quality_score` all pass `guard_src_alpha = 0` and so
 /// are byte-identical. Being one-sided and PROPORTIONAL, small dimming stays negligible
-/// (e.g. `a=8 → a=3`: `3000·25 = 75_000 ≪` a typical `pdist` gap), so legitimate
+/// (e.g. `a=8 → a=3`: `128000·25 = 3.2e6 ≪` a typical `pdist` gap), so legitimate
 /// partial-alpha remaps are not disturbed (no hard cliff). OPAQUE-NEUTRAL by construction:
 /// every all-opaque pair has `entry_a == src_a == 255`, so the term is identically 0.
 const DIM_WEIGHT: i64 = 2 * ALPHA_WEIGHT_LAB;
@@ -75,8 +79,8 @@ const DIM_WEIGHT: i64 = 2 * ALPHA_WEIGHT_LAB;
 /// entry would reduce the SOURCE pixel's visibility. Zero unless the entry is strictly
 /// dimmer than the source (and zero when `src_a == 0`, the signal clustering callers use
 /// to DISABLE the guard). Flat-additive integer term — no `wa/510` discount, so a dim
-/// entry cannot soften its own penalty. Overflow-safe: `≤ DIM_WEIGHT · 255² ≈ 1.95e8`,
-/// and `pdist_lab + dim_penalty ≤ ~1.5e9 ≪ i64::MAX`.
+/// entry cannot soften its own penalty. Overflow-safe: `≤ DIM_WEIGHT · 255² ≈ 8.3e9`,
+/// and `pdist_oklab + dim_penalty ≤ ~1.7e10 ≪ i64::MAX`.
 /// Test-only: production callers go through `quantize_simd::general_argmin`, which
 /// reproduces this term (and `vanish_penalty`) in f64 lanes — see quantize_simd.rs.
 #[cfg(test)]
@@ -95,26 +99,29 @@ fn dim_penalty(src_a: u8, entry_a: u8) -> i64 {
 ///
 /// Sized on PRINCIPLE, not calibrated against one fixture: it must keep an ESSENTIALLY-SOLID source
 /// off a clearly-invisible same-hue entry even against the WORST-case hue gap. The worst visible
-/// competitor is a full-alpha entry at the gamut's ΔE² diameter [`MAX_DELTA_E76_SQ`] (= 669_160_034,
-/// blue↔green), whose `pdist_lab` is at most that value (`wa/510 ≤ 1`, alpha term 0). A same-hue entry
-/// at alpha `e` scores `1500·(query_a−e)²` (`pdist` alpha term; colour term 0) `+ 3000·(S−e)²`
+/// competitor is a full-alpha entry at the gamut's squared-distance diameter
+/// [`MAX_OKLAB_DIST_SQ`] (= 4_294_836_225, black↔white), whose `pdist_oklab` is at most that
+/// value (`wa/510 ≤ 1`, alpha term 0). A same-hue entry
+/// at alpha `e` scores `64000·(query_a−e)²` (`pdist` alpha term; colour term 0) `+ 128000·(S−e)²`
 /// (`dim_penalty`) `+ W·(S−e)³` (`vanish_penalty`), where `S` is the raw source alpha. The guarantee
 /// covers the box `S ≥ 224` (≈88 % — "essentially solid", [`VANISH_GUARD_MIN_SRC`]) and
 /// `e ≤ 50` (≤ ~20 % — an unambiguous vanish, [`VANISH_GUARD_MAX_ENTRY`]) for ANY `query_a` (so it
 /// survives dither raising `want.a`). The score is linear in `query_a` and minimised at the dither
 /// maximum `query_a = 255`, and falls with rising `e` and falling `S`, so the hardest corner is
-/// `(S=224, e=50, query_a=255)`: `1500·205² + 3000·174² + W·174³ > 669_160_034` needs `W > 97.8`.
-/// `W = 100` clears it (`6.807e8 > 6.692e8`, ~11.5e6 margin), GUARANTEEING (compile-checked just
+/// `(S=224, e=50, query_a=255)`: `64000·205² + 128000·174² + W·174³ > 4_294_836_225`. Under the
+/// Oklab scale the QUADRATIC terms alone already clear the diameter
+/// (`2.690e9 + 3.875e9 = 6.565e9 > 4.295e9`), so the guarantee holds for any `W ≥ 0`; `W = 100`
+/// is kept (score `7.092e9`, ~65 % margin) so the cubic still adds selective margin at large drops
+/// rather than relying on the quadratics alone. GUARANTEEING (compile-checked just
 /// below) that no source ≥88 % opaque lands on a ≤20 %-opacity same-hue entry, whatever the
 /// alternative hue, even under dither. Outside that box the smooth penalty still biases toward
 /// visibility but the winner is the plain argmin (a soft crossover, not a guarantee). The cube stays
 /// tiny for a genuinely TRANSLUCENT remap (drop ~62 scores `100·62³ ≈ 2.4e7`, far below a hue gap), so
-/// `pdist_lab` keeps translucent edges on-hue; the closest-hue (red) crossover sits near source alpha
-/// ~157, well above the translucent band, so round-7 (`a=100` keeps its hue) holds with margin.
+/// `pdist_oklab` keeps translucent edges on-hue.
 const VANISH_WEIGHT: i64 = 100;
 
 /// Source-alpha FLOOR of the anti-vanish guarantee (≈88 % opacity, "essentially solid"). NOT a code
-/// branch — [`nearest_lab`] has no threshold — only the documented, compile-checked SCOPE within which
+/// branch — [`nearest_oklab`] has no threshold — only the documented, compile-checked SCOPE within which
 /// [`VANISH_WEIGHT`] provably keeps a source off a clearly-invisible same-hue entry. Below it the
 /// penalty still biases toward visibility, but the winner is the plain argmin and no guarantee is
 /// claimed (translucent sources prefer to keep their hue at a lower alpha anyway — see [`vanish_penalty`]).
@@ -126,9 +133,9 @@ const VANISH_GUARD_MAX_ENTRY: i64 = 50;
 /// Compile-time proof that [`VANISH_WEIGHT`] meets the anti-vanish guarantee across its whole scope.
 /// WORST CASE (derived): a source at the floor [`VANISH_GUARD_MIN_SRC`] onto a same-hue entry at the
 /// ceiling [`VANISH_GUARD_MAX_ENTRY`], with the dither-raised `query_a` at a full 255 (the score is
-/// linear in `query_a` and minimised there). Its score `1500·(255−e)² + 3000·(S−e)² + W·(S−e)³` must
-/// exceed the worst-hue visible competitor's, whose `pdist_lab` is at most the gamut diameter
-/// [`MAX_DELTA_E76_SQ`]. If the weight, the envelope, or the diameter changes so the guarantee fails,
+/// linear in `query_a` and minimised there). Its score `64000·(255−e)² + 128000·(S−e)² + W·(S−e)³`
+/// must exceed the worst-hue visible competitor's, whose `pdist_oklab` is at most the gamut diameter
+/// [`MAX_OKLAB_DIST_SQ`]. If the weight, the envelope, or the diameter changes so the guarantee fails,
 /// the build fails here instead of silently regressing.
 const _: () = {
   let s = VANISH_GUARD_MIN_SRC;
@@ -136,7 +143,7 @@ const _: () = {
   let dim_score = ALPHA_WEIGHT_LAB * (255 - e).pow(2)
     + DIM_WEIGHT * (s - e).pow(2)
     + VANISH_WEIGHT * (s - e).pow(3);
-  assert!(dim_score > MAX_DELTA_E76_SQ);
+  assert!(dim_score > MAX_OKLAB_DIST_SQ);
 };
 
 /// Smooth final-remap ANTI-VANISH penalty: how strongly to avoid assigning a visible SOURCE pixel to
@@ -147,8 +154,8 @@ const _: () = {
 /// CLIFF: a visible source one step below the threshold fell through to a near-invisible entry, or —
 /// proportionally — a translucent source was force-flipped onto a brighter WRONG-hue entry. Being a
 /// CONTINUOUS score term keyed on the raw SOURCE alpha (`guard_src_alpha`), this has NO hard exclusion
-/// threshold: the chosen entry is always the global argmin of `pdist_lab + dim_penalty + vanish_penalty`.
-/// (`nearest_lab` is still a discrete argmin, so as source alpha rises the winner can change at a
+/// threshold: the chosen entry is always the global argmin of `pdist_oklab + dim_penalty + vanish_penalty`.
+/// (`nearest_oklab` is still a discrete argmin, so as source alpha rises the winner can change at a
 /// crossover — but at that crossover the two entries are near-equal in SCORE, exactly like an ordinary
 /// nearest-neighbour quantizer flipping a pixel that sits between two palette colors; there is no
 /// "forbidden better-scoring entry", which is what made the hard floor's cliff a defect rather than
@@ -160,14 +167,14 @@ const _: () = {
 /// whose colour gap to the only visible alternative out-ranks the quadratic penalty (e.g. a forced
 /// 2-colour palette `[green@29, red@255]`: pre-penalty an opaque green maps to `green@29` and
 /// disappears). And the gap to overcome depends on the alternative's HUE: a far hue (e.g. only
-/// `blue@255` visible, ΔE² up to the [`MAX_DELTA_E76_SQ`] diameter) needs far more push than a near
+/// `blue@255` visible, color gap² up to the [`MAX_OKLAB_DIST_SQ`] diameter) needs far more push than a near
 /// one (`red`). The CUBIC growth, weighted to dominate that worst-case diameter (see
 /// [`VANISH_WEIGHT`]), makes this term win wherever the drop is large (the genuine vanish), so the
 /// opaque pixel lands on the visible entry whatever its hue — accepting a hue change as the price of
 /// staying visible, which for an essentially-solid pixel beats vanishing.
 ///
 /// WHY it does NOT recolour translucent edges: for a genuinely TRANSLUCENT source the drop to a dim
-/// same-hue entry is small, so `(src_a − entry_a)³` stays tiny and `pdist_lab` (hue) still decides —
+/// same-hue entry is small, so `(src_a − entry_a)³` stays tiny and `pdist_oklab` (hue) still decides —
 /// the translucent pixel keeps its colour at a lower alpha rather than flipping to a brighter wrong
 /// hue. The cube's selectivity is what separates the two regimes without any threshold.
 ///
@@ -175,7 +182,7 @@ const _: () = {
 /// disable it (`0 > entry_a` is false → `0`) and the palette / objective / Wu-split / `quality_score`
 /// stay byte-identical. It is also a literal no-op on a fully-opaque image: nothing is dimmer than an
 /// `a == 255` source, the term is `0`, and the bundled-photo bytes are preserved. Overflow-safe:
-/// `≤ VANISH_WEIGHT · 255³ ≈ 1.66e9`, and `pdist_lab + dim_penalty + vanish_penalty ≲ 2.6e9 ≪ i64::MAX`.
+/// `≤ VANISH_WEIGHT · 255³ ≈ 1.66e9`, and `pdist_oklab + dim_penalty + vanish_penalty ≲ 1.85e10 ≪ i64::MAX`.
 /// Test-only: production callers go through `quantize_simd::general_argmin` — see `dim_penalty`.
 #[cfg(test)]
 #[inline]
@@ -282,83 +289,87 @@ fn dist2(p: RGBA8, q: RGBA8) -> i64 {
 }
 
 /// PERCEPTUAL color distance for ASSIGNMENT decisions only (the analogue of
-/// [`dist2`], same structure but a CIELAB ΔE color term).
+/// [`dist2`], same structure but an Oklab color term).
 ///
-/// Mirrors `dist2` exactly except the color term is the squared CIE76 ΔE
-/// ([`delta_e76_sq`]) instead of squared RGB Euclidean distance: only the COLOR
+/// Mirrors `dist2` exactly except the color term is the squared Oklab distance
+/// ([`oklab_dist_sq`]) instead of squared RGB Euclidean distance: only the COLOR
 /// term gets the `wa/510` visibility weighting (`wa = p.a + q.a ∈ 0..=510`, the
 /// same combined-alpha visibility weighting as `dist2`), while the alpha term
-/// always counts (weighted by [`ALPHA_WEIGHT_LAB`]). Integer/fixed-point only
-/// (`rgb_to_lab` + `delta_e76_sq` are deterministic and float-free), so output
-/// stays byte-identical run-to-run and cross-platform.
+/// always counts (weighted by [`ALPHA_WEIGHT_LAB`]). The conversion quantizes to
+/// a `u16` triple ONCE (`rgb_to_oklab`); every comparison derived from it is then
+/// exact integer math, so output stays byte-identical run-to-run and cross-platform.
 ///
 /// This is the CANONICAL, by-value reference form of the perceptual metric. The
-/// production hot paths (assignment in [`nearest_lab`] and thus
+/// production hot paths (assignment in [`nearest_oklab`] and thus
 /// `remap_nearest`/`remap_dither`'s index selection, [`kmeans_objective`], and the
-/// k-means++ D² reseed) call the cached [`pdist_lab`] form to avoid recomputing
-/// `rgb_to_lab` per query — `pdist_lab` must stay byte-identical to this. NOT used
+/// k-means++ D² reseed) call the cached [`pdist_oklab`] form to avoid recomputing
+/// `rgb_to_oklab` per query — `pdist_oklab` must stay byte-identical to this. NOT used
 /// by `quality_score`, the dither residual/activity thresholds, or the Wu split —
 /// those stay on `dist2`. Kept `#[cfg(test)]` because production uses the cached
-/// form exclusively; the tests pin `pdist_lab == pdist` and the perceptual ordering
+/// form exclusively; the tests pin `pdist_oklab == pdist` and the perceptual ordering
 /// against this reference.
 ///
-/// OVERFLOW: `de` (`delta_e76_sq`) is `dL²+da²+db²` over components ≤ ~20000 (×100
-/// units), so `de ≤ ~1.2e9`; `de * wa` ≤ `1.2e9 * 510 ≈ 6.1e11`, far inside `i64`.
-/// The alpha term is `255² · 1500 ≈ 9.75e7`. So `pdist ≤ ~1.3e9` (the `de * wa /
-/// 510` divide keeps the color term ≤ ~1.2e9). See [`kmeans_objective`] for the
+/// OVERFLOW: `de` (`oklab_dist_sq`) is `dL²+da²+db²` over `u16` components
+/// (`0..=65535`), so `de ≤ ~1.3e10` (in-gamut ≤ [`MAX_OKLAB_DIST_SQ`] ≈ 4.29e9);
+/// `de * wa` ≤ `1.3e10 * 510 ≈ 6.6e12`, far inside `i64`.
+/// The alpha term is `255² · 64000 ≈ 4.16e9`. So `pdist ≤ ~8.5e9` (the `de * wa /
+/// 510` divide keeps the color term ≤ ~1.3e10). See [`kmeans_objective`] for the
 /// `u128` accumulator bound that this larger metric requires.
 #[cfg(test)]
 #[inline]
 fn pdist(p: RGBA8, q: RGBA8) -> i64 {
   let wa = p.a as i64 + q.a as i64; // 0..=510, same visibility weighting as dist2
-  let de = delta_e76_sq(rgb_to_lab(p.r, p.g, p.b), rgb_to_lab(q.r, q.g, q.b));
+  let de = oklab_dist_sq(rgb_to_oklab(p.r, p.g, p.b), rgb_to_oklab(q.r, q.g, q.b));
   let da = p.a as i64 - q.a as i64;
   de * wa / 510 + da * da * ALPHA_WEIGHT_LAB
 }
 
-/// Perceptual distance between a query (its precomputed [`Lab`] + alpha) and a
-/// palette entry (its precomputed `Lab` + alpha), WITHOUT recomputing either
-/// `rgb_to_lab`. This is the hot-loop form of [`pdist`]: the cube-root-heavy
-/// `rgb_to_lab` is done ONCE per color by the caller and cached, so the per-pair
-/// cost collapses to a cheap `delta_e76_sq` + the alpha term.
+/// Perceptual distance between a query (its precomputed [`OkLab`] + alpha) and a
+/// palette entry (its precomputed `OkLab` + alpha), WITHOUT recomputing either
+/// `rgb_to_oklab`. This is the hot-loop form of [`pdist`]: the cube-root-heavy
+/// `rgb_to_oklab` is done ONCE per color by the caller and cached, so the per-pair
+/// cost collapses to a cheap `oklab_dist_sq` + the alpha term.
 ///
 /// Must stay byte-identical to `pdist(query_rgba, entry_rgba)`: same `wa/510`
 /// color weighting, same `ALPHA_WEIGHT_LAB` alpha term.
 #[inline]
-fn pdist_lab(query_lab: Lab, query_a: u8, entry_lab: Lab, entry_a: u8) -> i64 {
+fn pdist_oklab(query_oklab: OkLab, query_a: u8, entry_oklab: OkLab, entry_a: u8) -> i64 {
   let wa = query_a as i64 + entry_a as i64; // 0..=510
-  let de = delta_e76_sq(query_lab, entry_lab);
+  let de = oklab_dist_sq(query_oklab, entry_oklab);
   let da = query_a as i64 - entry_a as i64;
   de * wa / 510 + da * da * ALPHA_WEIGHT_LAB
 }
 
-/// Precomputes the [`Lab`] of every palette entry so the perceptual hot loops
-/// ([`nearest_lab`]) never recompute `rgb_to_lab` per query. Build once where the
+/// Precomputes the [`OkLab`] of every palette entry so the perceptual hot loops
+/// ([`nearest_oklab`]) never recompute `rgb_to_oklab` per query. Build once where the
 /// palette is fixed across many queries (remap, k-means assignment/objective).
 #[inline]
-fn palette_labs(palette: &[RGBA8]) -> Vec<Lab> {
-  palette.iter().map(|p| rgb_to_lab(p.r, p.g, p.b)).collect()
+fn palette_oklabs(palette: &[RGBA8]) -> Vec<OkLab> {
+  palette
+    .iter()
+    .map(|p| rgb_to_oklab(p.r, p.g, p.b))
+    .collect()
 }
 
-/// Structure-of-Arrays palette Lab cache for the hot nearest-palette scan.
+/// Structure-of-Arrays palette OkLab cache for the hot nearest-palette scan.
 ///
 /// Built ONCE where the palette is fixed across many queries (remap, k-means
 /// assignment/objective). It carries two views of the same data:
 ///
 /// * `labs` (AoS) + `alpha` feed the COLD general path: a translucent query or a
 ///   palette with a reserved transparent slot still goes through the unchanged
-///   [`nearest_lab`] (full `pdist_lab` + dim/vanish penalties). Reusing `nearest_lab`
+///   [`nearest_oklab`] (full `pdist_oklab` + dim/vanish penalties). Reusing `nearest_oklab`
 ///   verbatim keeps that rare path byte-identical with zero logic duplication.
 /// * `l` / `a` / `b` (SoA `i32`) feed the HOT opaque fast path: contiguous component
 ///   arrays a SIMD kernel can vector-load. See [`crate::quantize_simd`].
 ///
 /// `all_opaque` is set when every entry has `alpha == 255`. Combined with an opaque
-/// query (`qa == 255`), the perceptual distance collapses to plain squared CIE76 ΔE
-/// (`dl²+da²+db²` — `wa/510 == 1`, alpha term 0, both penalties 0), which is exactly
-/// what the opaque kernel computes; proven equal to [`nearest_lab`] by the test
-/// `opaque_fast_path_equals_general`.
-struct PaletteLabSoa {
-  labs: Vec<Lab>,
+/// query (`qa == 255`), the perceptual distance collapses to plain squared Oklab
+/// distance (`dl²+da²+db²` — `wa/510 == 1`, alpha term 0, both penalties 0), which
+/// is exactly what the opaque kernel computes; proven equal to [`nearest_oklab`] by the
+/// test `opaque_fast_path_equals_general`.
+struct PaletteOkLabSoa {
+  labs: Vec<OkLab>,
   l: Vec<i32>,
   a: Vec<i32>,
   b: Vec<i32>,
@@ -366,10 +377,13 @@ struct PaletteLabSoa {
   all_opaque: bool,
 }
 
-impl PaletteLabSoa {
-  /// Builds the cache from a palette. `labs` matches [`palette_labs`] exactly.
+impl PaletteOkLabSoa {
+  /// Builds the cache from a palette. `labs` matches [`palette_oklabs`] exactly.
   fn from_palette(palette: &[RGBA8]) -> Self {
-    let labs: Vec<Lab> = palette.iter().map(|p| rgb_to_lab(p.r, p.g, p.b)).collect();
+    let labs: Vec<OkLab> = palette
+      .iter()
+      .map(|p| rgb_to_oklab(p.r, p.g, p.b))
+      .collect();
     let l = labs.iter().map(|x| x.l).collect();
     let a = labs.iter().map(|x| x.a).collect();
     let b = labs.iter().map(|x| x.b).collect();
@@ -385,27 +399,33 @@ impl PaletteLabSoa {
     }
   }
 
-  /// Index of the nearest palette entry to `qlab`/`qa` under the perceptual metric.
+  /// Index of the nearest palette entry to `qoklab`/`qa` under the perceptual metric.
   ///
   /// Fast path (opaque palette + opaque query): the SIMD/scalar `opaque_argmin` of
   /// `dl²+da²+db²`, byte-identical to the general path. Otherwise the unchanged
-  /// [`nearest_lab`] (cold; translucent / transparent-slot cases). `skip_transparent`
+  /// [`nearest_oklab`] (cold; translucent / transparent-slot cases). `skip_transparent`
   /// and `guard` matter only on the general path — on the fast path the palette has no
   /// transparent slot and the dim/vanish penalties are identically zero.
   #[inline]
   fn nearest(
     &self,
     kernel: OpaqueKernel,
-    qlab: Lab,
+    qoklab: OkLab,
     qa: u8,
     skip_transparent: bool,
     guard: u8,
   ) -> usize {
     if self.all_opaque && qa == 255 {
-      quantize_simd::opaque_argmin(kernel, &self.l, &self.a, &self.b, [qlab.l, qlab.a, qlab.b])
+      quantize_simd::opaque_argmin(
+        kernel,
+        &self.l,
+        &self.a,
+        &self.b,
+        [qoklab.l, qoklab.a, qoklab.b],
+      )
     } else {
       // Translucent / transparent-slot scan: `general_argmin` reproduces
-      // `nearest_lab` bit-for-bit (exact-integer semantics in f64 lanes — see
+      // `nearest_oklab` bit-for-bit (exact-integer semantics in f64 lanes — see
       // quantize_simd.rs), including skip_transparent, the dim/vanish
       // penalties, lowest-index ties, and the tier-2 all-transparent fallback.
       quantize_simd::general_argmin(
@@ -414,9 +434,9 @@ impl PaletteLabSoa {
         &self.a,
         &self.b,
         &self.alpha,
-        qlab.l,
-        qlab.a,
-        qlab.b,
+        qoklab.l,
+        qoklab.a,
+        qoklab.b,
         qa,
         skip_transparent,
         guard,
@@ -633,7 +653,7 @@ const MAX_SHARDS: usize = 8;
 const PAR_MIN_PIXELS: usize = 1 << 18;
 
 /// Distinct-color (entry) count floor for the k-means stages: the D×K
-/// assignment scan and the per-entry Lab build are only worth sharding when
+/// assignment scan and the per-entry OkLab build are only worth sharding when
 /// the histogram itself is large.
 const PAR_MIN_ENTRIES: usize = 1 << 16;
 
@@ -824,7 +844,7 @@ where
 }
 
 /// Two-output variant of [`shard_scatter`], for per-element maps that produce
-/// a pair of aligned arrays in one pass (the `entry_labs`/`entry_alphas`
+/// a pair of aligned arrays in one pass (the `entry_oklabs`/`entry_alphas`
 /// build). Same disjointness and T-invariance argument.
 #[cfg(not(target_arch = "wasm32"))]
 fn shard_scatter2<I, O1, O2, F>(
@@ -1404,7 +1424,7 @@ fn channel_of(c: RGBA8, ch: usize) -> u8 {
 }
 
 /// Round-to-nearest signed division `n / d` (`d > 0`), half-away-from-zero on
-/// the exact-half boundary. Used by the Lab-space centroid update, where `a`/`b`
+/// the exact-half boundary. Used by the Oklab-space centroid update, where `a`/`b`
 /// moment sums can be negative — a truncating `/` would bias dark/saturated
 /// centroids toward zero. Pure `i128` integer, so the centroid is identical on
 /// every platform.
@@ -1518,10 +1538,10 @@ fn median_cut(
 }
 
 /// Finds the index of the nearest palette entry to the query (given its
-/// precomputed [`Lab`] + alpha) by the PERCEPTUAL [`pdist_lab`] metric, scanning
-/// CACHED palette Labs. This is the hot-loop assignment primitive: `rgb_to_lab` is
+/// precomputed [`OkLab`] + alpha) by the PERCEPTUAL [`pdist_oklab`] metric, scanning
+/// CACHED palette Labs. This is the hot-loop assignment primitive: `rgb_to_oklab` is
 /// computed ONCE per query by the caller and once per palette entry in
-/// `palette_labs`, so the per-call cost is `O(palette · delta_e76_sq)` with no
+/// `palette_oklabs`, so the per-call cost is `O(palette · oklab_dist_sq)` with no
 /// cube roots. Lower index wins ties (`<`), exactly like the old `dist2` `nearest`.
 ///
 /// `guard_src_alpha` is the FINAL-REMAP visibility guard: the raw SOURCE pixel's alpha
@@ -1529,7 +1549,7 @@ fn median_cut(
 /// to DISABLE the guard for clustering-context calls (`kmeans_objective`, `kmeans_refine`,
 /// the `nearest` wrapper used by the Wu split and `quality_score`). It drives TWO SCORE terms
 /// so a visible source pixel cannot be assigned to a much-dimmer entry and VANISH, both added to
-/// the `pdist_lab` distance and both keyed on the raw source alpha: the gentle quadratic
+/// the `pdist_oklab` distance and both keyed on the raw source alpha: the gentle quadratic
 /// [`dim_penalty`] (see [`DIM_WEIGHT`]) that biases ANY visible source away from dimmer entries,
 /// and the steeper cubic [`vanish_penalty`] (see [`VANISH_WEIGHT`]) that dominates only at the
 /// LARGE drop of a genuine vanish (an essentially-solid source onto a near-invisible entry) — so
@@ -1552,23 +1572,24 @@ fn median_cut(
 /// and `general_matches_scalar_*` tests); this stays compiled for tests as the readable reference.
 #[cfg(test)]
 #[inline]
-fn nearest_lab(
-  palette_labs: &[Lab],
+fn nearest_oklab(
+  palette_oklabs: &[OkLab],
   palette_alphas: &[u8],
-  query_lab: Lab,
+  query_oklab: OkLab,
   query_a: u8,
   skip_transparent: bool,
   guard_src_alpha: u8,
 ) -> usize {
   // When `skip_transparent` is set, the reserved fully-transparent palette slot
   // (entry alpha == 0) is excluded from selection. The perceptual metric can rank a
-  // saturated color CLOSER to transparent-black than to any real color: `pdist`'s ΔE
-  // color term dwarfs the `da²·ALPHA_WEIGHT_LAB` alpha term, and the `wa/510` factor
-  // HALVES the color penalty for a transparent comparison (the slot has alpha 0).
+  // dark color CLOSER to transparent-black than to a far bright color: `pdist`'s
+  // Oklab color term dwarfs the `da²·ALPHA_WEIGHT_LAB` alpha term near the top of the
+  // distance range, and the `wa/510` factor HALVES the color penalty for a
+  // transparent comparison (the slot has alpha 0).
   // Without the exclusion a visible pixel could be mapped to the transparent slot and
-  // VANISH (e.g. opaque green ranks transparent at 207,749,788 < opaque blue at
-  // 669,160,034). RGB `dist2` never needed this — its color and alpha terms share one
-  // scale, so the alpha penalty always dominated.
+  // VANISH (e.g. opaque black ranks transparent at `255²·64000 = 4.16e9` < opaque
+  // white at `de(black,white) = 4.295e9`). RGB `dist2` never needed this — its color
+  // and alpha terms share one scale, so the alpha penalty always dominated.
   //
   // `skip_transparent` is the SOURCE pixel's visibility, decided by the CALLER — it is
   // NOT derived from `query_a`. In the dither path `query_a` is the dither-adjusted
@@ -1585,11 +1606,11 @@ fn nearest_lab(
   // boundary between two palette entries.
   let mut best = usize::MAX;
   let mut best_d = i64::MAX;
-  for (i, (&plab, &pa)) in palette_labs.iter().zip(palette_alphas.iter()).enumerate() {
+  for (i, (&plab, &pa)) in palette_oklabs.iter().zip(palette_alphas.iter()).enumerate() {
     if skip_transparent && pa == 0 {
       continue;
     }
-    let d = pdist_lab(query_lab, query_a, plab, pa)
+    let d = pdist_oklab(query_oklab, query_a, plab, pa)
       + dim_penalty(guard_src_alpha, pa)
       + vanish_penalty(guard_src_alpha, pa);
     if d < best_d {
@@ -1606,8 +1627,8 @@ fn nearest_lab(
   // Unreachable in production: `quantize_pass` always clusters visible pixels into ≥ one visible entry.
   let mut best = 0usize;
   let mut best_d = i64::MAX;
-  for (i, (&plab, &pa)) in palette_labs.iter().zip(palette_alphas.iter()).enumerate() {
-    let d = pdist_lab(query_lab, query_a, plab, pa)
+  for (i, (&plab, &pa)) in palette_oklabs.iter().zip(palette_alphas.iter()).enumerate() {
+    let d = pdist_oklab(query_oklab, query_a, plab, pa)
       + dim_penalty(guard_src_alpha, pa)
       + vanish_penalty(guard_src_alpha, pa);
     if d < best_d {
@@ -1620,50 +1641,49 @@ fn nearest_lab(
 
 /// Finds the index of the nearest palette entry to `c` by the PERCEPTUAL metric
 /// ([`pdist`]). Thin, COLD wrapper: it recomputes the palette Labs and the query
-/// Lab on every call. All production hot loops (remap, k-means
-/// assignment/objective/reseed) build the palette `Lab` cache once and call
-/// [`nearest_lab`] directly, so this convenience wrapper is `#[cfg(test)]`-only;
+/// OkLab on every call. All production hot loops (remap, k-means
+/// assignment/objective/reseed) build the palette `OkLab` cache once and call
+/// [`nearest_oklab`] directly, so this convenience wrapper is `#[cfg(test)]`-only;
 /// the tests use it to assert the perceptual nearest choice without threading a
 /// cache.
 #[cfg(test)]
 #[inline]
 fn nearest(palette: &[RGBA8], c: RGBA8) -> usize {
-  let labs = palette_labs(palette);
+  let labs = palette_oklabs(palette);
   let alphas: Vec<u8> = palette.iter().map(|p| p.a).collect();
   // `nearest` is the clustering/measurement helper (Wu split, `quality_score`). The
   // final-remap visibility guard is DISABLED here (`guard_src_alpha = 0`) so the split
   // and the `min_quality` gate stay byte-identical.
-  nearest_lab(&labs, &alphas, rgb_to_lab(c.r, c.g, c.b), c.a, c.a > 0, 0)
+  nearest_oklab(&labs, &alphas, rgb_to_oklab(c.r, c.g, c.b), c.a, c.a > 0, 0)
 }
 
 /// Exact integer k-means objective for `palette` over `entries`, using the
 /// PERCEPTUAL assignment metric:
 /// `Σ_entries count · pdist(palette[nearest(palette, color)], color)`.
 ///
-/// MUST use the same metric as assignment ([`pdist`]/[`nearest_lab`]): the
+/// MUST use the same metric as assignment ([`pdist`]/[`nearest_oklab`]): the
 /// keep-best guard in [`kmeans_refine`] compares two palettes, and comparing them
 /// under a DIFFERENT metric than the one assignment minimizes would let it keep an
-/// RGB-better-but-Lab-worse palette. Palette and entry Labs are cached once so the
+/// RGB-better-but-OkLab-worse palette. Palette and entry Labs are cached once so the
 /// inner scan is cube-root-free.
 ///
 /// Accumulated in `u128` so it is exact and overflow-free. The perceptual metric
-/// is larger than the old RGB one — re-derive the bound: `pdist ≤ ~1.3e9` (see
-/// [`pdist`]); `count` is a `u64` (`< 2^64`); a histogram has at most one entry per
-/// distinct RGBA, `≤ 2^32`. Worst case `Σ count·pdist ≤ 2^32 · 2^64 · 1.3e9 ≈
-/// 2^96 · 1.3e9 ≈ 2^127`, which still fits `u128` (`< 2^128`); in practice
-/// `Σ count` is the pixel count (`≤ 2^32` for any real image) so the sum is
-/// `≤ 2^32 · 1.3e9 ≈ 2^63`, with enormous margin. No other accumulator sums
+/// is larger than the old RGB one — re-derive the bound: `pdist ≤ ~8.5e9` (see
+/// [`pdist`]); `count` is a `u64` but `Σ count` IS the pixel count (`≤ 2^33` for
+/// any real image, `≤ 2^64` at the pure type limit), so
+/// `Σ count·pdist ≤ 2^64 · 8.5e9 ≈ 2^97`, with enormous margin under `u128`
+/// (`< 2^128`). No other accumulator sums
 /// `pdist`; the D² reseed weights (`count · pdist`) are bounded identically and
 /// already use `u128`.
 fn kmeans_objective(
   palette: &[RGBA8],
   entries: &[ColorCount],
-  entry_labs: &[Lab],
+  entry_oklabs: &[OkLab],
   entry_alphas: &[u8],
 ) -> u128 {
-  debug_assert_eq!(entries.len(), entry_labs.len());
+  debug_assert_eq!(entries.len(), entry_oklabs.len());
   debug_assert_eq!(entries.len(), entry_alphas.len());
-  let soa = PaletteLabSoa::from_palette(palette);
+  let soa = PaletteOkLabSoa::from_palette(palette);
   let kernel = quantize_simd::detect();
   // Sharded: each shard accumulates a partial `u128` objective over its
   // contiguous entry range; the partials sum in shard order. Integer addition
@@ -1673,12 +1693,12 @@ fn kmeans_objective(
   shard_reduce(entries.len(), shards, |s, e| {
     let mut obj: u128 = 0;
     for ei in s..e {
-      // `entry_labs[ei]` IS `rgb_to_lab(e.color)` — the caller caches it once per
+      // `entry_oklabs[ei]` IS `rgb_to_oklab(e.color)` — the caller caches it once per
       // refine instead of recomputing the cube-root conversion per objective call.
-      let qlab = entry_labs[ei];
+      let qoklab = entry_oklabs[ei];
       // Clustering objective: guard disabled (`0`) so the keep-best metric is pure `pdist`.
-      let idx = soa.nearest(kernel, qlab, entry_alphas[ei], entry_alphas[ei] > 0, 0);
-      let d = pdist_lab(qlab, entry_alphas[ei], soa.labs[idx], soa.alpha[idx]).max(0) as u128;
+      let idx = soa.nearest(kernel, qoklab, entry_alphas[ei], entry_alphas[ei] > 0, 0);
+      let d = pdist_oklab(qoklab, entry_alphas[ei], soa.labs[idx], soa.alpha[idx]).max(0) as u128;
       obj += entries[ei].count as u128 * d;
     }
     obj
@@ -1702,17 +1722,18 @@ fn kmeans_objective(
 /// importance-weighted histogram counts built by `build_importance` (flat
 /// regions count ~fully, edges ~1/8), not raw pixel population.
 ///
-/// The centroid update is the weighted mean in LAB (mapped back through
-/// [`lab_to_rgb8`]) — the minimizer of the opaque `pdist` assignment objective
-/// (squared CIE76 is minimized at the component mean of the assigned Labs).
-/// Alpha keeps its own count-weighted mean: it is not a Lab component.
+/// The centroid update is the weighted mean in Oklab (mapped back through
+/// [`oklab_to_rgb8`]) — the minimizer of the opaque `pdist` assignment objective
+/// (a squared Oklab distance is minimized at the component mean of the assigned
+/// Oklab points). Alpha keeps its own count-weighted mean: it is not an Oklab
+/// component.
 ///
-/// KEEP-BEST GUARD: for OPAQUE inputs the Lab-mean update is the assignment
+/// KEEP-BEST GUARD: for OPAQUE inputs the Oklab-mean update is the assignment
 /// objective's exact minimizer, so every Lloyd pass is monotone
 /// non-increasing and adopting on ties (`<=`) returns the LAST pass — the
 /// pre-guard behavior, byte-for-byte, in that regime. When alpha varies,
 /// `pdist`'s per-pair `wa/510` color weighting and `da²·ALPHA_WEIGHT_LAB` term
-/// couple the assignment score to the center's own alpha, so the Lab mean is
+/// couple the assignment score to the center's own alpha, so the Oklab mean is
 /// still only the color part's minimizer and a pass CAN raise
 /// [`kmeans_objective`]. To never return a palette worse than its seed, we
 /// snapshot the best palette+objective starting from the INPUT (seed), and
@@ -1730,10 +1751,10 @@ fn kmeans_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) {
   }
   let k = palette.len();
 
-  // Cache every entry's Lab ONCE: entries are scanned repeatedly (the assignment
-  // pass each iter, plus the D² reseed) and `rgb_to_lab` is the cube-root cost, so
+  // Cache every entry's OkLab ONCE: entries are scanned repeatedly (the assignment
+  // pass each iter, plus the D² reseed) and `rgb_to_oklab` is the cube-root cost, so
   // computing it per-entry-per-scan would dominate. Alphas are kept alongside for
-  // the perceptual `pdist_lab` alpha term.
+  // the perceptual `pdist_oklab` alpha term.
   //
   // Sharded parallel map: each shard fills its own disjoint `labs`/`alphas`
   // range with values that are a pure function of the entry (no reduction at
@@ -1741,16 +1762,16 @@ fn kmeans_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) {
   // computed once here and reused by the per-pass assignment scan below
   // (`entries.len()` is fixed for the whole refine).
   let shards = shard_count(entries.len(), PAR_MIN_ENTRIES);
-  let mut entry_labs = vec![rgb_to_lab(0, 0, 0); entries.len()];
+  let mut entry_oklabs = vec![rgb_to_oklab(0, 0, 0); entries.len()];
   let mut entry_alphas = vec![0u8; entries.len()];
   shard_scatter2(
     entries,
-    &mut entry_labs,
+    &mut entry_oklabs,
     &mut entry_alphas,
     shards,
     |chunk, labs, alphas| {
       for (i, e) in chunk.iter().enumerate() {
-        labs[i] = rgb_to_lab(e.color.r, e.color.g, e.color.b);
+        labs[i] = rgb_to_oklab(e.color.r, e.color.g, e.color.b);
         alphas[i] = e.color.a;
       }
     },
@@ -1773,10 +1794,10 @@ fn kmeans_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) {
   for _ in 0..iters {
     // Cache the palette's Labs (SoA) for this pass's assignment scan, rebuilt each
     // pass because the centroids moved.
-    let soa = PaletteLabSoa::from_palette(palette);
+    let soa = PaletteOkLabSoa::from_palette(palette);
 
-    // Accumulators per cluster: LAB-space moment sums (the assignment metric
-    // is pdist_lab, so the centroid that minimizes it is the weighted LAB
+    // Accumulators per cluster: Oklab-space moment sums (the assignment metric
+    // is pdist_oklab, so the centroid that minimizes it is the weighted Oklab
     // mean, not an RGBA mean) plus the alpha sum and the weight.
     let mut sl = vec![0i128; k];
     let mut sc_a = vec![0i128; k];
@@ -1786,12 +1807,12 @@ fn kmeans_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) {
 
     // FUSED objective: this assignment scan runs under the CURRENT palette p_i,
     // so accumulating `count · pdist(assigned)` alongside the cluster sums yields
-    // exactly `kmeans_objective(p_i)` — same entries order, same `pdist_lab`,
+    // exactly `kmeans_objective(p_i)` — same entries order, same `pdist_oklab`,
     // same `u128` accumulation — folding the old standalone objective pass into
     // the scan that was already running.
     //
     // Sharded: each shard keeps its own per-cluster accumulators (3 × k `i128`
-    // for the Lab moments + 2 × k `u64`) plus a partial `u128` objective, merged
+    // for the Oklab moments + 2 × k `u64`) plus a partial `u128` objective, merged
     // into the shared accumulators in shard order below. Every merge is integer
     // addition — associative and commutative — and each entry's assigned index
     // is a pure function of (entry, palette), so `sl..wn`/`pass_obj` are
@@ -1810,21 +1831,21 @@ fn kmeans_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) {
         // Clustering assignment: guard disabled so centroids/palette stay byte-identical.
         let idx = soa.nearest(
           kernel,
-          entry_labs[ei],
+          entry_oklabs[ei],
           entry_alphas[ei],
           entry_alphas[ei] > 0,
           0,
         );
         obj += e.count as u128
-          * pdist_lab(
-            entry_labs[ei],
+          * pdist_oklab(
+            entry_oklabs[ei],
             entry_alphas[ei],
             soa.labs[idx],
             soa.alpha[idx],
           )
           .max(0) as u128;
         let c = e.count;
-        let el = entry_labs[ei];
+        let el = entry_oklabs[ei];
         sl[idx] += el.l as i128 * c as i128;
         sc_a[idx] += el.a as i128 * c as i128;
         sc_b[idx] += el.b as i128 * c as i128;
@@ -1870,16 +1891,16 @@ fn kmeans_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) {
 
     // Recompute centroids; collect empty clusters for re-seeding.
     //
-    // The centroid update is the WEIGHTED MEAN IN LAB — the space the
+    // The centroid update is the WEIGHTED MEAN IN OKLAB — the space the
     // assignment metric actually minimizes (for opaque inputs `pdist` is pure
-    // squared CIE76, whose minimizer over an assigned set is exactly the
+    // squared Oklab distance, whose minimizer over an assigned set is exactly the
     // component mean of the entries' Labs). The old RGBA-mean update minimized
     // a DIFFERENT objective than the assignment minimized, which is why Lloyd
     // could be non-monotone even on opaque images and the keep-best guard had
-    // to rescue passes. The Lab mean is mapped back to sRGB8 by the integer
-    // `lab_to_rgb8` (inverse of the forward conversion — the round trip is
+    // to rescue passes. The OkLab mean is mapped back to sRGB8 by the integer
+    // `oklab_to_rgb8` (inverse of the forward conversion — the round trip is
     // within 1 LSB over the whole cube, so a singleton cluster still lands on
-    // its own color). Alpha is NOT a Lab component: it keeps its own
+    // its own color). Alpha is NOT a OkLab component: it keeps its own
     // count-weighted mean (round-nearest, as before).
     let mut empty: Vec<usize> = Vec::new();
     for i in 0..k {
@@ -1889,7 +1910,7 @@ fn kmeans_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) {
       }
       let n = wn[i];
       let ni = n as i128;
-      let (r, g, b) = lab_to_rgb8(Lab {
+      let (r, g, b) = oklab_to_rgb8(OkLab {
         l: idiv_round(sl[i], ni) as i32,
         a: idiv_round(sc_a[i], ni) as i32,
         b: idiv_round(sc_b[i], ni) as i32,
@@ -1907,9 +1928,9 @@ fn kmeans_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) {
     // sequence deterministic across all runs. Multiple dead clusters in one pass
     // get proper D² incremental updates so they spread across the gamut.
     if !empty.is_empty() {
-      // The centroids moved in place above, so the assignment-pass `pal_labs` is
+      // The centroids moved in place above, so the assignment-pass `pal_oklabs` is
       // stale. Rebuild the live centers' Labs for the perceptual D² baseline.
-      let live_labs = palette_labs(palette);
+      let live_oklabs = palette_oklabs(palette);
       // Initial PERCEPTUAL squared residuals: each entry's `pdist` to its NEAREST
       // CURRENT LIVE center. k-means++ requires D² against the nearest center as
       // it stands NOW (after the in-place centroid recompute), not the center of
@@ -1918,14 +1939,19 @@ fn kmeans_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) {
       // not seed their own D². The D² metric MUST match assignment (`pdist`), or
       // the reseed would bias by an inconsistent (RGB) residual. This runs only
       // inside `if !empty.is_empty()` (reseed events are rare) and is O(entries·k)
-      // with k ≤ 256 — acceptable. `min_d2` is `u64`: `pdist ≤ ~1.3e9` fits easily.
+      // with k ≤ 256 — acceptable. `min_d2` is `u64`: `pdist ≤ ~8.5e9` fits easily.
       let mut min_d2: Vec<u64> = (0..entries.len())
         .map(|ej| {
           let mut best = u64::MAX;
           for i in 0..k {
             if wn[i] > 0 {
-              let d = pdist_lab(entry_labs[ej], entry_alphas[ej], live_labs[i], palette[i].a).max(0)
-                as u64;
+              let d = pdist_oklab(
+                entry_oklabs[ej],
+                entry_alphas[ej],
+                live_oklabs[i],
+                palette[i].a,
+              )
+              .max(0) as u64;
               if d < best {
                 best = d;
               }
@@ -1978,13 +2004,13 @@ fn kmeans_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) {
         palette[dead] = entries[picked_idx].color;
 
         // Incremental PERCEPTUAL D² update: reduce each entry's min_d2 if the
-        // just-placed center (an entry color, so its Lab is `entry_labs[picked]`)
+        // just-placed center (an entry color, so its OkLab is `entry_oklabs[picked]`)
         // is nearer under `pdist` — the same metric as the baseline above.
-        let picked_lab = entry_labs[picked_idx];
+        let picked_oklab = entry_oklabs[picked_idx];
         let picked_a = entry_alphas[picked_idx];
         for ej in 0..entries.len() {
           let new_d =
-            pdist_lab(picked_lab, picked_a, entry_labs[ej], entry_alphas[ej]).max(0) as u64;
+            pdist_oklab(picked_oklab, picked_a, entry_oklabs[ej], entry_alphas[ej]).max(0) as u64;
           if new_d < min_d2[ej] {
             min_d2[ej] = new_d;
           }
@@ -2009,7 +2035,7 @@ fn kmeans_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) {
   // in-loop): the same `<=` adoption as the in-scan checks. Total standalone
   // objective scans: 1 (was `iters + 1`); on a fixed-point break this evaluates
   // the same palette the skipped passes would have — identical verdict.
-  let obj = kmeans_objective(palette, entries, &entry_labs, &entry_alphas);
+  let obj = kmeans_objective(palette, entries, &entry_oklabs, &entry_alphas);
   if obj <= best_obj {
     best.copy_from_slice(palette);
   }
@@ -2023,15 +2049,15 @@ fn kmeans_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) {
 /// shard order, so the merged accumulators are identical for ANY shard count —
 /// the serial pass is the T == 1 case of the same body.
 struct SmAcc {
-  // Lab first moments: Σ count·(l, a, b).
+  // OkLab first moments: Σ count·(l, a, b).
   sl: Vec<i128>,
   sca: Vec<i128>,
   scb: Vec<i128>,
-  // Lab second moments: Σ count·(l², a², b²) — for the widest-variance split.
+  // OkLab second moments: Σ count·(l², a², b²) — for the widest-variance split.
   sl2: Vec<i128>,
   sca2: Vec<i128>,
   scb2: Vec<i128>,
-  // Alpha moments (alpha is not a Lab component but IS a clustering channel).
+  // Alpha moments (alpha is not a OkLab component but IS a clustering channel).
   sal: Vec<u64>,
   sal2: Vec<u128>,
   // Σ count per cluster.
@@ -2118,20 +2144,20 @@ fn split_merge_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) 
     return;
   }
 
-  // Cache every entry's Lab once for the whole refinement — the assignment
+  // Cache every entry's OkLab once for the whole refinement — the assignment
   // scan, the merge cost, the split partition, and every objective call read
   // them (same reason `kmeans_refine` builds the same cache).
   let shards = shard_count(entries.len(), PAR_MIN_ENTRIES);
-  let mut entry_labs = vec![rgb_to_lab(0, 0, 0); entries.len()];
+  let mut entry_oklabs = vec![rgb_to_oklab(0, 0, 0); entries.len()];
   let mut entry_alphas = vec![0u8; entries.len()];
   shard_scatter2(
     entries,
-    &mut entry_labs,
+    &mut entry_oklabs,
     &mut entry_alphas,
     shards,
     |chunk, labs, alphas| {
       for (i, e) in chunk.iter().enumerate() {
-        labs[i] = rgb_to_lab(e.color.r, e.color.g, e.color.b);
+        labs[i] = rgb_to_oklab(e.color.r, e.color.g, e.color.b);
         alphas[i] = e.color.a;
       }
     },
@@ -2144,7 +2170,7 @@ fn split_merge_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) 
     // `assign` is a pure function of (entry, palette) written per contiguous
     // shard range, and the moment partials merge by integer add — identical
     // results for any shard count.
-    let soa = PaletteLabSoa::from_palette(palette);
+    let soa = PaletteOkLabSoa::from_palette(palette);
     let partials = shard_reduce(entries.len(), shards, |s, e| {
       let mut assign_chunk = Vec::with_capacity(e - s);
       let mut acc = SmAcc::new(k);
@@ -2152,7 +2178,7 @@ fn split_merge_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) 
         let en = &entries[ei];
         let idx = soa.nearest(
           kernel,
-          entry_labs[ei],
+          entry_oklabs[ei],
           entry_alphas[ei],
           entry_alphas[ei] > 0,
           0, // clustering assignment: guard disabled, same as kmeans_refine
@@ -2160,7 +2186,7 @@ fn split_merge_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) 
         assign_chunk.push(idx as u32);
         let c = en.count;
         let ci = c as i128;
-        let el = entry_labs[ei];
+        let el = entry_oklabs[ei];
         let ea = entry_alphas[ei];
         acc.sl[idx] += el.l as i128 * ci;
         acc.sca[idx] += el.a as i128 * ci;
@@ -2171,7 +2197,8 @@ fn split_merge_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) 
         acc.sal[idx] += ea as u64 * c;
         acc.sal2[idx] += ea as u128 * ea as u128 * c as u128;
         acc.wn[idx] += c;
-        acc.sse[idx] += c as u128 * pdist_lab(el, ea, soa.labs[idx], soa.alpha[idx]).max(0) as u128;
+        acc.sse[idx] +=
+          c as u128 * pdist_oklab(el, ea, soa.labs[idx], soa.alpha[idx]).max(0) as u128;
       }
       (assign_chunk, acc)
     });
@@ -2223,9 +2250,9 @@ fn split_merge_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) 
         }
         let ni = acc.wn[i] as u128;
         let nj = acc.wn[j] as u128;
-        let d = pdist_lab(soa.labs[i], soa.alpha[i], soa.labs[j], soa.alpha[j]).max(0) as u128;
-        // n_i·n_j ≤ ~1.8e19 (2·u32-max counts) and d ≤ ~1.4e9, so the cost
-        // stays far inside u128.
+        let d = pdist_oklab(soa.labs[i], soa.alpha[i], soa.labs[j], soa.alpha[j]).max(0) as u128;
+        // n_i·n_j ≤ ~1.8e19 (2·u32-max counts) and d ≤ ~8.5e9 (`pdist_oklab`'s
+        // Oklab-scale bound), so the cost stays far inside u128.
         let cost = ni * nj / (ni + nj) * d;
         if cost < best_cost {
           best_cost = cost;
@@ -2258,9 +2285,9 @@ fn split_merge_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) 
       }
     }
     let (ch_sum, ch_val): (i128, &dyn Fn(usize) -> i128) = match ch {
-      0 => (acc.sl[s], &|ei: usize| entry_labs[ei].l as i128),
-      1 => (acc.sca[s], &|ei: usize| entry_labs[ei].a as i128),
-      2 => (acc.scb[s], &|ei: usize| entry_labs[ei].b as i128),
+      0 => (acc.sl[s], &|ei: usize| entry_oklabs[ei].l as i128),
+      1 => (acc.sca[s], &|ei: usize| entry_oklabs[ei].a as i128),
+      2 => (acc.scb[s], &|ei: usize| entry_oklabs[ei].b as i128),
       _ => (acc.sal[s] as i128, &|ei: usize| entry_alphas[ei] as i128),
     };
 
@@ -2285,7 +2312,7 @@ fn split_merge_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) 
       // Degenerate mean partition (every member shares the channel value):
       // split off the highest-residual member — lowest packed color on ties —
       // so the split still targets the worst-fit color.
-      let centroid = Lab {
+      let centroid = OkLab {
         l: idiv_round(acc.sl[s], ns) as i32,
         a: idiv_round(acc.sca[s], ns) as i32,
         b: idiv_round(acc.scb[s], ns) as i32,
@@ -2294,7 +2321,7 @@ fn split_merge_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) 
       let mut worst = usize::MAX;
       let mut worst_d = -1i64;
       for &ei in &members_s {
-        let d = pdist_lab(entry_labs[ei], entry_alphas[ei], centroid, centroid_a);
+        let d = pdist_oklab(entry_oklabs[ei], entry_alphas[ei], centroid, centroid_a);
         if worst == usize::MAX
           || d > worst_d
           || (d == worst_d && packed(entries[ei].color) < packed(entries[worst].color))
@@ -2312,8 +2339,8 @@ fn split_merge_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) 
         .collect();
     }
 
-    // Weighted Lab-mean centroid of a member set (same update the Lloyd pass
-    // uses: Lab mean via lab_to_rgb8, separate round-nearest alpha mean).
+    // Weighted OkLab-mean centroid of a member set (same update the Lloyd pass
+    // uses: Oklab mean via oklab_to_rgb8, separate round-nearest alpha mean).
     let centroid_of = |members: &[usize]| -> RGBA8 {
       let mut sl = 0i128;
       let mut sca = 0i128;
@@ -2323,14 +2350,14 @@ fn split_merge_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) 
       for &ei in members {
         let c = entries[ei].count;
         let ci = c as i128;
-        sl += entry_labs[ei].l as i128 * ci;
-        sca += entry_labs[ei].a as i128 * ci;
-        scb += entry_labs[ei].b as i128 * ci;
+        sl += entry_oklabs[ei].l as i128 * ci;
+        sca += entry_oklabs[ei].a as i128 * ci;
+        scb += entry_oklabs[ei].b as i128 * ci;
         sal += entry_alphas[ei] as u64 * c;
         n += c;
       }
       let ni = n as i128;
-      let (r, g, b) = lab_to_rgb8(Lab {
+      let (r, g, b) = oklab_to_rgb8(OkLab {
         l: idiv_round(sl, ni) as i32,
         a: idiv_round(sca, ni) as i32,
         b: idiv_round(scb, ni) as i32,
@@ -2346,7 +2373,7 @@ fn split_merge_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) 
     // Merged pair's centroid = the moment-mean of the union.
     let nij = acc.wn[mi] + acc.wn[mj];
     let niji = nij as i128;
-    let (mr, mg, mb) = lab_to_rgb8(Lab {
+    let (mr, mg, mb) = oklab_to_rgb8(OkLab {
       l: idiv_round(acc.sl[mi] + acc.sl[mj], niji) as i32,
       a: idiv_round(acc.sca[mi] + acc.sca[mj], niji) as i32,
       b: idiv_round(acc.scb[mi] + acc.scb[mj], niji) as i32,
@@ -2369,7 +2396,7 @@ fn split_merge_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) 
     // its D² reseed if the move emptied a cluster), then the same strict-
     // improvement adoption the outer keep-best accounting uses.
     kmeans_refine(&mut cand, entries, 2);
-    let cand_obj = kmeans_objective(&cand, entries, &entry_labs, &entry_alphas);
+    let cand_obj = kmeans_objective(&cand, entries, &entry_oklabs, &entry_alphas);
     if cand_obj < cur_obj {
       palette.copy_from_slice(&cand);
     } else {
@@ -2380,12 +2407,12 @@ fn split_merge_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) 
 
 /// Nearest-color remap with a per-color memoization cache (no dithering).
 fn remap_nearest(px: &[RGBA8], palette: &[RGBA8], bits: u8) -> Vec<u8> {
-  // Palette Labs cached once (SoA); the per-color cache only computes `rgb_to_lab`
+  // Palette Labs cached once (SoA); the per-color cache only computes `rgb_to_oklab`
   // for each DISTINCT canonical key once (perceptual assignment via the dispatched scan).
   // `soa`/`kernel` are detected ONCE here and shared read-only by every shard —
   // detecting inside a worker would still return the same value, but hoisting
   // is cheaper and keeps the test-only kernel override on the calling thread.
-  let soa = PaletteLabSoa::from_palette(palette);
+  let soa = PaletteOkLabSoa::from_palette(palette);
   let kernel = quantize_simd::detect();
   // Pre-allocated output, filled via disjoint per-shard slices: each shard
   // keeps its own memo `cache` and writes ONLY its own `indices` range.
@@ -2408,7 +2435,7 @@ fn remap_nearest(px: &[RGBA8], palette: &[RGBA8], bits: u8) -> Vec<u8> {
         // much-dimmer entry.
         soa.nearest(
           kernel,
-          rgb_to_lab(key.r, key.g, key.b),
+          rgb_to_oklab(key.r, key.g, key.b),
           key.a,
           key.a > 0,
           key.a,
@@ -2474,7 +2501,7 @@ const _: () = assert!(DITHER_RESID_HI > DITHER_RESID_LO);
 /// diffused error each step (Atkinson-style sub-unity gain). Under LINEAR-LIGHT
 /// color diffusion that lossy gain drives the 1-D steady state to
 /// `src_lin / (1 - MAX)`; at MAX == 0.9 that is `10 * src_lin`, which for sRGB
-/// tones below ~37 never reaches the CIELAB L*=50 white-flip threshold
+/// tones below ~37 never reaches the perceptual-midpoint white-flip threshold
 /// (linear ~0.184) and COLLAPSES deep shadows to a solid endpoint. Selectivity
 /// is preserved WITHOUT this damp: a clean map drives the resid ramp -> 0
 /// (strength 0, byte-flat for DEFLATE) and a hard edge pins the edge gate ->
@@ -2837,7 +2864,7 @@ const fn ostromoukhov_luma(c: RGBA8) -> usize {
 /// Three-tap intensity-indexed kernel over `f32` RGBA error rows; alpha is
 /// dithered alongside color. Serpentine (boustrophedon) scanning alternates row
 /// direction to avoid directional artifacts. Perceptual nearest-entry selection
-/// (`PaletteLabSoa::nearest`) sees the FULL accumulated inbound error — only the
+/// (`PaletteOkLabSoa::nearest`) sees the FULL accumulated inbound error — only the
 /// OUTBOUND diffused error is scaled by strength — so upstream gradient energy
 /// is always honored at index selection and no bright/dark seam forms where
 /// strength drops.
@@ -2861,10 +2888,10 @@ fn remap_dither(px: &[RGBA8], width: usize, height: usize, palette: &[RGBA8], bi
   // the exact accumulated state left by its serpentine predecessors — a
   // sequential recurrence no sharding can reproduce byte-identically.
   // Cache the palette Labs ONCE (SoA): the palette is fixed across every pixel, so
-  // `rgb_to_lab` runs `palette.len()` times here, not once per pixel. The per-pixel
-  // query Lab (for `want`) is still computed per pixel — `want` varies — but that is
-  // a single `rgb_to_lab` per visible pixel (the residual stays on RGB `dist2`).
-  let soa = PaletteLabSoa::from_palette(palette);
+  // `rgb_to_oklab` runs `palette.len()` times here, not once per pixel. The per-pixel
+  // query OkLab (for `want`) is still computed per pixel — `want` varies — but that is
+  // a single `rgb_to_oklab` per visible pixel (the residual stays on RGB `dist2`).
+  let soa = PaletteOkLabSoa::from_palette(palette);
   let kernel = quantize_simd::detect();
   // Linear-light version of every palette entry, computed ONCE — the per-pixel
   // `chosen_lin` lookup then indexes this instead of running `srgb_to_linear_f`
@@ -2886,7 +2913,7 @@ fn remap_dither(px: &[RGBA8], width: usize, height: usize, palette: &[RGBA8], bi
   // Run memo for ZERO-inbound-error pixels: when `e == [0;4]`, `want` /
   // `want_lin` / `idx` are pure functions of (`src`, the fixed palette,
   // `px[base].a`), so a consecutive same-`src` pixel would recompute the
-  // identical selection — reuse it and skip `rgb_to_lab` + the palette scan.
+  // identical selection — reuse it and skip `rgb_to_oklab` + the palette scan.
   // Only a pixel that COMPUTED under `e == [0;4]` may populate the memo (a
   // nonzero inbound error changes `want`, so that result isn't zero-error
   // reusable). `resid`/`activity`/`err` still run per-pixel below: `resid` is a
@@ -2949,7 +2976,7 @@ fn remap_dither(px: &[RGBA8], width: usize, height: usize, palette: &[RGBA8], bi
           b: linear_to_srgb8(want_lin[2]),
           a: clamp_u8(src.a as f32 + dither_clamp_err(e[3])),
         };
-        // PERCEPTUAL index selection (cached palette Labs; one query `rgb_to_lab`). The
+        // PERCEPTUAL index selection (cached palette Labs; one query `rgb_to_oklab`). The
         // exclusion of the transparent slot keys on the RAW SOURCE pixel's visibility
         // (`px[base].a > 0`), NOT on the dither-adjusted `want.a`: a visible source pixel
         // can accumulate negative alpha error so `want.a` clamps to 0, and keying on that
@@ -2964,7 +2991,7 @@ fn remap_dither(px: &[RGBA8], width: usize, height: usize, palette: &[RGBA8], bi
         // pixel must not vanish onto a much-dimmer entry even when its `want.a` clamped low.
         let idx = soa.nearest(
           kernel,
-          rgb_to_lab(want.r, want.g, want.b),
+          rgb_to_oklab(want.r, want.g, want.b),
           want.a,
           px[base].a > 0,
           px[base].a,
@@ -3068,19 +3095,23 @@ fn diffuse(row: &mut [[f32; 4]], x: isize, factor: f32, err: &[f32; 4]) {
 }
 
 /// Divisor inside the quality curve `100 / (1 + rmse / D)`, calibrated to the
-/// PERCEPTUAL [`pdist_lab`] metric the score now sums (see [`quality_score`]).
+/// PERCEPTUAL [`pdist_oklab`] metric the score now sums (see [`quality_score`]).
 ///
-/// `pdist_lab` for a pair of opaque colors is squared CIE76 ΔE in (×100)² units,
-/// so `rmse` runs ~`100·ΔE_rms`. Measured on the bundled photographic fixture:
-/// the 251-color default sums to `rmse ≈ 180` (mean ΔE ≈ 1.8), 64 colors ≈ 281,
-/// 16 colors ≈ 456. `D == 2048` maps those to scores 92 / 88 / 82 — almost
-/// exactly the operating points the old RGB-`dist2`/`64` curve produced (92 /
-/// 88 / 79), so the default `min_quality` gate at 70 keeps its meaning: the
-/// default reduction still lands ~92, well clear, while a genuinely thin
-/// palette falls off smoothly. A round power of two in the right band; the
-/// curve is a monotonically-decreasing heuristic for the `min_quality` gate,
-/// not a match to any external metric.
-const QUALITY_RMSE_DIVISOR: f64 = 2048.0;
+/// `pdist_oklab` for a pair of opaque colors is a squared Oklab distance in u16²
+/// units, so `rmse` runs ~`65535·ΔE_oklab_rms` (about 2.7–3× the old CIELAB
+/// `pdist` scale, and more on alpha-heavy inputs since the alpha term also
+/// grew). Measured on the bundled photographic fixture under the Oklab metric:
+/// the 251-color default sums to `rmse ≈ 491`, 64 colors ≈ 776, 16 colors ≈
+/// 1432, and the translucent-ramp variant lands 1313 (256c) / 2176 (64c) /
+/// 4226 (16c). `D == 8192` maps those to scores 94 / 91 / 85 / 86 / 79 / 66 —
+/// within ~3 points of the operating points the CIELAB-`pdist`/`2048` curve
+/// produced on the same images (92 / 88 / 82 / 86 / 80 / 71), so the default
+/// `min_quality` gate at 70 keeps its meaning: the default reduction still
+/// lands in the low 90s, well clear, while a genuinely thin palette falls off
+/// smoothly. A round power of two in the right band; the curve is a
+/// monotonically-decreasing heuristic for the `min_quality` gate, not a match
+/// to any external metric.
+const QUALITY_RMSE_DIVISOR: f64 = 8192.0;
 
 /// Computes achieved quality in `0..=100` as the population-weighted RMS of the
 /// PERCEPTUAL NEAREST-REMAP error: for each distinct visible posterized color,
@@ -3110,7 +3141,7 @@ const QUALITY_RMSE_DIVISOR: f64 = 2048.0;
 /// it is already folded into the keys, so a result reproducing the posterized
 /// image exactly still scores 100.
 ///
-/// The metric is the same [`pdist_lab`] the assignment/remap paths minimize,
+/// The metric is the same [`pdist_oklab`] the assignment/remap paths minimize,
 /// with the final-remap visibility guard DISABLED (`guard == 0`): dim/vanish
 /// penalties shape WHICH entry a visible pixel prefers, they are not a fidelity
 /// term, so scoring is pure `pdist`. The reserved transparent slot is excluded
@@ -3124,7 +3155,7 @@ const QUALITY_RMSE_DIVISOR: f64 = 2048.0;
 /// let a badly-quantized icon pass the gate. An all-transparent image has no
 /// entries and is lossless, so it scores 100.
 fn quality_score(entries: &[ColorCount], palette: &[RGBA8]) -> u8 {
-  let soa = PaletteLabSoa::from_palette(palette);
+  let soa = PaletteOkLabSoa::from_palette(palette);
   let kernel = quantize_simd::detect();
   // Sharded: each shard returns a `(sum_err, n, lossless)` triple over its
   // contiguous entry range; the partials merge in shard order via saturating
@@ -3136,30 +3167,30 @@ fn quality_score(entries: &[ColorCount], palette: &[RGBA8]) -> u8 {
     let mut sum_err = 0u64;
     let mut n = 0u64;
     // Exact-lossless flag: stays true only while every visible posterized color
-    // resolves to a BYTE-IDENTICAL palette entry. `pdist_lab` cannot see that
+    // resolves to a BYTE-IDENTICAL palette entry. `pdist_oklab` cannot see that
     // distinction on its own: two DIFFERENT RGBA8 colors can share one fixed-point
-    // Lab (or differ only where `de·wa/510` truncates), so a genuinely lossy remap
+    // OkLab (or differ only where `de·wa/510` truncates), so a genuinely lossy remap
     // could accumulate zero error and would otherwise report 100. Equality here is
     // exact (no float, no metric), so the score==100 verdict means true
     // byte-identity. AND-ing shard flags in any order gives the same verdict.
     let mut lossless = true;
     for entry in &entries[s..e] {
       let c = entry.color;
-      let qlab = rgb_to_lab(c.r, c.g, c.b);
+      let qoklab = rgb_to_oklab(c.r, c.g, c.b);
       // Palette-fidelity argmin: guard disabled, transparent slot skipped for
       // visible colors (`c.a > 0` for every entry — kept explicit to pin the
       // invariant that no visible color is scored against the reserved slot).
-      let idx = soa.nearest(kernel, qlab, c.a, c.a > 0, 0);
+      let idx = soa.nearest(kernel, qoklab, c.a, c.a > 0, 0);
       if palette[idx] != c {
         lossless = false;
       }
-      // `pdist_lab` is a sum of non-negative terms; `.max(0)` is the same
+      // `pdist_oklab` is a sum of non-negative terms; `.max(0)` is the same
       // defensive clamp `kmeans_objective` uses before widening.
-      let d = pdist_lab(qlab, c.a, soa.labs[idx], soa.alpha[idx]).max(0) as u64;
-      // count·d ≤ ~2^64·1.5e9 only for a >4-gigapixel single-color image —
+      let d = pdist_oklab(qoklab, c.a, soa.labs[idx], soa.alpha[idx]).max(0) as u64;
+      // count·d ≤ ~2^64·8.5e9 only for a >4-gigapixel single-color image —
       // saturate rather than wrap (the score floors at 0 there anyway), so the
       // accumulation stays deterministic on pathological inputs. For any real
-      // image Σ count·d ≤ 2^33·1.5e9 < 2^53, exact.
+      // image Σ count·d ≤ 2^33·8.5e9 < 2^53, exact.
       sum_err = sum_err.saturating_add(entry.count.saturating_mul(d));
       n += entry.count;
     }
@@ -3181,7 +3212,7 @@ fn quality_score(entries: &[ColorCount], palette: &[RGBA8]) -> u8 {
   let mse = sum_err as f64 / n as f64;
   // Only declare a perfect 100 when every visible posterized color resolves to a
   // byte-identical palette entry — the exact `lossless` flag, not `mse <= 0.0`
-  // alone (a fixed-point Lab collision could zero a real difference).
+  // alone (a fixed-point OkLab collision could zero a real difference).
   if mse <= 0.0 && lossless {
     return 100;
   }
@@ -3532,7 +3563,7 @@ mod tests {
   use super::*;
 
   /// The SoA opaque fast path (scalar kernel) must return the SAME index as the general
-  /// [`nearest_lab`] for any fully-opaque palette + opaque query, because the perceptual
+  /// [`nearest_oklab`] for any fully-opaque palette + opaque query, because the perceptual
   /// metric provably collapses to `dl²+da²+db²` there (`wa/510 == 1`, alpha term 0, both
   /// penalties 0). This is the equivalence the golden pins depend on; the per-ISA SIMD
   /// phases extend it (`quantize_simd::tests`) by swapping the scalar kernel for each
@@ -3555,7 +3586,7 @@ mod tests {
           a: 255,
         })
         .collect();
-      let soa = PaletteLabSoa::from_palette(&palette);
+      let soa = PaletteOkLabSoa::from_palette(&palette);
       assert!(soa.all_opaque, "constructed palette must be opaque");
       for _ in 0..20 {
         let (r, g, b) = (
@@ -3563,9 +3594,9 @@ mod tests {
           (next() & 0xff) as u8,
           (next() & 0xff) as u8,
         );
-        let qlab = rgb_to_lab(r, g, b);
-        let fast = soa.nearest(OpaqueKernel::Scalar, qlab, 255, true, 255);
-        let general = nearest_lab(&soa.labs, &soa.alpha, qlab, 255, true, 255);
+        let qoklab = rgb_to_oklab(r, g, b);
+        let fast = soa.nearest(OpaqueKernel::Scalar, qoklab, 255, true, 255);
+        let general = nearest_oklab(&soa.labs, &soa.alpha, qoklab, 255, true, 255);
         assert_eq!(fast, general, "n={n} q=({r},{g},{b})");
       }
     }
@@ -3722,7 +3753,7 @@ mod tests {
   #[test]
   fn output_is_shard_count_invariant() {
     // >max_colors distinct colors with varied alpha + a fully-transparent tail,
-    // so every stage runs: sharded histogram, entry-Lab build, k-means
+    // so every stage runs: sharded histogram, entry-OkLab build, k-means
     // assignment, remap (nearest AND dither variants), and quality scoring.
     let mut g = Lcg(0xBADC_0FFE);
     let (w, h) = (68usize, 64usize); // 4352 px
@@ -4410,14 +4441,15 @@ mod tests {
     // implementation produces. All six entries here carry count == 10, so the
     // count factor is uniform — but it still rescales `total`, hence the modular
     // draw `r = lcg % total` and the spread of picks. P3 Phase 2 moved the reseed D²
-    // from RGB `dist2` to perceptual `pdist` (CIE76 ΔE), and the Lab-space centroid
+    // from RGB `dist2` to perceptual `pdist` (Oklab), and the Oklab-space centroid
     // update moved the live centers the D² baseline measures against, reshaping the
     // residual weights and so the spread of picks ([c5, c3, c2, c0] under `dist2`,
-    // then [c4, c3, c5, c2] under the RGBA-mean centroid); the reseeded slots are
+    // then [c4, c3, c5, c2] under the RGBA-mean CIELAB centroid, now
+    // [c1, c4, c5, c2] under the Oklab-mean centroid); the reseeded slots are
     // still all valid entry colors and fully deterministic.
     assert_eq!(
       &palette[2..],
-      &[c4, c2, c1, c3],
+      &[c1, c4, c5, c2],
       "population-weighted (count · pdist D²) LCG must pick these specific reseeded \
        slots (canary; RGB `dist2` D² gave [c5, c3, c2, c0])"
     );
@@ -4438,24 +4470,27 @@ mod tests {
     // baseline. That flips which entry the fixed-LCG `count · D²` walk lands on:
     //   - STALE (buggy) baseline reseeds slot 2 to the 90,000-px satellite.
     //   - NEAREST-LIVE (fixed) baseline reseeds slot 2 to a high-population entry.
-    // P3 Phase 2 moved the reseed D² to perceptual `pdist` (CIE76 ΔE) and the
-    // Lab-space centroid update moved where the live centers land, so this
-    // construction was re-verified by exhaustively simulating BOTH baselines over
-    // the exact `pdist` reseed math under the new centroids; it is a genuine
-    // divergence, not a coincidence. Under the Lab centroids (live centers move
-    // to (101,184,90) and (140,36,80)) the two baselines still diverge: the
-    // stale baseline lands the modular draw on the 90,000-px satellite
-    // (r = 28_417_565_679_501 of total 31_655_967_030_000) while the
-    // nearest-live baseline lands it on the 800,000-px `live_pick` below
-    // (r = 19_044_618_099_501 of total 28_793_954_700_000). The load-bearing
-    // entry is the satellite: it is ASSIGNED to cluster 1 but its NEAREST LIVE
-    // center after the centroid move is cluster 0 — the exact stale-vs-
-    // nearest-live distinction. The larger stale residual inflates the
-    // satellite's `count·D²` weight, shifting the modular LCG draw into the
-    // satellite's bucket.
+    // P3 Phase 2 moved the reseed D² to perceptual `pdist` (Oklab) and the
+    // Oklab-space centroid update moved where the live centers land, so this
+    // construction was re-derived under the new math: the original satellite
+    // (248,168,8) is assigned to cluster 0 under Oklab, making both baselines
+    // identical, so the satellite was re-chosen as (240,120,24) by simulating
+    // BOTH baselines over the exact `pdist` reseed math across the sRGB grid;
+    // the divergence is genuine, not a coincidence. Under the Oklab centroids
+    // (live centers move to (97,184,94) and (137,29,82)) the two baselines
+    // diverge: the stale baseline lands the modular draw on the 90,000-px
+    // satellite (r = 209_581_867_799_501 of total 250_112_173_780_000; the
+    // satellite's stale D² is 416_308_518 vs its nearest-live D² of
+    // 236_977_369) while the nearest-live baseline lands it on the 800,000-px
+    // `live_pick` below (r = 121_311_252_789_501 of total
+    // 233_972_370_370_000). The load-bearing entry is the satellite: it is
+    // ASSIGNED to cluster 1 but its NEAREST LIVE center after the centroid move
+    // is cluster 0 — the exact stale-vs-nearest-live distinction. The larger
+    // stale residual inflates the satellite's `count·D²` weight, shifting the
+    // modular LCG draw into the satellite's bucket.
     let anchor = rgba(40, 140, 100, 255); // 1,000,000 px — live center 0's anchor
     let live_pick = rgba(153, 238, 58, 255); // 800,000 px — the nearest-live pick
-    let satellite = rgba(248, 168, 8, 255); // 90,000 px — the stale (buggy) pick
+    let satellite = rgba(240, 120, 24, 255); // 90,000 px — the stale (buggy) pick
     let entries = make_entries(&[
       (anchor, 1_000_000),
       (rgba(123, 4, 83, 255), 600_000),
@@ -4484,12 +4519,12 @@ mod tests {
       "stale moved-assigned-center baseline pick {satellite:?} must NOT win"
     );
 
-    // The full reseeded palette is pinned (slots 0/1 are the recomputed LAB-mean
-    // centroids, identical under both baselines since the fix only changes the
-    // reseed D² — verified by the exhaustive simulation above).
+    // The full reseeded palette is pinned (slots 0/1 are the recomputed
+    // Oklab-mean centroids, identical under both baselines since the fix only
+    // changes the reseed D² — verified by the exhaustive simulation above).
     assert_eq!(
       palette,
-      vec![rgba(101, 184, 90, 255), rgba(140, 36, 80, 255), live_pick],
+      vec![rgba(97, 184, 94, 255), rgba(137, 29, 82, 255), live_pick],
       "nearest-live-center reseed palette pin"
     );
 
@@ -4504,14 +4539,14 @@ mod tests {
 
   // ---- Split-merge refinement tests ----
 
-  /// Helper: build the cached Lab/alpha arrays `kmeans_objective` wants.
+  /// Helper: build the cached OkLab/alpha arrays `kmeans_objective` wants.
   fn obj_of(palette: &[RGBA8], entries: &[ColorCount]) -> u128 {
-    let entry_labs: Vec<Lab> = entries
+    let entry_oklabs: Vec<OkLab> = entries
       .iter()
-      .map(|e| rgb_to_lab(e.color.r, e.color.g, e.color.b))
+      .map(|e| rgb_to_oklab(e.color.r, e.color.g, e.color.b))
       .collect();
     let entry_alphas: Vec<u8> = entries.iter().map(|e| e.color.a).collect();
-    kmeans_objective(palette, entries, &entry_labs, &entry_alphas)
+    kmeans_objective(palette, entries, &entry_oklabs, &entry_alphas)
   }
 
   /// Four tight, well-separated color blobs — the fixture for the split-merge
@@ -4565,9 +4600,9 @@ mod tests {
       rgba(11, 240, 11, 255),
       rgba(241, 11, 241, 255),
     ] {
-      let tl = rgb_to_lab(target.r, target.g, target.b);
+      let tl = rgb_to_oklab(target.r, target.g, target.b);
       let covered = palette.iter().any(|&c| {
-        let cl = rgb_to_lab(c.r, c.g, c.b);
+        let cl = rgb_to_oklab(c.r, c.g, c.b);
         (cl.l - tl.l).abs() <= 300 && (cl.a - tl.a).abs() <= 300 && (cl.b - tl.b).abs() <= 300
       });
       assert!(
@@ -5636,7 +5671,7 @@ mod tests {
     //
     // The dark end is the load-bearing case: a sub-unity ceiling (the old 0.9)
     // makes diffusion lossy, and in LINEAR light a deep-shadow tone's tiny
-    // residual then never accumulates past the CIELAB L*=50 flip threshold, so
+    // residual then never accumulates past the perceptual-midpoint flip threshold, so
     // T=31 collapses to solid black. At unity gain the full residual is diffused
     // and the dark field mixes in white again. PROVE-FAILS at
     // DITHER_MAX_STRENGTH = 0.9: T=31 -> a single distinct index (solid black).
@@ -5883,7 +5918,7 @@ mod tests {
     // Regenerate this pin ONLY on an intentional dither-calibration change (edits
     // to remap_dither / dither_strength / DITHER_* consts).
     // Oracle regenerated for P3 Phase 2: index selection now uses the perceptual
-    // `pdist` (CIE76 ΔE) instead of RGB `dist2`, so the black/white decision
+    // `pdist` (Oklab) instead of RGB `dist2`, so the black/white decision
     // threshold over this midtone field shifts and several indices move; the
     // opaque-neutrality property this test guards (vis == 1.0 on every opaque pixel,
     // so a /256 mis-scale still breaks the pin) is unchanged and metric-independent.
@@ -5897,9 +5932,13 @@ mod tests {
     // pattern (the algorithm's intended artifact-free behavior), so most
     // indices shifted off the Floyd-Steinberg pin; the property guarded (opaque
     // vis == 1.0) is unchanged.
+    // Regenerated once more for the Oklab working space: the black/white
+    // decision boundary under Oklab L sits slightly higher on the midtone
+    // field than under CIELAB L*, so six more indices land on white; the
+    // guarded property (vis == 1.0 on every opaque pixel) is unchanged.
     let expected: Vec<u8> = vec![
-      1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 1, 1, 0, 1, 1, 0,
-      1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0,
+      1, 0, 1, 1, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0,
+      1, 0, 1, 0, 1, 0, 0, 0, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 0, 1, 1, 0, 1, 0, 0, 1, 1,
     ];
     assert_eq!(
       got, expected,
@@ -5981,7 +6020,11 @@ mod tests {
     // Independent oracle over a multi-row input so BOTH serpentine directions,
     // the forward-diagonal/down taps, and the intensity-indexed table are baked
     // into one deterministic pin. Regenerate ONLY on an intentional dither
-    // change (OSTROMOUKHOV* / remap_dither taps / strength consts).
+    // change (OSTROMOUKHOV* / remap_dither taps / strength consts) or a working-
+    // space change. Regenerated for Oklab: Oklab's chroma compression puts the
+    // mid-gray ramp closer to the muted red/blue palette entries than to
+    // black/white (CIELAB L* kept grays nearer the achromatic endpoints), so the
+    // gray-ramp pixels now diffuse across indices 2/3 as well as 0/1.
     let palette = [
       rgba(0, 0, 0, 255),
       rgba(255, 255, 255, 255),
@@ -6004,10 +6047,10 @@ mod tests {
     }
     let got = remap_dither(&px, w, h, &palette, 0);
     let expected: Vec<u8> = vec![
-      1, 0, 1, 0, 1, 0, 1, 1, //
-      0, 0, 1, 0, 1, 1, 1, 1, //
-      1, 0, 1, 0, 2, 2, 2, 2, //
-      0, 1, 0, 1, 2, 2, 2, 2, //
+      2, 3, 2, 1, 3, 1, 2, 1, //
+      3, 2, 1, 2, 2, 2, 1, 1, //
+      2, 3, 2, 1, 2, 2, 2, 2, //
+      0, 1, 2, 1, 2, 2, 2, 2, //
     ];
     assert_eq!(
       got, expected,
@@ -6112,62 +6155,63 @@ mod tests {
   #[test]
   fn kmeans_guard_never_worsens_objective() {
     // FIX #2 canary: k-means here is NOT monotone. The assignment minimizes the
-    // alpha-weighted `pdist`; the centroid update is now the count-weighted LAB
-    // mean — the exact minimizer of `pdist`'s COLOR term — but `pdist` couples
+    // alpha-weighted `pdist`; the centroid update is now the count-weighted
+    // Oklab mean — the exact minimizer of `pdist`'s COLOR term — but `pdist` couples
     // the color weight to the center's own alpha (`(a_q+a_c)/510`), so for
-    // varying-alpha clusters the Lab mean still is not the joint minimizer and
+    // varying-alpha clusters the Oklab mean still is not the joint minimizer and
     // a pass can RAISE the objective. The old RGBA-mean update made this far
     // more common (it minimized a different objective entirely, so even OPAQUE
     // inputs could regress); the keep-best guard makes `kmeans_refine` return a
     // palette whose objective is `<=` the seed's regardless.
     //
     // These 9 partial-alpha entries are a verified counterexample under the
-    // perceptual `pdist` objective AND the Lab-mean update: the K=2 median-cut
-    // seed scores 11_683_579_965, and ONE raw (unguarded) refine pass RAISES it
-    // to 11_750_920_311. The guard must REJECT that pass and keep the seed.
+    // perceptual Oklab `pdist` objective AND the Oklab-mean update: the K=2
+    // median-cut seed scores 72_788_415_149, and ONE raw (unguarded) refine
+    // pass RAISES it to 74_133_255_717. The guard must REJECT that pass and
+    // keep the seed.
     // This exercises the guard's REJECTION path (not just adoption): we compute
     // the unguarded pass HERE (not pin it from a comment), prove it worsens,
     // and prove `kmeans_refine` returns the seed objective instead.
-    // (Re-derived for the Lab-centroid update by `unguarded_kmeans_pass` + a
-    // deterministic LCG search over random low-alpha inputs — found on try 5;
-    // no cluster empties, so the pass needs no reseed. The earlier RGBA-mean
-    // counterexample no longer worsens: the Lab mean fixed exactly the color
-    // part that made it regress.)
+    // (Re-derived for the Oklab `pdist` by `unguarded_kmeans_pass` + a
+    // deterministic-LCG search over random low-alpha inputs — found on try 4;
+    // no cluster empties, so the pass needs no reseed. The earlier CIELAB-pdist
+    // counterexample no longer worsens under the Oklab objective: its raw pass
+    // now scores 87_334_457_128 < its seed's 92_791_263_571.)
     let entries = make_entries(&[
-      (rgba(46, 84, 138, 32), 2100),
-      (rgba(60, 105, 233, 14), 265),
-      (rgba(54, 208, 214, 3), 2146),
-      (rgba(192, 218, 212, 25), 527),
-      (rgba(97, 119, 81, 8), 2059),
-      (rgba(236, 1, 35, 24), 222),
-      (rgba(18, 174, 238, 15), 3029),
-      (rgba(68, 54, 231, 7), 1437),
-      (rgba(62, 53, 14, 14), 581),
+      (rgba(98, 129, 166, 28), 41),
+      (rgba(122, 213, 180, 1), 2598),
+      (rgba(220, 97, 17, 30), 1576),
+      (rgba(209, 26, 182, 1), 3060),
+      (rgba(199, 58, 1, 12), 370),
+      (rgba(39, 47, 51, 8), 2753),
+      (rgba(174, 226, 30, 14), 551),
+      (rgba(171, 119, 71, 5), 1067),
+      (rgba(109, 213, 167, 2), 3352),
     ]);
 
     // Seed: the K=2 median-cut palette over the TRUE entries. `kmeans_objective`
-    // takes the per-entry Lab/alpha caches its production caller already has —
+    // takes the per-entry OkLab/alpha caches its production caller already has —
     // build them once here for all three objective evaluations below.
     let seed = median_cut(&entries, 2, None);
-    let entry_labs: Vec<Lab> = entries
+    let entry_oklabs: Vec<OkLab> = entries
       .iter()
-      .map(|e| rgb_to_lab(e.color.r, e.color.g, e.color.b))
+      .map(|e| rgb_to_oklab(e.color.r, e.color.g, e.color.b))
       .collect();
     let entry_alphas: Vec<u8> = entries.iter().map(|e| e.color.a).collect();
-    let obj_seed = kmeans_objective(&seed, &entries, &entry_labs, &entry_alphas);
+    let obj_seed = kmeans_objective(&seed, &entries, &entry_oklabs, &entry_alphas);
     assert_eq!(
-      obj_seed, 11_683_579_965,
-      "perceptual seed objective pin (median_cut K=2)"
+      obj_seed, 72_788_415_149,
+      "perceptual seed objective pin (median_cut K=2, Oklab pdist)"
     );
 
     // What ONE UNGUARDED pass would produce — computed here, not pinned from a comment,
     // so the rejection coverage is real. It WORSENS the seed (the residual non-monotone
-    // case the guard exists to catch: the Lab mean minimizes `pdist`'s color term but
+    // case the guard exists to catch: the Oklab mean minimizes `pdist`'s color term but
     // not the alpha-coupled joint objective).
     let unguarded = unguarded_kmeans_pass(&seed, &entries).expect("no cluster empties here");
-    let obj_unguarded = kmeans_objective(&unguarded, &entries, &entry_labs, &entry_alphas);
+    let obj_unguarded = kmeans_objective(&unguarded, &entries, &entry_oklabs, &entry_alphas);
     assert_eq!(
-      obj_unguarded, 11_750_920_311,
+      obj_unguarded, 74_133_255_717,
       "unguarded one-pass objective pin"
     );
     assert!(
@@ -6179,7 +6223,7 @@ mod tests {
     // The guard must REJECT the worsening pass and return the seed objective.
     let mut guarded = seed.clone();
     kmeans_refine(&mut guarded, &entries, 1);
-    let obj_guarded = kmeans_objective(&guarded, &entries, &entry_labs, &entry_alphas);
+    let obj_guarded = kmeans_objective(&guarded, &entries, &entry_oklabs, &entry_alphas);
     assert!(
       obj_guarded <= obj_seed,
       "guard must never worsen the objective: obj_guarded={obj_guarded} > obj_seed={obj_seed}"
@@ -6255,31 +6299,33 @@ mod tests {
 
   // ---- P3 Phase 2: perceptual `pdist` ASSIGNMENT metric ----
   //
-  // These pin that `pdist` is genuinely PERCEPTUAL (CIE76 ΔE), not a renamed RGB
-  // metric, that its alpha term is balanced against the Lab color term, and that
-  // it is deterministic. `pdist` (and thus `nearest`/`nearest_lab`,
+  // These pin that `pdist` is genuinely PERCEPTUAL (Oklab distance), not a renamed RGB
+  // metric, that its alpha term is balanced against the OkLab color term, and that
+  // it is deterministic. `pdist` (and thus `nearest`/`nearest_oklab`,
   // `kmeans_objective`, the D² reseed, and remap index selection) is the only path
   // switched to perceptual; `dist2` (quality gate, dither residual/activity, Wu
   // split) is unchanged, so the `dist2`-value tests above still pass untouched.
 
   #[test]
   fn pdist_is_perceptual_not_rgb_euclidean() {
-    // The metric must order by CIE76 ΔE, NOT by raw RGB-Euclidean — and on a pair
-    // where the two DISAGREE. Reference = opaque black. Candidate A = opaque WHITE
-    // (255,255,255); candidate B = opaque RED (255,0,0). All opaque, so `pdist`'s
-    // color term is exactly the CIE76 ΔE² (wa==510 -> wa/510==1) and the alpha term
-    // is 0.
+    // The metric must order by Oklab distance, NOT by raw RGB-Euclidean — and on a
+    // pair where the two DISAGREE. Reference = opaque mid-gray (128,128,128).
+    // Candidate A = opaque salmon (255,128,128); candidate B = opaque muted blue
+    // (64,64,192). All opaque, so `pdist`'s color term is exactly the squared Oklab
+    // distance (wa==510 -> wa/510==1) and the alpha term is 0.
     //
-    //   Plain RGB-Euclidean from black: white = 3·255² = 195075 (FARTHER),
-    //                                    red   =   255² =  65025 (CLOSER).
-    //   Perceptual ΔE² from black:       white ≈ (100·100)² = 1e8-scale (CLOSER),
-    //                                    red   ≈ (~117·100)²        (FARTHER).
-    // So RGB says "red is nearer black", but perceptually white is nearer (red is a
-    // high-chroma saturated color, white is pure luminance). `pdist` must agree with
-    // PERCEPTION (white nearer), i.e. REVERSE the RGB-Euclidean verdict.
-    let black = rgba(0, 0, 0, 255);
-    let white = rgba(255, 255, 255, 255);
-    let red = rgba(255, 0, 0, 255);
+    //   Plain RGB-Euclidean from gray: salmon = 127² = 16129 (FARTHER),
+    //                                  blue   = 64²+64²+64² = 12288 (CLOSER).
+    //   Oklab distance² from gray:      salmon ≈ 0.045 (CLOSER),
+    //                                   blue   ≈ 0.058 (FARTHER).
+    // So RGB says "blue is nearer gray" — the channel deltas happen to be smaller —
+    // but perceptually the salmon is nearer: gray→salmon is a modest luminance +
+    // chroma shift while gray→blue is a large hue + chroma displacement. `pdist`
+    // must agree with PERCEPTION (salmon nearer), i.e. REVERSE the RGB-Euclidean
+    // verdict.
+    let gray = rgba(128, 128, 128, 255);
+    let salmon = rgba(255, 128, 128, 255);
+    let blue = rgba(64, 64, 192, 255);
 
     // Raw RGB-Euclidean (no alpha weighting) — the metric `pdist` must NOT mimic.
     let rgb_euclid = |p: RGBA8, q: RGBA8| -> i64 {
@@ -6289,28 +6335,28 @@ mod tests {
       dr * dr + dg * dg + db * db
     };
     assert!(
-      rgb_euclid(black, white) > rgb_euclid(black, red),
-      "setup: RGB-Euclidean must rank WHITE farther from black than RED \
+      rgb_euclid(gray, salmon) > rgb_euclid(gray, blue),
+      "setup: RGB-Euclidean must rank SALMON farther from gray than BLUE \
        ({} vs {})",
-      rgb_euclid(black, white),
-      rgb_euclid(black, red)
+      rgb_euclid(gray, salmon),
+      rgb_euclid(gray, blue)
     );
 
-    // `pdist` must REVERSE that: white is perceptually CLOSER to black than red.
-    let pd_white = pdist(black, white);
-    let pd_red = pdist(black, red);
+    // `pdist` must REVERSE that: salmon is perceptually CLOSER to gray than blue.
+    let pd_salmon = pdist(gray, salmon);
+    let pd_blue = pdist(gray, blue);
     assert!(
-      pd_white < pd_red,
-      "pdist must be perceptual: white must rank CLOSER to black than red \
-       (pdist white={pd_white}, red={pd_red}); a renamed RGB metric would rank \
-       red closer and FAIL here"
+      pd_salmon < pd_blue,
+      "pdist must be perceptual: salmon must rank CLOSER to gray than blue \
+       (pdist salmon={pd_salmon}, blue={pd_blue}); a renamed RGB metric would rank \
+       blue closer and FAIL here"
     );
 
-    // And it really is the ΔE color term (all opaque -> pdist == delta_e76_sq).
+    // And it really is the Oklab color term (all opaque -> pdist == oklab_dist_sq).
     assert_eq!(
-      pd_white,
-      delta_e76_sq(rgb_to_lab(0, 0, 0), rgb_to_lab(255, 255, 255)),
-      "opaque pdist must equal the bare CIE76 ΔE² (wa/510 == 1, alpha term 0)"
+      pd_salmon,
+      oklab_dist_sq(rgb_to_oklab(128, 128, 128), rgb_to_oklab(255, 128, 128)),
+      "opaque pdist must equal the bare squared Oklab distance (wa/510 == 1, alpha term 0)"
     );
   }
 
@@ -6322,7 +6368,7 @@ mod tests {
 
     // (1) Full alpha flip (same RGB) outranks a small color change (same alpha).
     //   - alpha flip: opaque vs fully-transparent gray, da==255.
-    //   - small color change: two near-identical opaque grays (ΔE tiny).
+    //   - small color change: two near-identical opaque grays (Oklab gap tiny).
     let gray_opaque = rgba(128, 128, 128, 255);
     let gray_transp = rgba(128, 128, 128, 0);
     let gray_opaque2 = rgba(130, 131, 129, 255); // ~2-LSB color nudge, fully opaque
@@ -6335,7 +6381,7 @@ mod tests {
     );
 
     // (2) A TINY alpha change (da==1) must NOT dominate a LARGE color change.
-    //   - large color change: black vs white, both opaque (max ΔE).
+    //   - large color change: black vs white, both opaque (max Oklab gap).
     //   - tiny alpha change: same opaque gray with alpha 255 vs 254.
     let black = rgba(0, 0, 0, 255);
     let white = rgba(255, 255, 255, 255);
@@ -6349,7 +6395,7 @@ mod tests {
        (large_color={large_color}, tiny_alpha={tiny_alpha})"
     );
     // Concretely: tiny_alpha is just 1·1·ALPHA_WEIGHT_LAB == ALPHA_WEIGHT_LAB
-    // (color term 0 for identical RGB), far below a maximal ΔE² color gap.
+    // (color term 0 for identical RGB), far below a maximal squared-Oklab gap.
     assert_eq!(
       tiny_alpha, ALPHA_WEIGHT_LAB,
       "da==1 with identical RGB must score exactly ALPHA_WEIGHT_LAB"
@@ -6371,49 +6417,54 @@ mod tests {
       assert_eq!(d1, d2, "pdist must be deterministic for {p:?} vs {q:?}");
       // Symmetric, like dist2.
       assert_eq!(pdist(p, q), pdist(q, p), "pdist must be symmetric");
-      // The cached-Lab form must agree byte-for-byte with the direct form.
-      let cached = pdist_lab(
-        rgb_to_lab(p.r, p.g, p.b),
+      // The cached-OkLab form must agree byte-for-byte with the direct form.
+      let cached = pdist_oklab(
+        rgb_to_oklab(p.r, p.g, p.b),
         p.a,
-        rgb_to_lab(q.r, q.g, q.b),
+        rgb_to_oklab(q.r, q.g, q.b),
         q.a,
       );
-      assert_eq!(cached, d1, "pdist_lab must equal pdist for {p:?} vs {q:?}");
+      assert_eq!(
+        cached, d1,
+        "pdist_oklab must equal pdist for {p:?} vs {q:?}"
+      );
     }
   }
 
   #[test]
   fn visible_pixel_never_maps_to_reserved_transparent_slot() {
-    // Regression: under `pdist` a VISIBLE saturated color can rank the reserved
-    // fully-transparent slot CLOSER than a far visible entry, so without the `a == 0`
-    // exclusion in `nearest_lab` a visible pixel would be mapped to transparent and
-    // VANISH. Palette = [transparent slot, blue]; query opaque green. The metric ranks
-    // transparent closer (green->transparent < green->blue), but assignment MUST pick
-    // the visible entry (blue, index 1).
+    // Regression: under `pdist` a VISIBLE dark color can rank the reserved
+    // fully-transparent slot CLOSER than a far bright visible entry, so without the
+    // `a == 0` exclusion in `nearest_oklab` a visible pixel would be mapped to
+    // transparent and VANISH. Palette = [transparent slot, white]; query opaque
+    // black. The metric ranks transparent closer: black->transparent is
+    // `de(black, black)·255/510 + 255²·64000 = 4.16e9` (the alpha term alone), while
+    // black->white is the full gamut diameter `MAX_OKLAB_DIST_SQ = 4.295e9` — but
+    // assignment MUST pick the visible entry (white, index 1).
     let transparent = rgba(0, 0, 0, 0);
-    let blue = rgba(0, 0, 255, 255);
-    let green = rgba(0, 255, 0, 255);
-    let palette = vec![transparent, blue]; // index 0 = transparent slot, 1 = blue
+    let white = rgba(255, 255, 255, 255);
+    let black = rgba(0, 0, 0, 255);
+    let palette = vec![transparent, white]; // index 0 = transparent slot, 1 = white
 
     // Load-bearing setup invariant (so this is NOT a vacuous test): the perceptual
     // metric really does rank the transparent slot closer than the visible entry here,
     // so it is the EXCLUSION — not the metric — that keeps the pixel visible. Without
     // the exclusion `nearest` would return 0 (transparent) and the assert below fails.
     assert!(
-      pdist(green, transparent) < pdist(green, blue),
-      "setup: pdist must rank transparent ({}) closer than blue ({}) for this regression \
+      pdist(black, transparent) < pdist(black, white),
+      "setup: pdist must rank transparent ({}) closer than white ({}) for this regression \
        to be meaningful",
-      pdist(green, transparent),
-      pdist(green, blue)
+      pdist(black, transparent),
+      pdist(black, white)
     );
 
     assert_eq!(
-      nearest(&palette, green),
+      nearest(&palette, black),
       1,
       "a visible pixel must map to the visible entry, never the reserved transparent \
-       slot (pdist green->transparent={} < green->blue={})",
-      pdist(green, transparent),
-      pdist(green, blue)
+       slot (pdist black->transparent={} < black->white={})",
+      pdist(black, transparent),
+      pdist(black, white)
     );
 
     // A fully-transparent query, by contrast, IS allowed to pick the transparent slot.
@@ -6478,10 +6529,10 @@ mod tests {
   #[test]
   fn opaque_pixel_never_vanishes_onto_low_alpha_entry() {
     // Regression: an OPAQUE (a=255) source pixel can be assigned to a NON-zero but
-    // LOW-alpha palette entry of the SAME hue and visually VANISH. In `pdist_lab` the
-    // color term `delta_e76_sq * wa/510` (wa = query_a + entry_a) discounts color
+    // LOW-alpha palette entry of the SAME hue and visually VANISH. In `pdist_oklab` the
+    // color term `oklab_dist_sq * wa/510` (wa = query_a + entry_a) discounts color
     // distance up to ~2x for a low-alpha entry, and `da² * ALPHA_WEIGHT_LAB` is far
-    // smaller than Lab color distances, so an opaque green is otherwise pulled onto a
+    // smaller than OkLab color distances, so an opaque green is otherwise pulled onto a
     // same-hue near-invisible green entry instead of the correct opaque red. The
     // final-remap visibility guard (the smooth `dim_penalty` + `vanish_penalty` score
     // terms, keyed on the source alpha) makes the dimmer entry lose. This asserts the fix
@@ -6662,13 +6713,13 @@ mod tests {
   #[test]
   fn opaque_pixel_never_vanishes_onto_low_alpha_entry_against_far_hue() {
     // Regression (FAR-HUE fallback): the anti-vanish penalty must dominate the WORST-case hue gap,
-    // not just a near one. With `VANISH_WEIGHT` calibrated only against red (ΔE² ≈ 2.9e8) an opaque
-    // green still vanished when its only VISIBLE alternative was a far hue like blue (ΔE² up to the
-    // gamut diameter 6.69e8): the dim same-hue green out-scored blue and won. Here the visible
+    // not just a near one. Under the Oklab scale the worst visible competitor's `pdist_oklab` is the
+    // gamut diameter `MAX_OKLAB_DIST_SQ ≈ 4.29e9`: if the alpha/dim/vanish terms were too small the
+    // dim same-hue green would out-score the far-hue alternative and win. Here the visible
     // alternative is blue@255 (the farthest hue from green), and the green centroid is dragged to
     // a≈11 by faint greens. The opaque greens must still map to blue (a>=128), i.e. stay VISIBLE,
     // never onto the near-invisible green. PROVE-FAILS at a too-small weight (the opaque greens map
-    // to green@11 and disappear); passes once the weight dominates `MAX_DELTA_E76_SQ`.
+    // to green@11 and disappear); passes once the weight dominates `MAX_OKLAB_DIST_SQ`.
     let mut px: Vec<RGBA8> = Vec::with_capacity(308);
     px.extend(std::iter::repeat_n(rgba(0, 200, 0, 1), 200)); // faint green: green centroid -> a≈11
     px.extend(std::iter::repeat_n(rgba(0, 200, 0, 255), 8)); // opaque green (same hue as the dim entry)
@@ -6783,7 +6834,7 @@ mod tests {
     // floor `2·entry_a < src_a` excluded the same-hue dim green for an a=100 source and flipped it
     // onto opaque red — a visible recolour.) The cubic `vanish_penalty` stays tiny at the SMALL drop
     // of a translucent source to a same-hue dim entry (here 100→38: `100·62³ ≈ 2.4e7`, far below the
-    // green→red hue cost), so `pdist_lab` still decides and the a=100 green keeps the dim same-hue
+    // green→red hue cost), so `pdist_oklab` still decides and the a=100 green keeps the dim same-hue
     // green. FAILS against a fully-proportional floor (the a=100 greens decode as red). Mirrors the
     // public-path fixture a reviewer used (green@30 x64, green@100 x8, red@255 x100, blue@255 x100,
     // maxQuality:6).
@@ -6836,7 +6887,7 @@ mod tests {
     // same-hue sources. The cubic `vanish_penalty` cannot conjure a brighter entry that does not
     // exist, so an opaque source maps to the only visible entry (the dim green) — but it must NEVER
     // be re-admitted to the reserved transparent slot: that exclusion is `skip_transparent`
-    // (independent of the penalty), and `nearest_lab`'s Tier-2 fallback runs only when EVERY entry
+    // (independent of the penalty), and `nearest_oklab`'s Tier-2 fallback runs only when EVERY entry
     // is transparent, which is not the case here. This pins the degenerate boundary: best-effort
     // visible mapping, never the transparent slot. Such a palette fails the default min_quality
     // gate and self-heals via retry; it is reachable only at minQuality:0 (the caller opted out of
@@ -6881,14 +6932,14 @@ mod tests {
   }
 
   // One UNGUARDED k-means pass: assign every entry to its perceptual-nearest palette
-  // entry, then move each centroid to the count-weighted LAB mean (mapped back through
-  // `lab_to_rgb8`) — identical math to `kmeans_refine`'s pass body, minus the keep-best
+  // entry, then move each centroid to the count-weighted Oklab mean (mapped back through
+  // `oklab_to_rgb8`) — identical math to `kmeans_refine`'s pass body, minus the keep-best
   // guard and the empty-cluster reseed. Returns `None` if any cluster empties (so
   // callers can skip the reseed case).
   #[cfg(test)]
   fn unguarded_kmeans_pass(palette: &[RGBA8], entries: &[ColorCount]) -> Option<Vec<RGBA8>> {
     let k = palette.len();
-    let pal_labs = palette_labs(palette);
+    let pal_oklabs = palette_oklabs(palette);
     let pal_alphas: Vec<u8> = palette.iter().map(|p| p.a).collect();
     let mut sl = vec![0i128; k];
     let mut sc_a = vec![0i128; k];
@@ -6896,9 +6947,9 @@ mod tests {
     let mut sa = vec![0u64; k];
     let mut wn = vec![0u64; k];
     for e in entries {
-      let el = rgb_to_lab(e.color.r, e.color.g, e.color.b);
-      let idx = nearest_lab(
-        &pal_labs,
+      let el = rgb_to_oklab(e.color.r, e.color.g, e.color.b);
+      let idx = nearest_oklab(
+        &pal_oklabs,
         &pal_alphas,
         el,
         e.color.a,
@@ -6920,7 +6971,7 @@ mod tests {
       }
       let n = wn[i];
       let ni = n as i128;
-      let (r, g, b) = lab_to_rgb8(Lab {
+      let (r, g, b) = oklab_to_rgb8(OkLab {
         l: idiv_round(sl[i], ni) as i32,
         a: idiv_round(sc_a[i], ni) as i32,
         b: idiv_round(sc_b[i], ni) as i32,
