@@ -233,6 +233,15 @@ pub struct PngQuantOptions {
   /// passing true without it returns an InvalidArg error.
   /// Default: `false`
   pub use_zopfli: Option<bool>,
+  /// Shrink the palette after a quality-passing pass by merging near-duplicate
+  /// / dead entries while `quality >= minQuality + 2` (bounded, deterministic).
+  /// Meaningful on images whose real content is far below the ramp-derived
+  /// palette size — e.g. a 20-color graphic quantized at 251 — where it trades
+  /// extra CPU for a smaller palette (and usually a smaller file). Costs extra
+  /// remap+score passes, so it is OFF by default and ignored when `colors` is
+  /// set (an explicit count is a hard size contract).
+  /// Default: `false`
+  pub merge_down: Option<bool>,
 }
 
 #[napi]

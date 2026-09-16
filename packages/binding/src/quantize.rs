@@ -229,12 +229,12 @@ pub struct QuantizeConfig {
   /// Least-significant bits to drop per channel before histogramming.
   pub posterization: u8,
   /// Whether the palette merge-down pass may run after a quality-passing first
-  /// pass. `from_options` sets this ONLY when `colors` was not given — the
-  /// ramp-derived `max_colors` can overshoot what the image needs, leaving
-  /// near-duplicate or dead slots worth merging. An explicit color count is a
-  /// hard request and is never shrunk. Direct `QuantizeConfig` constructors
-  /// should use `false` (an explicit `max_colors` has the same "hard request"
-  /// semantics). See [`merge_down`].
+  /// pass. `from_options` enables it only when the caller opts in via
+  /// `PngQuantOptions::merge_down` AND `colors` was not given — the ramp-derived
+  /// `max_colors` can overshoot what the image needs, leaving near-duplicate or
+  /// dead slots worth merging, at the cost of extra remap+score passes. An
+  /// explicit color count is a hard request and is never shrunk. Direct
+  /// `QuantizeConfig` constructors choose explicitly. See [`merge_down`].
   pub merge_down: bool,
 }
 
@@ -276,9 +276,10 @@ impl QuantizeConfig {
       kmeans_iters,
       dither,
       posterization,
-      // Merge-down applies only to ramp-derived sizes: an explicit `colors`
-      // request is a hard palette-size contract and is never shrunk.
-      merge_down: o.colors.is_none(),
+      // Merge-down is opt-in (it costs extra remap+score passes) and applies
+      // only to ramp-derived sizes: an explicit `colors` request is a hard
+      // palette-size contract and is never shrunk.
+      merge_down: o.colors.is_none() && o.merge_down.unwrap_or(false),
     }
   }
 }
@@ -4140,6 +4141,7 @@ mod tests {
       posterization: None,
       colors: None,
       use_zopfli: None,
+      merge_down: None,
     };
     let c = QuantizeConfig::from_options(&o);
     assert_eq!(c.min_quality, 70);
@@ -4152,8 +4154,14 @@ mod tests {
     // speed default 5 -> 5 kmeans iters, dither on.
     assert_eq!(c.kmeans_iters, 5);
     assert!(c.dither);
-    // No explicit `colors` -> ramp-derived size -> merge-down may run.
-    assert!(c.merge_down);
+    // merge-down is opt-in: unset -> off even though the size is ramp-derived.
+    assert!(!c.merge_down);
+    // Opted in + ramp-derived size -> merge-down may run.
+    let o_md = PngQuantOptions {
+      merge_down: Some(true),
+      ..o
+    };
+    assert!(QuantizeConfig::from_options(&o_md).merge_down);
 
     let o2 = PngQuantOptions {
       min_quality: Some(80),
@@ -4162,6 +4170,7 @@ mod tests {
       posterization: Some(9),
       colors: None,
       use_zopfli: None,
+      merge_down: Some(true),
     };
     let c2 = QuantizeConfig::from_options(&o2);
     // min and max are independent gates; min must NOT be clamped to max.

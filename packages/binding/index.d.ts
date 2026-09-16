@@ -612,6 +612,15 @@ export interface PngQuantOptions {
    * Default: `false`
    */
   useZopfli?: boolean
+  /**
+   * Shrink the palette after a quality-passing pass by merging near-duplicate
+   * / dead entries while `quality >= minQuality + 2` (bounded, deterministic).
+   * Meaningful when the image's real content is far below the derived palette
+   * size — trades extra CPU for a smaller palette/file. Ignored when `colors`
+   * is set (an explicit count is a hard size contract).
+   * Default: `false`
+   */
+  mergeDown?: boolean
 }
 
 export declare enum PngRowFilter {

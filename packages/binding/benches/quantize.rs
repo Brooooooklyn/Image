@@ -67,10 +67,17 @@ fn bench_quantize(c: &mut Criterion) {
     kmeans_iters: 5,
     dither: true,
     posterization: 0,
-    merge_down: true, // mirrors the ramp-derived preset (no explicit colors)
+    merge_down: false, // mirrors the public default (mergeDown is opt-in)
   };
   group.bench_function("default", |b| {
     b.iter(|| black_box(quantize_rgba(black_box(px), w, h, &default_cfg)))
+  });
+  let mergedown_cfg = QuantizeConfig {
+    merge_down: true,
+    ..default_cfg
+  };
+  group.bench_function("default_merge_down", |b| {
+    b.iter(|| black_box(quantize_rgba(black_box(px), w, h, &mergedown_cfg)))
   });
 
   let q75_cfg = QuantizeConfig {
@@ -79,7 +86,7 @@ fn bench_quantize(c: &mut Criterion) {
     kmeans_iters: 5,
     dither: true,
     posterization: 0,
-    merge_down: true, // mirrors the ramp-derived preset (no explicit colors)
+    merge_down: false, // mirrors the public default (mergeDown is opt-in)
   };
   group.bench_function("max_quality_75", |b| {
     b.iter(|| black_box(quantize_rgba(black_box(px), w, h, &q75_cfg)))
