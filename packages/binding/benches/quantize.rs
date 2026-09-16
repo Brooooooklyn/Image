@@ -48,6 +48,7 @@ fn single_pass(max_colors: u16, dither: bool) -> QuantizeConfig {
     kmeans_iters: 5,
     dither,
     posterization: 0,
+    merge_down: false, // explicit colors sweep: never shrink the measured size
   }
 }
 
@@ -66,6 +67,7 @@ fn bench_quantize(c: &mut Criterion) {
     kmeans_iters: 5,
     dither: true,
     posterization: 0,
+    merge_down: true, // mirrors the ramp-derived preset (no explicit colors)
   };
   group.bench_function("default", |b| {
     b.iter(|| black_box(quantize_rgba(black_box(px), w, h, &default_cfg)))
@@ -77,6 +79,7 @@ fn bench_quantize(c: &mut Criterion) {
     kmeans_iters: 5,
     dither: true,
     posterization: 0,
+    merge_down: true, // mirrors the ramp-derived preset (no explicit colors)
   };
   group.bench_function("max_quality_75", |b| {
     b.iter(|| black_box(quantize_rgba(black_box(px), w, h, &q75_cfg)))

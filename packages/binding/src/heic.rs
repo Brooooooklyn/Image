@@ -606,7 +606,11 @@ fn wic_error(context: &str, e: windows::core::Error) -> Error {
   } else {
     Error::new(
       Status::GenericFailure,
-      format!("HEIC ({context}): {} (0x{:08X})", e.message(), e.code().0 as u32),
+      format!(
+        "HEIC ({context}): {} (0x{:08X})",
+        e.message(),
+        e.code().0 as u32
+      ),
     )
   }
 }
@@ -615,7 +619,7 @@ fn wic_error(context: &str, e: windows::core::Error) -> Error {
 #[cfg(target_os = "windows")]
 fn wic_factory() -> Result<windows::Win32::Graphics::Imaging::IWICImagingFactory> {
   use windows::Win32::Graphics::Imaging::CLSID_WICImagingFactory;
-  use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
+  use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
   ensure_com_initialized();
   unsafe { CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER) }
     .map_err(|e| wic_error("factory", e))
@@ -637,7 +641,9 @@ fn copy_color_managed_pixels(
   stride: u32,
   pixels: &mut [u8],
 ) -> bool {
-  use windows::Win32::Graphics::Imaging::{GUID_WICPixelFormat32bppRGBA, WICColorContextExifColorSpace};
+  use windows::Win32::Graphics::Imaging::{
+    GUID_WICPixelFormat32bppRGBA, WICColorContextExifColorSpace,
+  };
   unsafe {
     (|| -> Option<()> {
       // WIC's HEIF decoder returns 0 from the zero-count `GetColorContexts` query even when a profile is
@@ -652,14 +658,20 @@ fn copy_color_managed_pixels(
       let source = contexts[0].as_ref()?;
       // An explicit sRGB context needs no transform (no-op); keep the already-shipped converter path
       // byte-for-byte for sRGB/untagged frames.
-      if source.GetType().ok()? == WICColorContextExifColorSpace && source.GetExifColorSpace().ok()? == 1 {
+      if source.GetType().ok()? == WICColorContextExifColorSpace
+        && source.GetExifColorSpace().ok()? == 1
+      {
         return None;
       }
       let dest = factory.CreateColorContext().ok()?;
       dest.InitializeFromExifColorSpace(1).ok()?; // 1 = sRGB
       let transformer = factory.CreateColorTransformer().ok()?;
-      transformer.Initialize(frame, source, &dest, &GUID_WICPixelFormat32bppRGBA).ok()?;
-      transformer.CopyPixels(std::ptr::null(), stride, pixels).ok()?;
+      transformer
+        .Initialize(frame, source, &dest, &GUID_WICPixelFormat32bppRGBA)
+        .ok()?;
+      transformer
+        .CopyPixels(std::ptr::null(), stride, pixels)
+        .ok()?;
       Some(())
     })()
     .is_some()
@@ -685,21 +697,28 @@ pub(crate) fn decode_heic(buf: &[u8]) -> Result<(DynamicImage, Option<u16>)> {
     GUID_WICPixelFormat32bppRGBA, WICBitmapDitherTypeNone, WICBitmapPaletteTypeCustom,
     WICDecodeMetadataCacheOnDemand,
   };
-  use windows::Win32::System::Com::StructuredStorage::CreateStreamOnHGlobal;
   use windows::Win32::System::Com::STREAM_SEEK_SET;
+  use windows::Win32::System::Com::StructuredStorage::CreateStreamOnHGlobal;
 
   let factory = wic_factory()?;
   unsafe {
     // bytes -> growable HGLOBAL-backed IStream (copies; avoids any borrowed-slice lifetime trap).
-    let stream = CreateStreamOnHGlobal(HGLOBAL::default(), true.into()).map_err(|e| wic_error("stream", e))?;
-    let buf_len = u32::try_from(buf.len())
-      .map_err(|_| Error::new(Status::InvalidArg, "HEIC: input too large (exceeds 4 GiB)".to_owned()))?;
+    let stream =
+      CreateStreamOnHGlobal(HGLOBAL::default(), true.into()).map_err(|e| wic_error("stream", e))?;
+    let buf_len = u32::try_from(buf.len()).map_err(|_| {
+      Error::new(
+        Status::InvalidArg,
+        "HEIC: input too large (exceeds 4 GiB)".to_owned(),
+      )
+    })?;
     let mut written = 0u32;
     stream
       .Write(buf.as_ptr() as *const _, buf_len, Some(&mut written))
       .ok()
       .map_err(|e| wic_error("stream write", e))?;
-    stream.Seek(0, STREAM_SEEK_SET, None).map_err(|e| wic_error("stream seek", e))?;
+    stream
+      .Seek(0, STREAM_SEEK_SET, None)
+      .map_err(|e| wic_error("stream seek", e))?;
 
     let decoder = factory
       .CreateDecoderFromStream(&stream, std::ptr::null(), WICDecodeMetadataCacheOnDemand)
@@ -708,9 +727,14 @@ pub(crate) fn decode_heic(buf: &[u8]) -> Result<(DynamicImage, Option<u16>)> {
 
     let mut width = 0u32;
     let mut height = 0u32;
-    frame.GetSize(&mut width, &mut height).map_err(|e| wic_error("size", e))?;
+    frame
+      .GetSize(&mut width, &mut height)
+      .map_err(|e| wic_error("size", e))?;
     if width == 0 || height == 0 {
-      return Err(Error::new(Status::InvalidArg, "HEIC: decoded image has zero dimensions".to_owned()));
+      return Err(Error::new(
+        Status::InvalidArg,
+        "HEIC: decoded image has zero dimensions".to_owned(),
+      ));
     }
 
     // WIC bakes the HEIF container orientation (`irot`/`imir`) into the decoded frame: `GetSize` already
@@ -722,14 +746,18 @@ pub(crate) fn decode_heic(buf: &[u8]) -> Result<(DynamicImage, Option<u16>)> {
       .ok_or_else(|| Error::new(Status::InvalidArg, "HEIC: stride overflow".to_owned()))?;
     let size = stride
       .checked_mul(height)
-      .ok_or_else(|| Error::new(Status::InvalidArg, "HEIC: buffer size overflow".to_owned()))? as usize;
+      .ok_or_else(|| Error::new(Status::InvalidArg, "HEIC: buffer size overflow".to_owned()))?
+      as usize;
     // Fallible allocation: a malformed frame can report a `size` that overflows `Vec` capacity on
     // 32-bit targets (`isize::MAX`) or exhausts memory. Map either to a clean `Error` instead of
     // panicking the napi worker (`vec![0u8; size]` would panic on capacity overflow).
     let mut pixels: Vec<u8> = Vec::new();
-    pixels
-      .try_reserve_exact(size)
-      .map_err(|_| Error::new(Status::GenericFailure, "HEIC: cannot allocate decode buffer".to_owned()))?;
+    pixels.try_reserve_exact(size).map_err(|_| {
+      Error::new(
+        Status::GenericFailure,
+        "HEIC: cannot allocate decode buffer".to_owned(),
+      )
+    })?;
     pixels.resize(size, 0);
 
     // WIC normalizes HEIF to 8-bit. Match macOS (which renders into an sRGB color space): if the frame
@@ -737,7 +765,9 @@ pub(crate) fn decode_heic(buf: &[u8]) -> Result<(DynamicImage, Option<u16>)> {
     // pixels aren't returned mislabeled. sRGB/untagged frames — and any transform failure — fall through
     // to a straight (non-premultiplied) 32bppRGBA conversion, byte-identical to the prior path.
     if !copy_color_managed_pixels(&factory, &frame, stride, &mut pixels) {
-      let converter = factory.CreateFormatConverter().map_err(|e| wic_error("converter", e))?;
+      let converter = factory
+        .CreateFormatConverter()
+        .map_err(|e| wic_error("converter", e))?;
       converter
         .Initialize(
           &frame,
@@ -755,7 +785,12 @@ pub(crate) fn decode_heic(buf: &[u8]) -> Result<(DynamicImage, Option<u16>)> {
 
     let img = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(width, height, pixels)
       .map(DynamicImage::ImageRgba8)
-      .ok_or_else(|| Error::new(Status::GenericFailure, "HEIC: buffer size mismatch".to_owned()))?;
+      .ok_or_else(|| {
+        Error::new(
+          Status::GenericFailure,
+          "HEIC: buffer size mismatch".to_owned(),
+        )
+      })?;
     Ok((img, None))
   }
 }
@@ -770,7 +805,6 @@ pub(crate) fn decode_heic(buf: &[u8]) -> Result<(DynamicImage, Option<u16>)> {
 /// growable HGLOBAL. Orientation is NOT tagged (pixels are already upright, same as macOS).
 #[cfg(target_os = "windows")]
 pub(crate) fn encode_heic(img: &DynamicImage, opts: Option<HeicConfig>) -> Result<Vec<u8>> {
-  use windows::core::PWSTR;
   use windows::Win32::Foundation::HGLOBAL;
   use windows::Win32::Graphics::Imaging::{
     GUID_ContainerFormatHeif, GUID_WICPixelFormat32bppRGBA, IWICBitmapFrameEncode,
@@ -782,6 +816,7 @@ pub(crate) fn encode_heic(img: &DynamicImage, opts: Option<HeicConfig>) -> Resul
   use windows::Win32::System::Com::{STATFLAG_NONAME, STATSTG};
   use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
   use windows::Win32::System::Variant::VARIANT;
+  use windows::core::PWSTR;
 
   let opts = opts.unwrap_or_default();
   // 10-bit is not supported by the WIC HEVC encoder (it emits 8-bit); reject rather than silently
@@ -797,7 +832,10 @@ pub(crate) fn encode_heic(img: &DynamicImage, opts: Option<HeicConfig>) -> Resul
   let width = img.width();
   let height = img.height();
   if width == 0 || height == 0 {
-    return Err(Error::new(Status::InvalidArg, "HEIC: image has zero dimensions".to_owned()));
+    return Err(Error::new(
+      Status::InvalidArg,
+      "HEIC: image has zero dimensions".to_owned(),
+    ));
   }
 
   // Bound the RGBA byte count BEFORE the infallible `to_rgba8()` conversion. `to_rgba8()` allocates
@@ -810,7 +848,12 @@ pub(crate) fn encode_heic(img: &DynamicImage, opts: Option<HeicConfig>) -> Resul
   let rgba_len = (width as u64)
     .checked_mul(height as u64)
     .and_then(|n| n.checked_mul(4))
-    .ok_or_else(|| Error::new(Status::InvalidArg, "HEIC: image dimensions too large".to_owned()))?;
+    .ok_or_else(|| {
+      Error::new(
+        Status::InvalidArg,
+        "HEIC: image dimensions too large".to_owned(),
+      )
+    })?;
   if rgba_len > u32::MAX as u64 || rgba_len > isize::MAX as u64 {
     return Err(Error::new(
       Status::InvalidArg,
@@ -829,65 +872,106 @@ pub(crate) fn encode_heic(img: &DynamicImage, opts: Option<HeicConfig>) -> Resul
 
   let factory = wic_factory()?;
   unsafe {
-    let out = CreateStreamOnHGlobal(HGLOBAL::default(), true.into()).map_err(|e| wic_error("out stream", e))?;
+    let out = CreateStreamOnHGlobal(HGLOBAL::default(), true.into())
+      .map_err(|e| wic_error("out stream", e))?;
     let encoder = factory
       .CreateEncoder(&GUID_ContainerFormatHeif, std::ptr::null())
       .map_err(|e| wic_error("encoder", e))?;
-    encoder.Initialize(&out, WICBitmapEncoderNoCache).map_err(|e| wic_error("encoder init", e))?;
+    encoder
+      .Initialize(&out, WICBitmapEncoderNoCache)
+      .map_err(|e| wic_error("encoder init", e))?;
 
     let mut frame_opt: Option<IWICBitmapFrameEncode> = None;
     let mut bag_opt: Option<IPropertyBag2> = None;
     encoder
       .CreateNewFrame(&mut frame_opt, &mut bag_opt)
       .map_err(|e| wic_error("new frame", e))?;
-    let frame = frame_opt.ok_or_else(|| Error::new(Status::GenericFailure, "HEIC: null frame encoder".to_owned()))?;
-    let bag = bag_opt.ok_or_else(|| Error::new(Status::GenericFailure, "HEIC: null options bag".to_owned()))?;
+    let frame = frame_opt.ok_or_else(|| {
+      Error::new(
+        Status::GenericFailure,
+        "HEIC: null frame encoder".to_owned(),
+      )
+    })?;
+    let bag = bag_opt
+      .ok_or_else(|| Error::new(Status::GenericFailure, "HEIC: null options bag".to_owned()))?;
 
     // Set ImageQuality (VT_R4). The property bag carries only the name; the VARIANT carries the type.
-    let mut prop_name: Vec<u16> = "ImageQuality".encode_utf16().chain(std::iter::once(0)).collect();
+    let mut prop_name: Vec<u16> = "ImageQuality"
+      .encode_utf16()
+      .chain(std::iter::once(0))
+      .collect();
     let mut prop = PROPBAG2::default();
     prop.pstrName = PWSTR(prop_name.as_mut_ptr());
     bag
       .Write(1, &prop, &VARIANT::from(quality))
       .map_err(|e| wic_error("set quality", e))?;
 
-    frame.Initialize(&bag).map_err(|e| wic_error("frame init", e))?;
-    frame.SetSize(width, height).map_err(|e| wic_error("set size", e))?;
+    frame
+      .Initialize(&bag)
+      .map_err(|e| wic_error("frame init", e))?;
+    frame
+      .SetSize(width, height)
+      .map_err(|e| wic_error("set size", e))?;
     // `SetPixelFormat` reports the encoder's chosen format back in `pixel_format` (the HEIF encoder
     // negotiates 32bppRGBA -> an opaque BGR format). We intentionally do NOT read it back: `WriteSource`
     // below converts our 32bppRGBA source bitmap to whatever the frame negotiated, itself. Verified on a
     // real codec — RGBA -> BGR with correct channel order and alpha flattened to opaque (round-trip max
     // channel error 1/255) — so a manual `IWICFormatConverter` is unnecessary.
     let mut pixel_format = GUID_WICPixelFormat32bppRGBA;
-    frame.SetPixelFormat(&mut pixel_format).map_err(|e| wic_error("set pixel format", e))?;
+    frame
+      .SetPixelFormat(&mut pixel_format)
+      .map_err(|e| wic_error("set pixel format", e))?;
 
     let source = factory
-      .CreateBitmapFromMemory(width, height, &GUID_WICPixelFormat32bppRGBA, stride, rgba.as_raw())
+      .CreateBitmapFromMemory(
+        width,
+        height,
+        &GUID_WICPixelFormat32bppRGBA,
+        stride,
+        rgba.as_raw(),
+      )
       .map_err(|e| wic_error("source bitmap", e))?;
     // WriteSource performs the source(32bppRGBA) -> frame(negotiated) pixel-format conversion.
-    frame.WriteSource(&source, std::ptr::null()).map_err(|e| wic_error("write source", e))?;
+    frame
+      .WriteSource(&source, std::ptr::null())
+      .map_err(|e| wic_error("write source", e))?;
     frame.Commit().map_err(|e| wic_error("frame commit", e))?;
-    encoder.Commit().map_err(|e| wic_error("encoder commit", e))?;
+    encoder
+      .Commit()
+      .map_err(|e| wic_error("encoder commit", e))?;
 
     // Copy the encoded bytes out of the growable HGLOBAL before the stream is dropped. Use the
     // stream's LOGICAL length (`Stat().cbSize`), not `GlobalSize` (the HGLOBAL allocation capacity),
     // so the returned buffer can never carry trailing allocation slack.
     let hglobal = GetHGlobalFromStream(&out).map_err(|e| wic_error("get hglobal", e))?;
     let mut stat = STATSTG::default();
-    out.Stat(&mut stat, STATFLAG_NONAME).map_err(|e| wic_error("stat", e))?;
+    out
+      .Stat(&mut stat, STATFLAG_NONAME)
+      .map_err(|e| wic_error("stat", e))?;
     // Logical encoded length, bounded so the unsafe slice is sound: cap at this target's slice/`Vec`
     // limit (`isize::MAX`) and never exceed the HGLOBAL's own allocation (`GlobalSize`).
     let size = usize::try_from(stat.cbSize)
       .ok()
       .filter(|&n| n <= isize::MAX as usize)
-      .ok_or_else(|| Error::new(Status::GenericFailure, "HEIC: encoded size too large".to_owned()))?;
+      .ok_or_else(|| {
+        Error::new(
+          Status::GenericFailure,
+          "HEIC: encoded size too large".to_owned(),
+        )
+      })?;
     let alloc = GlobalSize(hglobal);
     if size > alloc {
-      return Err(Error::new(Status::GenericFailure, "HEIC: encoded size exceeds buffer".to_owned()));
+      return Err(Error::new(
+        Status::GenericFailure,
+        "HEIC: encoded size exceeds buffer".to_owned(),
+      ));
     }
     let ptr = GlobalLock(hglobal) as *const u8;
     if ptr.is_null() {
-      return Err(Error::new(Status::GenericFailure, "HEIC: failed to lock output buffer".to_owned()));
+      return Err(Error::new(
+        Status::GenericFailure,
+        "HEIC: failed to lock output buffer".to_owned(),
+      ));
     }
     // Fallibly allocate, copy, then ALWAYS unlock (even if the reservation fails) so the HGLOBAL lock
     // is never leaked. `extend_from_slice` after `try_reserve_exact(size)` reuses the reserved
@@ -898,7 +982,12 @@ pub(crate) fn encode_heic(img: &DynamicImage, opts: Option<HeicConfig>) -> Resul
       bytes.extend_from_slice(std::slice::from_raw_parts(ptr, size));
     }
     let _ = GlobalUnlock(hglobal);
-    reserved.map_err(|_| Error::new(Status::GenericFailure, "HEIC: cannot allocate output buffer".to_owned()))?;
+    reserved.map_err(|_| {
+      Error::new(
+        Status::GenericFailure,
+        "HEIC: cannot allocate output buffer".to_owned(),
+      )
+    })?;
     Ok(bytes)
   }
 }

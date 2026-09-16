@@ -211,6 +211,14 @@ pub struct QuantizeConfig {
   pub dither: bool,
   /// Least-significant bits to drop per channel before histogramming.
   pub posterization: u8,
+  /// Whether the palette merge-down pass may run after a quality-passing first
+  /// pass. `from_options` sets this ONLY when `colors` was not given — the
+  /// ramp-derived `max_colors` can overshoot what the image needs, leaving
+  /// near-duplicate or dead slots worth merging. An explicit color count is a
+  /// hard request and is never shrunk. Direct `QuantizeConfig` constructors
+  /// should use `false` (an explicit `max_colors` has the same "hard request"
+  /// semantics). See [`merge_down`].
+  pub merge_down: bool,
 }
 
 // `from_options` is the only quantizer-core code that references a `#[napi]` module
@@ -251,6 +259,9 @@ impl QuantizeConfig {
       kmeans_iters,
       dither,
       posterization,
+      // Merge-down applies only to ramp-derived sizes: an explicit `colors`
+      // request is a hard palette-size contract and is never shrunk.
+      merge_down: o.colors.is_none(),
     }
   }
 }
@@ -3321,12 +3332,7 @@ fn quantize_pass(
   dither: bool,
 ) -> QuantizeOutput {
   let PassInput {
-    px,
-    width,
-    height,
-    has_transparent,
-    bits,
-    ..
+    has_transparent, ..
   } = *input;
   // Reserve one exact fully-transparent slot if needed so transparency stays
   // lossless. We hand median-cut one fewer slot and prepend the slot after.
@@ -3376,6 +3382,24 @@ fn quantize_pass(
     palette.push(RGBA8::default());
   }
 
+  finish_pass(input, palette, dither)
+}
+
+/// The shared post-palette tail of [`quantize_pass`]: remaps every pixel to the
+/// given palette (dithered or nearest), forces fully-transparent source pixels
+/// onto the reserved `a == 0` slot when one exists, canonicalizes palette order
+/// to first-use index order, and scores the palette's coverage of the TRUE
+/// distinct-color populations (the posterized canonical keys — see
+/// [`quality_score`]). [`merge_down`] reuses this verbatim so a merged-down
+/// output is post-processed identically to a first-pass one.
+fn finish_pass(input: &PassInput, palette: Vec<RGBA8>, dither: bool) -> QuantizeOutput {
+  let PassInput {
+    px,
+    width,
+    height,
+    bits,
+    ..
+  } = *input;
   let mut indices = if dither {
     remap_dither(px, width, height, &palette, bits)
   } else {
@@ -3384,7 +3408,7 @@ fn quantize_pass(
 
   // Force fully-transparent source pixels onto the exact transparent slot so
   // dithering never bleeds color into transparent regions.
-  if reserve && let Some(tidx) = palette.iter().position(|c| c.a == 0) {
+  if let Some(tidx) = palette.iter().position(|c| c.a == 0) {
     for (i, &p) in px.iter().enumerate() {
       if p.a == 0 {
         indices[i] = tidx as u8;
@@ -3393,8 +3417,6 @@ fn quantize_pass(
   }
 
   let palette = canonicalize(palette, &mut indices);
-  // Score the palette's coverage of the TRUE distinct-color populations (the
-  // posterized canonical keys), not the emitted indices — see `quality_score`.
   let quality = quality_score(&input.entries, &palette);
 
   QuantizeOutput {
@@ -3402,6 +3424,116 @@ fn quantize_pass(
     indices,
     quality,
   }
+}
+
+/// Maximum number of merge steps the palette merge-down pass may take. Kept
+/// small so the pass is a bounded O(k²·merges) sweep and so the output delta
+/// stays reviewable; quality margin stops it sooner in practice.
+const MAX_MERGE_DOWN: usize = 8;
+
+/// Post-pass palette merge-down for maxQuality-ramp-sized palettes
+/// ([`QuantizeConfig::merge_down`]). The ramp's quadratic size target can
+/// overshoot what an image needs, leaving near-duplicate or dead slots; this
+/// repeatedly merges the cheapest pair — cost
+/// `(w_i·w_j/(w_i+w_j)) · pdist_oklab(pal_i, pal_j)`, the same Ward-style merge
+/// cost [`split_merge_refine`] uses, with `w` = each slot's TRUE-population
+/// membership over the distinct-color histogram — into the pair's
+/// count-weighted member centroid (Oklab moments + alpha mean, the k-means
+/// update form). A merge is kept only while the resulting `quality_score`
+/// still clears `min_quality + 2`.
+///
+/// Determinism: all scoring is exact integer math (`u128` costs), the pair
+/// scan is ascending `i < j` with strict `<` on cost so ties take the lowest
+/// `(i, j)` lexicographically, and member assignment is the deterministic
+/// [`PaletteOkLabSoa::nearest`] argmin. The reserved `a == 0` slot is never a
+/// merge candidate (merging it would break lossless transparency); dead slots
+/// (`w == 0`) merge free. The final indices are RECOMPUTED wholesale via
+/// [`finish_pass`] — never patched.
+fn merge_down(input: &PassInput, out: QuantizeOutput, cfg: &QuantizeConfig) -> QuantizeOutput {
+  let kernel = quantize_simd::detect();
+  let mut palette = out.palette.clone();
+  let mut merged_any = false;
+
+  for _ in 0..MAX_MERGE_DOWN {
+    // Candidate slots: never the reserved transparent entry.
+    let cand_idx: Vec<usize> = (0..palette.len()).filter(|&i| palette[i].a > 0).collect();
+    if cand_idx.len() < 2 {
+      break;
+    }
+
+    // Assign every true-population entry to its nearest slot and accumulate
+    // per-slot Oklab/alpha moments (the k-means update's accumulator shape).
+    let soa = PaletteOkLabSoa::from_palette(&palette);
+    let n = palette.len();
+    let mut w = vec![0u64; n];
+    let mut sl = vec![0i128; n];
+    let mut sca = vec![0i128; n];
+    let mut scb = vec![0i128; n];
+    let mut sa = vec![0u64; n];
+    for e in &input.entries {
+      let q = rgb_to_oklab(e.color.r, e.color.g, e.color.b);
+      let idx = soa.nearest(kernel, q, e.color.a, e.color.a > 0, 0);
+      let c = e.count as i128;
+      w[idx] += e.count;
+      sl[idx] += q.l as i128 * c;
+      sca[idx] += q.a as i128 * c;
+      scb[idx] += q.b as i128 * c;
+      sa[idx] += e.color.a as u64 * e.count;
+    }
+
+    // Cheapest pair under the Ward-style count-weighted merge cost; strict `<`
+    // on an ascending (i, j) scan keeps the lowest lexicographic pair on ties.
+    let mut best: Option<(u128, usize, usize)> = None;
+    for (ii, &i) in cand_idx.iter().enumerate() {
+      for &j in &cand_idx[ii + 1..] {
+        let d = pdist_oklab(soa.labs[i], palette[i].a, soa.labs[j], palette[j].a).max(0) as u128;
+        let wi = w[i] as u128;
+        let wj = w[j] as u128;
+        let denom = wi + wj;
+        // w_i·w_j·d ≤ 2^66 · ~8.5e9 < 2^100 — far inside u128.
+        let cost = if denom == 0 { 0 } else { wi * wj / denom * d };
+        if best.is_none_or(|(bc, _, _)| cost < bc) {
+          best = Some((cost, i, j));
+        }
+      }
+    }
+    let Some((_, i, j)) = best else { break };
+
+    // Merged centroid = union member moments (the k-means update form).
+    let wsum = w[i] + w[j];
+    let merged = if wsum == 0 {
+      // Both slots are dead: the merged color is unobservable, so keep the
+      // lower-indexed one for determinism.
+      palette[i]
+    } else {
+      let n128 = wsum as i128;
+      let (r, g, b) = oklab_to_rgb8(OkLab {
+        l: idiv_round(sl[i] + sl[j], n128) as i32,
+        a: idiv_round(sca[i] + sca[j], n128) as i32,
+        b: idiv_round(scb[i] + scb[j], n128) as i32,
+      });
+      let a = ((sa[i] + sa[j] + wsum / 2) / wsum) as u8;
+      RGBA8 { r, g, b, a }
+    };
+
+    let mut cand = palette.clone();
+    cand[i] = merged;
+    cand.remove(j);
+
+    // Keep the merge only while the scored palette still clears the caller's
+    // `min_quality` gate with a 2-point margin (all-integer decision).
+    let q = quality_score(&input.entries, &cand);
+    if (q as u32) < cfg.min_quality as u32 + 2 {
+      break;
+    }
+    palette = cand;
+    merged_any = true;
+  }
+
+  if !merged_any {
+    return out;
+  }
+  finish_pass(input, palette, cfg.dither)
 }
 
 /// Quantizes an RGBA image to an 8-bit indexed palette.
@@ -3551,8 +3683,16 @@ pub fn quantize_rgba(
       cfg.dither,
     );
     if retry.quality >= first.quality {
+      // No merge-down on the retried 256-color pass: it was forced UP to the
+      // cap by a failing first pass, so shrinking it would just oscillate
+      // (merge → gate → retry) on a later call.
       return retry;
     }
+  }
+
+  // ---- Merge-down (ramp-sized palettes only; the gate must have passed). ----
+  if cfg.merge_down && first.quality >= cfg.min_quality {
+    return merge_down(&input, first, cfg);
   }
 
   first
@@ -3639,6 +3779,7 @@ mod tests {
       kmeans_iters: kmeans,
       dither,
       posterization: 0,
+      merge_down: false,
     }
   }
 
@@ -3865,6 +4006,7 @@ mod tests {
         kmeans_iters: (g.next_u32() % 6) as u8,
         dither: g.byte() & 1 == 0,
         posterization: (g.next_u32() % 8) as u8,
+        merge_down: false,
       };
       let out = quantize_rgba(&px, w, h, &c);
       assert_eq!(out.indices.len(), w * h, "trial {trial}: index count");
@@ -3904,6 +4046,7 @@ mod tests {
       kmeans_iters: 2,
       dither: false,
       posterization: 0,
+      merge_down: false,
     };
     let out = quantize_rgba(&px, 64, 64, &c);
     assert!(out.palette.len() <= MAX_PALETTE, "never exceed 256");
@@ -3987,6 +4130,8 @@ mod tests {
     // speed default 5 -> 5 kmeans iters, dither on.
     assert_eq!(c.kmeans_iters, 5);
     assert!(c.dither);
+    // No explicit `colors` -> ramp-derived size -> merge-down may run.
+    assert!(c.merge_down);
 
     let o2 = PngQuantOptions {
       min_quality: Some(80),
@@ -4008,7 +4153,10 @@ mod tests {
       colors: Some(32),
       ..o2
     };
-    assert_eq!(QuantizeConfig::from_options(&o3).max_colors, 32);
+    let c3 = QuantizeConfig::from_options(&o3);
+    assert_eq!(c3.max_colors, 32);
+    // Explicit `colors` is a hard size contract: merge-down stays off.
+    assert!(!c3.merge_down);
     let o4 = PngQuantOptions {
       colors: Some(0),
       ..o2
@@ -4031,6 +4179,7 @@ mod tests {
       kmeans_iters: 2,
       dither: true,
       posterization: 4,
+      merge_down: false,
     };
     let out = quantize_rgba(&px, 7, 43, &c);
     assert_eq!(
@@ -4062,6 +4211,7 @@ mod tests {
       kmeans_iters: 2,
       dither: true,
       posterization: 0,
+      merge_down: false,
     };
     let oa = quantize_rgba(&a, 20, 20, &c);
     let ob = quantize_rgba(&b, 20, 20, &c);
@@ -4107,6 +4257,7 @@ mod tests {
       kmeans_iters: 5,
       dither: false,
       posterization: 0,
+      merge_down: false,
     };
     let width = px.len();
     let out = quantize_rgba(&px, width, 1, &c);
@@ -4974,6 +5125,7 @@ mod tests {
       kmeans_iters: 0,
       dither: false,
       posterization: 0,
+      merge_down: false,
     };
     let lossy = quantize_rgba(&px, px.len(), 1, &lossy_cfg);
 
@@ -6984,5 +7136,125 @@ mod tests {
       };
     }
     Some(out)
+  }
+
+  #[test]
+  fn merge_down_shrinks_oversized_palette_and_keeps_gate() {
+    // A smooth gradient quantized with an oversized ramp-style budget:
+    // merge-down must collapse near-duplicate slots while keeping quality
+    // >= min_quality + 2. Explicit `colors`/direct-config requests
+    // (merge_down=false) must never be shrunk.
+    let mut px = Vec::new();
+    for y in 0..100u32 {
+      for x in 0..100u32 {
+        px.push(rgba(
+          (x * 2 + y / 3) as u8,
+          (y * 2 + x / 5) as u8,
+          ((x + y) / 2) as u8,
+          255,
+        ));
+      }
+    }
+    for _ in 0..1500 {
+      px.push(rgba(0, 0, 0, 0)); // reserved transparent slot
+    }
+    let base = QuantizeConfig {
+      max_colors: 64,
+      min_quality: 0,
+      kmeans_iters: 5,
+      dither: false,
+      posterization: 0,
+      merge_down: false,
+    };
+    let off = quantize_rgba(&px, 115, 100, &base);
+    let on = quantize_rgba(
+      &px,
+      115,
+      100,
+      &QuantizeConfig {
+        merge_down: true,
+        ..base
+      },
+    );
+    assert!(
+      on.palette.len() < off.palette.len(),
+      "merge-down should shrink the palette: {} -> {}",
+      off.palette.len(),
+      on.palette.len()
+    );
+    assert!(
+      on.palette.len() >= 2,
+      "transparent slot + >=1 visible color is a hard floor: {}",
+      on.palette.len()
+    );
+    assert!(
+      on.quality as i32 >= base.min_quality as i32 + 2 || on.palette.len() == off.palette.len(),
+      "kept merges must clear min_quality+2 (q={})",
+      on.quality
+    );
+    // The reserved a==0 slot survives merging and still absorbs transparent px.
+    let tidx = on
+      .palette
+      .iter()
+      .position(|c| c.a == 0)
+      .expect("transparent slot preserved");
+    for (i, &p) in px.iter().enumerate() {
+      if p.a == 0 {
+        assert_eq!(on.indices[i] as usize, tidx, "transparent px {i}");
+      }
+    }
+    // Determinism: identical inputs -> identical outputs.
+    let again = quantize_rgba(
+      &px,
+      115,
+      100,
+      &QuantizeConfig {
+        merge_down: true,
+        ..base
+      },
+    );
+    assert_eq!(on.palette, again.palette);
+    assert_eq!(on.indices, again.indices);
+    assert_eq!(on.quality, again.quality);
+  }
+
+  #[test]
+  fn merge_down_stops_at_quality_gate() {
+    // min_quality == 100 makes the +2 margin unreachable for any merge that
+    // costs quality, so the palette must come back untouched.
+    let mut px = Vec::new();
+    for k in 0..32u32 {
+      let v = (k * 8) as u8;
+      for _ in 0..300 {
+        px.push(rgba(v, 255 - v, (v / 2).max(8), 255));
+      }
+    }
+    let c = QuantizeConfig {
+      max_colors: 64,
+      min_quality: 100,
+      kmeans_iters: 5,
+      dither: false,
+      posterization: 0,
+      merge_down: true,
+    };
+    let on = quantize_rgba(&px, 120, 80, &c);
+    let off = quantize_rgba(
+      &px,
+      120,
+      80,
+      &QuantizeConfig {
+        merge_down: false,
+        ..c
+      },
+    );
+    // Gate +2 unreachable at min_quality=100 (quality is capped at 100): either
+    // no merge was kept (identical palette) or every merge was free.
+    assert!(
+      on.quality >= 100 || on.palette.len() == off.palette.len(),
+      "min_quality=100 must block quality-costing merges (pal {}->{}, q={})",
+      off.palette.len(),
+      on.palette.len(),
+      on.quality
+    );
   }
 }

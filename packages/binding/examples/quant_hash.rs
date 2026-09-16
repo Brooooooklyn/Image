@@ -20,7 +20,10 @@ use napi_rs_image::{QuantizeConfig, quantize_rgba};
 use rgb::{FromSlice, RGBA8};
 
 fn decode() -> (Vec<RGBA8>, usize, usize) {
-  static FIXTURE: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../un-optimized.png"));
+  static FIXTURE: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../un-optimized.png"
+  ));
   let img = image::load_from_memory_with_format(FIXTURE, ImageFormat::Png)
     .expect("decode")
     .to_rgba8();
@@ -98,19 +101,113 @@ fn main() {
   let mut pxa = px.clone();
   for (i, p) in pxa.iter_mut().enumerate() {
     let x = i % w;
-    p.a = if x < w / 3 { 0 } else { (64 + (x * 191 / w)) as u8 };
+    p.a = if x < w / 3 {
+      0
+    } else {
+      (64 + (x * 191 / w)) as u8
+    };
   }
 
   let cases: &[(&str, QuantizeConfig)] = &[
-    ("default_251_dither", QuantizeConfig { max_colors: 251, min_quality: 70, kmeans_iters: 5, dither: true, posterization: 0 }),
-    ("q75_145_dither", QuantizeConfig { max_colors: 145, min_quality: 70, kmeans_iters: 5, dither: true, posterization: 0 }),
-    ("colors16_dither", QuantizeConfig { max_colors: 16, min_quality: 0, kmeans_iters: 5, dither: true, posterization: 0 }),
-    ("colors64_dither", QuantizeConfig { max_colors: 64, min_quality: 0, kmeans_iters: 5, dither: true, posterization: 0 }),
-    ("colors256_dither", QuantizeConfig { max_colors: 256, min_quality: 0, kmeans_iters: 5, dither: true, posterization: 0 }),
-    ("colors256_nodither", QuantizeConfig { max_colors: 256, min_quality: 0, kmeans_iters: 5, dither: false, posterization: 0 }),
-    ("colors256_iter0", QuantizeConfig { max_colors: 256, min_quality: 0, kmeans_iters: 0, dither: true, posterization: 0 }),
-    ("colors128_posterize2", QuantizeConfig { max_colors: 128, min_quality: 0, kmeans_iters: 5, dither: true, posterization: 2 }),
-    ("retry_gate_minq99", QuantizeConfig { max_colors: 64, min_quality: 99, kmeans_iters: 5, dither: true, posterization: 0 }),
+    (
+      "default_251_dither",
+      QuantizeConfig {
+        max_colors: 251,
+        min_quality: 70,
+        kmeans_iters: 5,
+        dither: true,
+        posterization: 0,
+        merge_down: true,
+      },
+    ),
+    (
+      "q75_145_dither",
+      QuantizeConfig {
+        max_colors: 145,
+        min_quality: 70,
+        kmeans_iters: 5,
+        dither: true,
+        posterization: 0,
+        merge_down: true,
+      },
+    ),
+    (
+      "colors16_dither",
+      QuantizeConfig {
+        max_colors: 16,
+        min_quality: 0,
+        kmeans_iters: 5,
+        dither: true,
+        posterization: 0,
+        merge_down: false,
+      },
+    ),
+    (
+      "colors64_dither",
+      QuantizeConfig {
+        max_colors: 64,
+        min_quality: 0,
+        kmeans_iters: 5,
+        dither: true,
+        posterization: 0,
+        merge_down: false,
+      },
+    ),
+    (
+      "colors256_dither",
+      QuantizeConfig {
+        max_colors: 256,
+        min_quality: 0,
+        kmeans_iters: 5,
+        dither: true,
+        posterization: 0,
+        merge_down: false,
+      },
+    ),
+    (
+      "colors256_nodither",
+      QuantizeConfig {
+        max_colors: 256,
+        min_quality: 0,
+        kmeans_iters: 5,
+        dither: false,
+        posterization: 0,
+        merge_down: false,
+      },
+    ),
+    (
+      "colors256_iter0",
+      QuantizeConfig {
+        max_colors: 256,
+        min_quality: 0,
+        kmeans_iters: 0,
+        dither: true,
+        posterization: 0,
+        merge_down: false,
+      },
+    ),
+    (
+      "colors128_posterize2",
+      QuantizeConfig {
+        max_colors: 128,
+        min_quality: 0,
+        kmeans_iters: 5,
+        dither: true,
+        posterization: 2,
+        merge_down: false,
+      },
+    ),
+    (
+      "retry_gate_minq99",
+      QuantizeConfig {
+        max_colors: 64,
+        min_quality: 99,
+        kmeans_iters: 5,
+        dither: true,
+        posterization: 0,
+        merge_down: false,
+      },
+    ),
   ];
 
   for (name, cfg) in cases {
