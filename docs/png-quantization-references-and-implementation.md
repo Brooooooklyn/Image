@@ -352,7 +352,7 @@ aarch64 (local Apple Silicon, NEON vs pre-SIMD):
 | **CIEDE2000** metric | not done | Heavier; CIE76 is "perceptually decent" (Celebi fn18). The first lever if quality regresses |
 | **HyAB** distance | evaluated, rejected | Needs median-L* centroid update; marginal, large-difference-only gain |
 | **Octree** init | not used | median-cut+k-means wins quality for offline use |
-| **AVX-512** kernel | not done | CodSpeed's Valgrind can't execute it (no CI measurement); no local AVX-512 execution proof available (TCG support partial); narrow/shrinking host base; would break the uniform argmin structure. Not worth adding **blind** to a byte-identity guarantee |
+| **AVX-512** kernel | done (`4f99878`) | Was rejected blind — CodSpeed's Valgrind can't execute it and no local AVX-512 hardware existed. Unblocked by Cloudflare Sandbox (x86_64, avx512f/bw/dq/vl): `opaque_scan_avx512` (16-wide i32, masked strict compare) + `general_scan_avx512` (8-wide f64) verified byte-identical there; dispatch prefers it where probed |
 | Lab-space **splitting** | not used | `median-cut-lab`: Lab splits don't beat RGB; the perceptual win is in mapping |
 
 ---
@@ -516,3 +516,23 @@ to Q14 (16383) restores the i32 kernels unconditionally — `3·16383² =
 `lab.rs`. Q16→Q14 measured on this machine: default −44%, max_quality_75 −32%,
 colors/256 −33%, no_dither/256 −27%, colors/64 −13%, colors/16 −3.5%. The
 sRGB→linear lookup table stays Q16 — only the stored Oklab components are Q14.
+
+### 10f. x86 verification on real AVX-512 hardware (Cloudflare Sandbox)
+
+A temporary `quant-verify-x86` Sandbox worker (base `cloudflare/sandbox:0.7.0`
++ `gcc`, Rust stable) ran the extracted quantizer probe crate on a real x86_64
+host (`avx512f/bw/dq/vl/vnni`, later resized to `standard-4` / 4 vCPU):
+
+- `cargo test --release`: **100/100 pass**, including `kernel_matches_scalar_*`
+  and `general_matches_scalar_*` for sse41 / avx2 / **avx512** — the x86
+  equivalence gates that cannot execute on aarch64 dev machines.
+- `quant_hash` example: **all 18 output hashes identical to aarch64 NEON**,
+  including `f32::cbrt`-dependent Oklab conversions (glibc and Apple libm
+  agree on this domain; the `dense_sweep_hash_pin` test pins it).
+- Scalar vs detected-kernel wall time over the full 18-config harness:
+  **native (AVX-512) ~23.4s vs scalar ~43.2s — ~1.85x end-to-end** on x86,
+  consistent with the Apple Silicon SIMD contribution.
+
+This also unblocked the AVX-512F kernels (`4f99878`), which the doc previously
+rejected as unverifiable. Runtime detection keeps non-AVX-512 hosts on the
+AVX2/SSE4.1/scalar ladder, so the addition carries no correctness risk.
