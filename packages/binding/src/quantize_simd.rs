@@ -103,6 +103,13 @@ pub(crate) enum OpaqueKernel {
   /// every width against the scalar reference).
   #[cfg(target_arch = "x86_64")]
   Avx2,
+  /// AVX-512F (x86_64) 16-wide i32 argmin — the widest x86 path, preferred when the host
+  /// reports AVX-512F (newer Xeon/EPYC/Ice Lake+). Byte-identical: same exact-integer
+  /// argmin as every other width; the 16-lane masked compare is still a strict `d < min_d`
+  /// and the reduction keeps the lowest index on ties. Probe first — AVX-512 is absent on
+  /// many consumer parts (pre-Ice Lake Intel, some fused-off Alder/Raptor Lake).
+  #[cfg(target_arch = "x86_64")]
+  Avx512,
   /// SSE4.1 (x86_64) 4-wide i32 argmin — the pre-AVX2 x86 fallback (older Intel Macs, some
   /// musl/Windows hosts). Selected when the host reports SSE4.1 but not AVX2; older x86 still
   /// falls back to scalar. Produces the identical argmin as AVX2/scalar — different lane width,
@@ -147,9 +154,12 @@ fn detect_native() -> OpaqueKernel {
   #[cfg(target_arch = "x86_64")]
   {
     // Probe at runtime, preferring the widest path the host supports so no host ever
-    // executes an unsupported instruction: AVX2 (8-wide) on modern x86, SSE4.1 (4-wide)
-    // on pre-AVX2 x86, scalar on anything older. All three reach the byte-identical argmin.
-    if std::is_x86_feature_detected!("avx2") {
+    // executes an unsupported instruction: AVX-512F (16-wide) where present, AVX2 (8-wide)
+    // on modern x86, SSE4.1 (4-wide) on pre-AVX2 x86, scalar on anything older. All four
+    // reach the byte-identical argmin.
+    if std::is_x86_feature_detected!("avx512f") {
+      OpaqueKernel::Avx512
+    } else if std::is_x86_feature_detected!("avx2") {
       OpaqueKernel::Avx2
     } else if std::is_x86_feature_detected!("sse4.1") {
       OpaqueKernel::Sse41
@@ -216,6 +226,8 @@ pub(crate) fn opaque_argmin(
     OpaqueKernel::Neon => unsafe { opaque_scan_neon(l, a, b, q) },
     #[cfg(target_arch = "x86_64")]
     OpaqueKernel::Avx2 => unsafe { opaque_scan_avx2(l, a, b, q) },
+    #[cfg(target_arch = "x86_64")]
+    OpaqueKernel::Avx512 => unsafe { opaque_scan_avx512(l, a, b, q) },
     #[cfg(target_arch = "x86_64")]
     OpaqueKernel::Sse41 => unsafe { opaque_scan_sse41(l, a, b, q) },
     #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
@@ -378,6 +390,79 @@ unsafe fn opaque_scan_avx2(l: &[i32], a: &[i32], b: &[i32], q: [i32; 3]) -> usiz
       }
     }
     // Tail (n % 8): ascending strict `<` — a tail entry only wins on a STRICT
+    // improvement, preserving lowest-index-on-tie against the lane winners.
+    while i < n {
+      let dl = q[0] - l[i];
+      let da = q[1] - a[i];
+      let db = q[2] - b[i];
+      let d = dl * dl + da * da + db * db;
+      if d < best_d {
+        best_d = d;
+        best = i as i32;
+      }
+      i += 1;
+    }
+    best as usize
+  }
+}
+
+/// AVX-512F (x86_64) implementation of [`opaque_argmin`]: 16-wide i32 argmin of
+/// `dl²+da²+db²`, the widest x86 path. Bit-identical to [`opaque_scan_scalar`] and to
+/// AVX2 — same exact-integer argmin (`de ≤ 3·16383² = 805_208_067 < i32::MAX`
+/// unconditionally), wider lanes: the strict per-lane compare
+/// (`_mm512_cmpgt_epi32_mask(min_d, d)` is `d < min_d`) keeps the lowest index within a
+/// lane, the 16-lane lowest-index reduction + the `n % 16` scalar tail reproduce the
+/// ascending tie-break. SAFETY: only reachable via `detect`/`opaque_argmin` after
+/// `is_x86_feature_detected!("avx512f")`.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f")]
+unsafe fn opaque_scan_avx512(l: &[i32], a: &[i32], b: &[i32], q: [i32; 3]) -> usize {
+  use core::arch::x86_64::*;
+  unsafe {
+    let n = l.len();
+    let vql = _mm512_set1_epi32(q[0]);
+    let vqa = _mm512_set1_epi32(q[1]);
+    let vqb = _mm512_set1_epi32(q[2]);
+    let lane_idx = _mm512_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
+    let mut min_d = _mm512_set1_epi32(i32::MAX);
+    let mut min_i = _mm512_set1_epi32(i32::MAX);
+
+    let mut i = 0usize;
+    while i + 16 <= n {
+      let lf = _mm512_loadu_si512(l.as_ptr().add(i) as *const __m512i);
+      let af = _mm512_loadu_si512(a.as_ptr().add(i) as *const __m512i);
+      let bf = _mm512_loadu_si512(b.as_ptr().add(i) as *const __m512i);
+      let dl = _mm512_sub_epi32(vql, lf);
+      let da = _mm512_sub_epi32(vqa, af);
+      let db = _mm512_sub_epi32(vqb, bf);
+      let d = _mm512_add_epi32(
+        _mm512_add_epi32(_mm512_mullo_epi32(dl, dl), _mm512_mullo_epi32(da, da)),
+        _mm512_mullo_epi32(db, db),
+      );
+      let cur_i = _mm512_add_epi32(_mm512_set1_epi32(i as i32), lane_idx);
+      // lanes where d < min_d (signed, STRICT): a later equal value does NOT replace.
+      let m = _mm512_cmpgt_epi32_mask(min_d, d);
+      min_d = _mm512_mask_blend_epi32(m, min_d, d);
+      min_i = _mm512_mask_blend_epi32(m, min_i, cur_i);
+      i += 16;
+    }
+
+    // Reduce the 16 lanes: lowest d, tie -> lowest index. An un-run lane holds
+    // i32::MAX / i32::MAX — `d < i32::MAX` always, so a real entry always beats the
+    // sentinel and two sentinels never swap.
+    let mut ld = [0i32; 16];
+    let mut li = [0i32; 16];
+    _mm512_storeu_si512(ld.as_mut_ptr() as *mut __m512i, min_d);
+    _mm512_storeu_si512(li.as_mut_ptr() as *mut __m512i, min_i);
+
+    let (mut best_d, mut best) = (ld[0], li[0]);
+    for k in 1..16 {
+      if ld[k] < best_d || (ld[k] == best_d && li[k] < best) {
+        best_d = ld[k];
+        best = li[k];
+      }
+    }
+    // Tail (n % 16): ascending strict `<` — a tail entry only wins on a STRICT
     // improvement, preserving lowest-index-on-tie against the lane winners.
     while i < n {
       let dl = q[0] - l[i];
@@ -665,6 +750,19 @@ pub(crate) fn general_argmin(
     #[cfg(target_arch = "x86_64")]
     OpaqueKernel::Avx2 => unsafe {
       general_scan_avx2(
+        l,
+        a,
+        b,
+        alpha,
+        q,
+        query_a,
+        skip_transparent,
+        guard_src_alpha,
+      )
+    },
+    #[cfg(target_arch = "x86_64")]
+    OpaqueKernel::Avx512 => unsafe {
+      general_scan_avx512(
         l,
         a,
         b,
@@ -1075,6 +1173,127 @@ unsafe fn general_scan_avx2(
   }
 }
 
+/// AVX-512F (x86_64) implementation of [`general_argmin`]'s tier-1 scan: 8-wide f64
+/// argmin of the full perceptual score, the widest x86 path. Bit-identical to
+/// [`general_scan_tier1_scalar`] and to the narrower kernels — f64 lanes are exact
+/// (module docs), the per-lane compare is STRICT (`_CMP_LT_OQ` is ordered `d < min_d`,
+/// false on NaN — which cannot occur), and the 8-lane lowest-index reduction + the
+/// `n % 8` scalar tail reproduce the ascending tie-break. Skipped lanes score +INF;
+/// an all-skipped palette returns `None` for the tier-2 rescan. SAFETY: only
+/// reachable via `detect`/`general_argmin` after `is_x86_feature_detected!("avx512f")`.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f")]
+#[allow(clippy::too_many_arguments)] // flat SoA args mirror opaque_scan_avx512
+unsafe fn general_scan_avx512(
+  l: &[i32],
+  a: &[i32],
+  b: &[i32],
+  alpha: &[u8],
+  q: [i32; 3],
+  query_a: u8,
+  skip_transparent: bool,
+  guard_src_alpha: u8,
+) -> Option<usize> {
+  use core::arch::x86_64::*;
+  unsafe {
+    let n = l.len();
+    let vql = _mm512_set1_pd(q[0] as f64);
+    let vqa = _mm512_set1_pd(q[1] as f64);
+    let vqb = _mm512_set1_pd(q[2] as f64);
+    let vqalpha = _mm512_set1_pd(query_a as f64);
+    let vsrc = _mm512_set1_pd(guard_src_alpha as f64);
+    let vzero = _mm512_setzero_pd();
+    let v510 = _mm512_set1_pd(510.0);
+    let valpha = _mm512_set1_pd(4000.0); // ALPHA_WEIGHT_LAB
+    let vdim = _mm512_set1_pd(8000.0); // DIM_WEIGHT
+    let vvan = _mm512_set1_pd(7.0); // VANISH_WEIGHT
+    let vinf = _mm512_set1_pd(f64::INFINITY);
+    // Winning index per lane, stored as f64 (indices < 2⁵³ are exact); -1.0 sentinel.
+    let lane_idx = _mm512_set_pd(7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0, 0.0); // lane0=0 .. lane7=7
+    let mut min_d = vinf;
+    let mut min_i = _mm512_set1_pd(-1.0);
+
+    let mut i = 0usize;
+    while i + 8 <= n {
+      // 8×i32 -> 8×f64: vcvtdq2pd zmm reads the eight i32 lanes of a ymm.
+      let lf = _mm512_cvtepi32_pd(_mm256_loadu_si256(l.as_ptr().add(i) as *const __m256i));
+      let af = _mm512_cvtepi32_pd(_mm256_loadu_si256(a.as_ptr().add(i) as *const __m256i));
+      let bf = _mm512_cvtepi32_pd(_mm256_loadu_si256(b.as_ptr().add(i) as *const __m256i));
+      let paf = _mm512_set_pd(
+        alpha[i + 7] as f64,
+        alpha[i + 6] as f64,
+        alpha[i + 5] as f64,
+        alpha[i + 4] as f64,
+        alpha[i + 3] as f64,
+        alpha[i + 2] as f64,
+        alpha[i + 1] as f64,
+        alpha[i] as f64,
+      );
+
+      let dl = _mm512_sub_pd(vql, lf);
+      let da = _mm512_sub_pd(vqa, af);
+      let db = _mm512_sub_pd(vqb, bf);
+      let de = _mm512_add_pd(
+        _mm512_add_pd(_mm512_mul_pd(dl, dl), _mm512_mul_pd(da, da)),
+        _mm512_mul_pd(db, db),
+      );
+      let wa = _mm512_add_pd(vqalpha, paf);
+      // floor((de·wa)/510) — the exact integer floor-division (module docs).
+      let term = _mm512_roundscale_pd::<{ _MM_FROUND_TO_NEG_INF | _MM_FROUND_NO_EXC }>(
+        _mm512_div_pd(_mm512_mul_pd(de, wa), v510),
+      );
+      let dalpha = _mm512_sub_pd(vqalpha, paf);
+      let mut d = _mm512_add_pd(term, _mm512_mul_pd(_mm512_mul_pd(dalpha, dalpha), valpha));
+      // dim_penalty: (src > 0 && pa < src) -> 8000·(src−pa)², else 0.
+      let drop = _mm512_sub_pd(vsrc, paf);
+      let dim_m =
+        _mm512_cmp_pd_mask::<_CMP_GT_OQ>(vsrc, vzero) & _mm512_cmp_pd_mask::<_CMP_LT_OQ>(paf, vsrc);
+      let dim = _mm512_mul_pd(vdim, _mm512_mul_pd(drop, drop));
+      d = _mm512_add_pd(d, _mm512_mask_blend_pd(dim_m, vzero, dim));
+      // vanish_penalty: (src > pa) -> 7·(src−pa)³, else 0.
+      let van_m = _mm512_cmp_pd_mask::<_CMP_GT_OQ>(vsrc, paf);
+      let van = _mm512_mul_pd(vvan, _mm512_mul_pd(drop, _mm512_mul_pd(drop, drop)));
+      d = _mm512_add_pd(d, _mm512_mask_blend_pd(van_m, vzero, van));
+      // skip_transparent: excluded lanes get +INF — they can never win a strict `<`.
+      let skip_m = if skip_transparent {
+        _mm512_cmp_pd_mask::<_CMP_EQ_OQ>(paf, vzero)
+      } else {
+        0
+      };
+      d = _mm512_mask_blend_pd(skip_m, d, vinf);
+
+      let cur_i = _mm512_add_pd(_mm512_set1_pd(i as f64), lane_idx);
+      // STRICT d < min_d (ordered): a later equal score does NOT replace.
+      let m = _mm512_cmp_pd_mask::<_CMP_LT_OQ>(d, min_d);
+      min_d = _mm512_mask_blend_pd(m, min_d, d);
+      min_i = _mm512_mask_blend_pd(m, min_i, cur_i);
+      i += 8;
+    }
+
+    let mut ld = [0.0f64; 8];
+    let mut li = [0.0f64; 8];
+    _mm512_storeu_pd(ld.as_mut_ptr(), min_d);
+    _mm512_storeu_pd(li.as_mut_ptr(), min_i);
+    let mut best_d = f64::INFINITY;
+    let mut best = 0usize;
+    reduce_general_lanes(&ld, &li, &mut best_d, &mut best);
+    general_tail_f64(
+      l,
+      a,
+      b,
+      alpha,
+      q,
+      query_a,
+      skip_transparent,
+      guard_src_alpha,
+      i,
+      &mut best_d,
+      &mut best,
+    );
+    if best_d.is_finite() { Some(best) } else { None }
+  }
+}
+
 /// SSE4.1 (x86_64) implementation of [`general_argmin`]'s tier-1 scan: 2-wide f64
 /// argmin, the pre-AVX2 x86 fallback. Bit-identical to [`general_scan_tier1_scalar`]
 /// and to AVX2 — same exact-f64 argmin, narrower lanes: strict per-lane compare
@@ -1429,6 +1648,17 @@ mod tests {
 
   #[cfg(target_arch = "x86_64")]
   #[test]
+  fn kernel_matches_scalar_avx512() {
+    if !std::is_x86_feature_detected!("avx512f") {
+      return; // host without AVX-512: skip; AVX-512-capable x86 covers it
+    }
+    assert_kernel_matches_scalar("avx512", |l, a, b, q| unsafe {
+      opaque_scan_avx512(l, a, b, q)
+    });
+  }
+
+  #[cfg(target_arch = "x86_64")]
+  #[test]
   fn kernel_matches_scalar_sse41() {
     if !std::is_x86_feature_detected!("sse4.1") {
       return; // host (or Rosetta) without SSE4.1: skip; x86 CI covers it
@@ -1779,6 +2009,20 @@ mod tests {
     }
     assert_general_kernel_matches_scalar("avx2", |l, a, b, al, q, qa, s, g| {
       match unsafe { general_scan_avx2(l, a, b, al, q, qa, s, g) } {
+        Some(i) => i,
+        None => general_scan_tier2(l, a, b, al, q, qa, g),
+      }
+    });
+  }
+
+  #[cfg(target_arch = "x86_64")]
+  #[test]
+  fn general_matches_scalar_avx512() {
+    if !std::is_x86_feature_detected!("avx512f") {
+      return; // host without AVX-512: skip; AVX-512-capable x86 covers it
+    }
+    assert_general_kernel_matches_scalar("avx512", |l, a, b, al, q, qa, s, g| {
+      match unsafe { general_scan_avx512(l, a, b, al, q, qa, s, g) } {
         Some(i) => i,
         None => general_scan_tier2(l, a, b, al, q, qa, g),
       }
