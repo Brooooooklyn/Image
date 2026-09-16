@@ -594,6 +594,13 @@ export interface PngQuantOptions {
    * Useful for generating palettes for VGA, 15-bit textures, or other retro platforms.
    */
   posterization?: number
+  /**
+   * Explicit palette size, 1-256 (1 produces a single-color palette).
+   * When set, it takes precedence over the `maxQuality`-derived color-count
+   * ramp; `minQuality` still applies.
+   * default: unset (palette size is derived from `maxQuality`)
+   */
+  colors?: number
 }
 
 export declare enum PngRowFilter {

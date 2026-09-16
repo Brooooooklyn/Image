@@ -221,6 +221,11 @@ pub struct PngQuantOptions {
   /// Number of least significant bits to ignore.
   /// Useful for generating palettes for VGA, 15-bit textures, or other retro platforms.
   pub posterization: Option<u32>,
+  /// Explicit palette size, 1-256 (1 produces a single-color palette).
+  /// When set, it takes precedence over the `maxQuality`-derived color-count
+  /// ramp; `minQuality` still applies.
+  /// default: unset (palette size is derived from `maxQuality`)
+  pub colors: Option<u32>,
 }
 
 #[napi]
@@ -291,6 +296,18 @@ fn validate_png_quant_options(o: &PngQuantOptions) -> Result<()> {
     return Err(Error::new(
       Status::InvalidArg,
       format!("minQuality ({min}) must not exceed maxQuality ({max})"),
+    ));
+  }
+  // `colors` is an explicit palette size: 1 is legal (a single-color palette).
+  // When set it overrides the `maxQuality`→color-count ramp in
+  // `QuantizeConfig::from_options` (wiring lands with the quantizer change);
+  // `minQuality` still applies as the acceptance gate.
+  if let Some(colors) = o.colors
+    && !(1..=256).contains(&colors)
+  {
+    return Err(Error::new(
+      Status::InvalidArg,
+      format!("colors must be between 1 and 256, got {colors}"),
     ));
   }
   Ok(())
