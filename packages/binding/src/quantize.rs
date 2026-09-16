@@ -219,8 +219,14 @@ impl QuantizeConfig {
     let max_quality = o.max_quality.unwrap_or(99).min(100) as f64;
     // Quadratic ramp: biases toward larger palettes at high quality.
     // 99 -> ~251, 75 -> ~145, 50 -> ~66, 1 -> 2.
-    let max_colors = (2.0 + (max_quality / 100.0).powi(2) * 254.0).round();
-    let max_colors = (max_colors as i64).clamp(2, MAX_PALETTE as i64) as u16;
+    let ramp_colors = (2.0 + (max_quality / 100.0).powi(2) * 254.0).round();
+    // An explicit `colors` request overrides the maxQuality ramp entirely
+    // (validated to 1..=256 upstream; clamped again here for safety).
+    let max_colors = match o.colors {
+      Some(n) => (n as i64).clamp(1, MAX_PALETTE as i64),
+      None => ramp_colors as i64,
+    }
+    .clamp(1, MAX_PALETTE as i64) as u16;
 
     let min_quality = o.min_quality.unwrap_or(70).min(100) as u8;
 
@@ -3759,6 +3765,8 @@ mod tests {
       max_quality: None,
       speed: None,
       posterization: None,
+      colors: None,
+      use_zopfli: None,
     };
     let c = QuantizeConfig::from_options(&o);
     assert_eq!(c.min_quality, 70);
@@ -3777,6 +3785,8 @@ mod tests {
       max_quality: Some(50),
       speed: Some(10),
       posterization: Some(9),
+      colors: None,
+      use_zopfli: None,
     };
     let c2 = QuantizeConfig::from_options(&o2);
     // min and max are independent gates; min must NOT be clamped to max.
@@ -3784,6 +3794,18 @@ mod tests {
     assert_eq!(c2.kmeans_iters, 0); // speed 10
     assert!(!c2.dither); // speed 10 skips dither
     assert_eq!(c2.posterization, 7); // clamped 0..=7
+
+    // `colors` overrides the maxQuality ramp; still clamped to 1..=256.
+    let o3 = PngQuantOptions {
+      colors: Some(32),
+      ..o2
+    };
+    assert_eq!(QuantizeConfig::from_options(&o3).max_colors, 32);
+    let o4 = PngQuantOptions {
+      colors: Some(0),
+      ..o2
+    };
+    assert_eq!(QuantizeConfig::from_options(&o4).max_colors, 1);
   }
 
   #[test]
