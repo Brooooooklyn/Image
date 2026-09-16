@@ -2017,6 +2017,366 @@ fn kmeans_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) {
   palette.copy_from_slice(&best);
 }
 
+/// Per-cluster moment accumulators for the split-merge assignment scan. Each
+/// shard fills its own copy and the copies are merged by integer addition in
+/// shard order, so the merged accumulators are identical for ANY shard count —
+/// the serial pass is the T == 1 case of the same body.
+struct SmAcc {
+  // Lab first moments: Σ count·(l, a, b).
+  sl: Vec<i128>,
+  sca: Vec<i128>,
+  scb: Vec<i128>,
+  // Lab second moments: Σ count·(l², a², b²) — for the widest-variance split.
+  sl2: Vec<i128>,
+  sca2: Vec<i128>,
+  scb2: Vec<i128>,
+  // Alpha moments (alpha is not a Lab component but IS a clustering channel).
+  sal: Vec<u64>,
+  sal2: Vec<u128>,
+  // Σ count per cluster.
+  wn: Vec<u64>,
+  // Internal SSE: Σ count·pdist(entry, assigned centroid) — this cluster's
+  // exact share of `kmeans_objective`.
+  sse: Vec<u128>,
+}
+
+impl SmAcc {
+  fn new(k: usize) -> Self {
+    SmAcc {
+      sl: vec![0; k],
+      sca: vec![0; k],
+      scb: vec![0; k],
+      sl2: vec![0; k],
+      sca2: vec![0; k],
+      scb2: vec![0; k],
+      sal: vec![0; k],
+      sal2: vec![0; k],
+      wn: vec![0; k],
+      sse: vec![0; k],
+    }
+  }
+
+  fn add(&mut self, o: &SmAcc) {
+    for i in 0..self.wn.len() {
+      self.sl[i] += o.sl[i];
+      self.sca[i] += o.sca[i];
+      self.scb[i] += o.scb[i];
+      self.sl2[i] += o.sl2[i];
+      self.sca2[i] += o.sca2[i];
+      self.scb2[i] += o.scb2[i];
+      self.sal[i] += o.sal[i];
+      self.sal2[i] += o.sal2[i];
+      self.wn[i] += o.wn[i];
+      self.sse[i] += o.sse[i];
+    }
+  }
+}
+
+/// Deterministic bounded split–merge refinement (Kaukoranta–Fränti–Nevalainen
+/// style), run by `quantize_pass` after `kmeans_refine` and before remapping.
+///
+/// Lloyd can stall in a local optimum: one cluster covers a wide spread of
+/// colors (large internal SSE) while two others sit nearly on top of each
+/// other. Each round performs ONE K-preserving move on a CANDIDATE copy:
+///
+///   * MERGE the live-cluster pair `(i, j)` — both distinct from the split
+///     target — with the smallest approximate objective increase, the
+///     Ward-style moment cost `(n_i·n_j)/(n_i+n_j) · pdist(c_i, c_j)` over the
+///     current centroids (`u128` throughout; `n` is the weighted count);
+///   * SPLIT the live cluster `s` with the largest weighted internal SSE —
+///     `Σ count·pdist(entry, own centroid)`, i.e. the cluster's exact share of
+///     the k-means objective — into two children at the weighted mean along its
+///     widest-variance channel (L, a, b, or alpha scaled by ALPHA_WEIGHT_LAB to
+///     match its weight in `pdist`). If the mean partition degenerates (all
+///     members share one channel value) the highest-residual member — lowest
+///     packed color on ties — is split off as a singleton instead;
+///   * REFIT the candidate with two Lloyd passes via `kmeans_refine`.
+///
+/// The candidate is ADOPTED only when `kmeans_objective` strictly improves —
+/// the same keep-best accounting `kmeans_refine` applies to its own passes —
+/// and a rejected round ends refinement (the deterministic move would repeat
+/// identically). The palette length never changes: the merge frees exactly the
+/// slot the split consumes (merged pair lands on `i`, the freed slot `j` takes
+/// split child B, `s` takes child A). The current objective is free: it is the
+/// sum of the per-cluster internal SSE the assignment scan already computes
+/// (integer addition is associative — the grouped sum equals
+/// `kmeans_objective`'s flat one).
+///
+/// Rounds are bounded by `min(iters, 4)`: the refinement budget scales with
+/// the Lloyd budget, and `iters == 0` — the max-speed config — skips the pass
+/// entirely (one round costs ~3 D×K scans, more than the entire Lloyd budget
+/// it would refine). All comparisons are exact integers; every tie-break is a
+/// lowest-index rule (cluster slot, then slot pair, then packed entry color) —
+/// no RNG, no float.
+fn split_merge_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) {
+  let k = palette.len();
+  let rounds = (iters as usize).min(4);
+  // Need ≥3 live clusters for a merge+split to be expressible, ≥2 entries to
+  // split at all. `rounds == 0` covers the `iters == 0` fast path.
+  if rounds == 0 || k < 3 || entries.len() < 2 {
+    return;
+  }
+
+  // Cache every entry's Lab once for the whole refinement — the assignment
+  // scan, the merge cost, the split partition, and every objective call read
+  // them (same reason `kmeans_refine` builds the same cache).
+  let shards = shard_count(entries.len(), PAR_MIN_ENTRIES);
+  let mut entry_labs = vec![rgb_to_lab(0, 0, 0); entries.len()];
+  let mut entry_alphas = vec![0u8; entries.len()];
+  shard_scatter2(
+    entries,
+    &mut entry_labs,
+    &mut entry_alphas,
+    shards,
+    |chunk, labs, alphas| {
+      for (i, e) in chunk.iter().enumerate() {
+        labs[i] = rgb_to_lab(e.color.r, e.color.g, e.color.b);
+        alphas[i] = e.color.a;
+      }
+    },
+  );
+  let kernel = quantize_simd::detect();
+
+  for _ in 0..rounds {
+    // Assignment scan under the CURRENT palette: per-entry cluster index plus
+    // the per-cluster moments and internal SSE. Sharded like the Lloyd pass:
+    // `assign` is a pure function of (entry, palette) written per contiguous
+    // shard range, and the moment partials merge by integer add — identical
+    // results for any shard count.
+    let soa = PaletteLabSoa::from_palette(palette);
+    let partials = shard_reduce(entries.len(), shards, |s, e| {
+      let mut assign_chunk = Vec::with_capacity(e - s);
+      let mut acc = SmAcc::new(k);
+      for ei in s..e {
+        let en = &entries[ei];
+        let idx = soa.nearest(
+          kernel,
+          entry_labs[ei],
+          entry_alphas[ei],
+          entry_alphas[ei] > 0,
+          0, // clustering assignment: guard disabled, same as kmeans_refine
+        );
+        assign_chunk.push(idx as u32);
+        let c = en.count;
+        let ci = c as i128;
+        let el = entry_labs[ei];
+        let ea = entry_alphas[ei];
+        acc.sl[idx] += el.l as i128 * ci;
+        acc.sca[idx] += el.a as i128 * ci;
+        acc.scb[idx] += el.b as i128 * ci;
+        acc.sl2[idx] += el.l as i128 * el.l as i128 * ci;
+        acc.sca2[idx] += el.a as i128 * el.a as i128 * ci;
+        acc.scb2[idx] += el.b as i128 * el.b as i128 * ci;
+        acc.sal[idx] += ea as u64 * c;
+        acc.sal2[idx] += ea as u128 * ea as u128 * c as u128;
+        acc.wn[idx] += c;
+        acc.sse[idx] += c as u128 * pdist_lab(el, ea, soa.labs[idx], soa.alpha[idx]).max(0) as u128;
+      }
+      (assign_chunk, acc)
+    });
+    // Merge partials in shard order — the chunk ranges are contiguous and
+    // ordered, so concatenating them IS the scatter; the acc merge is integer
+    // addition.
+    let mut assign = vec![0u32; entries.len()];
+    let mut acc = SmAcc::new(k);
+    let mut off = 0usize;
+    for (chunk, part) in partials {
+      assign[off..off + chunk.len()].copy_from_slice(&chunk);
+      off += chunk.len();
+      acc.add(&part);
+    }
+    // The palette's current objective: the same Σ count·pdist(assigned) the
+    // Lloyd pass fuses — grouped per-cluster instead of flat, equal by integer
+    // associativity.
+    let cur_obj: u128 = acc.sse.iter().sum();
+
+    // SPLIT choice: the live cluster with the largest internal SSE. Strict `>`
+    // keeps the LOWEST slot index on ties. All-zero SSE means the palette
+    // covers every entry — nothing a split can improve.
+    let mut s = usize::MAX;
+    let mut best_sse = 0u128;
+    for i in 0..k {
+      if acc.wn[i] > 0 && acc.sse[i] > best_sse {
+        best_sse = acc.sse[i];
+        s = i;
+      }
+    }
+    if s == usize::MAX {
+      break;
+    }
+
+    // MERGE choice: the live pair (i, j), i < j, both != s, minimizing the
+    // Ward-style moment cost — the approximate objective increase of folding
+    // the pair into its weighted-mean centroid. Strict `<` keeps the lowest
+    // (i, j) slot pair on ties.
+    let mut mi = usize::MAX;
+    let mut mj = usize::MAX;
+    let mut best_cost = u128::MAX;
+    for i in 0..k {
+      if acc.wn[i] == 0 || i == s {
+        continue;
+      }
+      for j in i + 1..k {
+        if acc.wn[j] == 0 || j == s {
+          continue;
+        }
+        let ni = acc.wn[i] as u128;
+        let nj = acc.wn[j] as u128;
+        let d = pdist_lab(soa.labs[i], soa.alpha[i], soa.labs[j], soa.alpha[j]).max(0) as u128;
+        // n_i·n_j ≤ ~1.8e19 (2·u32-max counts) and d ≤ ~1.4e9, so the cost
+        // stays far inside u128.
+        let cost = ni * nj / (ni + nj) * d;
+        if cost < best_cost {
+          best_cost = cost;
+          mi = i;
+          mj = j;
+        }
+      }
+    }
+    if mi == usize::MAX {
+      break; // fewer than two live clusters besides s — no merge possible
+    }
+
+    // Widest-variance channel of s: per-channel Σ w·(x−mean)² computed
+    // exactly as (Σwx²·n − (Σwx)²)/n (Cauchy–Schwarz keeps it ≥ 0). Alpha's
+    // contribution is scaled by ALPHA_WEIGHT_LAB — its weight in `pdist` —
+    // so the comparison is in objective units. Lowest channel index on ties.
+    let ns = acc.wn[s] as i128;
+    let nsu = ns as u128;
+    let chan_sse = [
+      (acc.sl2[s] * ns - acc.sl[s] * acc.sl[s]) / ns,
+      (acc.sca2[s] * ns - acc.sca[s] * acc.sca[s]) / ns,
+      (acc.scb2[s] * ns - acc.scb[s] * acc.scb[s]) / ns,
+      ((acc.sal2[s] * nsu - acc.sal[s] as u128 * acc.sal[s] as u128) / nsu) as i128
+        * ALPHA_WEIGHT_LAB as i128,
+    ];
+    let mut ch = 0usize;
+    for c in 1..4 {
+      if chan_sse[c] > chan_sse[ch] {
+        ch = c;
+      }
+    }
+    let (ch_sum, ch_val): (i128, &dyn Fn(usize) -> i128) = match ch {
+      0 => (acc.sl[s], &|ei: usize| entry_labs[ei].l as i128),
+      1 => (acc.sca[s], &|ei: usize| entry_labs[ei].a as i128),
+      2 => (acc.scb[s], &|ei: usize| entry_labs[ei].b as i128),
+      _ => (acc.sal[s] as i128, &|ei: usize| entry_alphas[ei] as i128),
+    };
+
+    // Partition s's members at the weighted mean — `val·n <= Σwx` compares
+    // against the TRUE mean without a rounding division.
+    let members_s: Vec<usize> = (0..entries.len())
+      .filter(|&ei| assign[ei] as usize == s)
+      .collect();
+    if members_s.len() < 2 {
+      break; // a singleton cluster cannot split
+    }
+    let mut child_a: Vec<usize> = Vec::new();
+    let mut child_b: Vec<usize> = Vec::new();
+    for &ei in &members_s {
+      if ch_val(ei) * ns <= ch_sum {
+        child_a.push(ei);
+      } else {
+        child_b.push(ei);
+      }
+    }
+    if child_a.is_empty() || child_b.is_empty() {
+      // Degenerate mean partition (every member shares the channel value):
+      // split off the highest-residual member — lowest packed color on ties —
+      // so the split still targets the worst-fit color.
+      let centroid = Lab {
+        l: idiv_round(acc.sl[s], ns) as i32,
+        a: idiv_round(acc.sca[s], ns) as i32,
+        b: idiv_round(acc.scb[s], ns) as i32,
+      };
+      let centroid_a = ((acc.sal[s] + acc.wn[s] / 2) / acc.wn[s]) as u8;
+      let mut worst = usize::MAX;
+      let mut worst_d = -1i64;
+      for &ei in &members_s {
+        let d = pdist_lab(entry_labs[ei], entry_alphas[ei], centroid, centroid_a);
+        if worst == usize::MAX
+          || d > worst_d
+          || (d == worst_d && packed(entries[ei].color) < packed(entries[worst].color))
+        {
+          worst = ei;
+          worst_d = d;
+        }
+      }
+      child_b.clear();
+      child_b.push(worst);
+      child_a = members_s
+        .iter()
+        .copied()
+        .filter(|&ei| ei != worst)
+        .collect();
+    }
+
+    // Weighted Lab-mean centroid of a member set (same update the Lloyd pass
+    // uses: Lab mean via lab_to_rgb8, separate round-nearest alpha mean).
+    let centroid_of = |members: &[usize]| -> RGBA8 {
+      let mut sl = 0i128;
+      let mut sca = 0i128;
+      let mut scb = 0i128;
+      let mut sal = 0u64;
+      let mut n = 0u64;
+      for &ei in members {
+        let c = entries[ei].count;
+        let ci = c as i128;
+        sl += entry_labs[ei].l as i128 * ci;
+        sca += entry_labs[ei].a as i128 * ci;
+        scb += entry_labs[ei].b as i128 * ci;
+        sal += entry_alphas[ei] as u64 * c;
+        n += c;
+      }
+      let ni = n as i128;
+      let (r, g, b) = lab_to_rgb8(Lab {
+        l: idiv_round(sl, ni) as i32,
+        a: idiv_round(sca, ni) as i32,
+        b: idiv_round(scb, ni) as i32,
+      });
+      RGBA8 {
+        r,
+        g,
+        b,
+        a: ((sal + n / 2) / n) as u8,
+      }
+    };
+
+    // Merged pair's centroid = the moment-mean of the union.
+    let nij = acc.wn[mi] + acc.wn[mj];
+    let niji = nij as i128;
+    let (mr, mg, mb) = lab_to_rgb8(Lab {
+      l: idiv_round(acc.sl[mi] + acc.sl[mj], niji) as i32,
+      a: idiv_round(acc.sca[mi] + acc.sca[mj], niji) as i32,
+      b: idiv_round(acc.scb[mi] + acc.scb[mj], niji) as i32,
+    });
+    let merged = RGBA8 {
+      r: mr,
+      g: mg,
+      b: mb,
+      a: ((acc.sal[mi] + acc.sal[mj] + nij / 2) / nij) as u8,
+    };
+
+    // K-preserving move: merged pair on `mi`, split child A on `s`, split
+    // child B on the freed merge slot `mj`.
+    let mut cand: Vec<RGBA8> = palette.to_vec();
+    cand[mi] = merged;
+    cand[s] = centroid_of(&child_a);
+    cand[mj] = centroid_of(&child_b);
+
+    // Refit: two Lloyd passes with kmeans_refine's own keep-best guard (and
+    // its D² reseed if the move emptied a cluster), then the same strict-
+    // improvement adoption the outer keep-best accounting uses.
+    kmeans_refine(&mut cand, entries, 2);
+    let cand_obj = kmeans_objective(&cand, entries, &entry_labs, &entry_alphas);
+    if cand_obj < cur_obj {
+      palette.copy_from_slice(&cand);
+    } else {
+      break; // rejected — the deterministic move would repeat identically
+    }
+  }
+}
+
 /// Nearest-color remap with a per-color memoization cache (no dithering).
 fn remap_nearest(px: &[RGBA8], palette: &[RGBA8], bits: u8) -> Vec<u8> {
   // Palette Labs cached once (SoA); the per-color cache only computes `rgb_to_lab`
@@ -2778,6 +3138,9 @@ fn quantize_pass(
   // k-means must see the uncapped importance weights (never the capped copy)
   // so centroids and D² reseeding reflect the real weighted histogram.
   kmeans_refine(&mut palette, &input.cluster, kmeans_iters);
+  // Bounded split–merge escapes Lloyd local optima; `kmeans_iters` bounds the
+  // rounds (0 → skipped entirely, keeping the max-speed path byte-identical).
+  split_merge_refine(&mut palette, &input.cluster, kmeans_iters);
 
   if reserve {
     // Clustering above only saw a>0 colors, so no centroid is transparent;
@@ -3934,6 +4297,177 @@ mod tests {
     assert_eq!(
       palette, palette2,
       "nearest-live reseed must be deterministic"
+    );
+  }
+
+  // ---- Split-merge refinement tests ----
+
+  /// Helper: build the cached Lab/alpha arrays `kmeans_objective` wants.
+  fn obj_of(palette: &[RGBA8], entries: &[ColorCount]) -> u128 {
+    let entry_labs: Vec<Lab> = entries
+      .iter()
+      .map(|e| rgb_to_lab(e.color.r, e.color.g, e.color.b))
+      .collect();
+    let entry_alphas: Vec<u8> = entries.iter().map(|e| e.color.a).collect();
+    kmeans_objective(palette, entries, &entry_labs, &entry_alphas)
+  }
+
+  /// Four tight, well-separated color blobs — the fixture for the split-merge
+  /// tests. Each blob is 3 near-identical colors at ~1k px each.
+  fn four_blobs() -> Vec<ColorCount> {
+    make_entries(&[
+      (rgba(10, 10, 10, 255), 1000),
+      (rgba(12, 10, 10, 255), 1000),
+      (rgba(10, 12, 10, 255), 1000),
+      (rgba(240, 240, 240, 255), 1000),
+      (rgba(242, 240, 240, 255), 1000),
+      (rgba(240, 242, 240, 255), 1000),
+      (rgba(10, 240, 10, 255), 1000),
+      (rgba(12, 240, 10, 255), 1000),
+      (rgba(10, 242, 10, 255), 1000),
+      (rgba(240, 10, 240, 255), 1000),
+      (rgba(240, 12, 240, 255), 1000),
+      (rgba(242, 10, 240, 255), 1000),
+    ])
+  }
+
+  #[test]
+  fn split_merge_recovers_missing_blob() {
+    // The mechanism end-to-end: a K=4 palette with a DUPLICATED green center
+    // leaves the magenta blob uncovered — one cluster carries a huge internal
+    // SSE while two centers sit on the same blob. Split-merge must merge the
+    // duplicate pair and split the worst cluster, strictly improving the
+    // objective (and in practice covering all four blobs).
+    let entries = four_blobs();
+    let green = rgba(11, 240, 10, 255);
+    let mut palette = vec![
+      rgba(11, 11, 11, 255),    // dark blob
+      rgba(241, 241, 241, 255), // light blob
+      green,
+      green, // duplicate — magenta blob has no center
+    ];
+    let before = obj_of(&palette, &entries);
+    split_merge_refine(&mut palette, &entries, 4);
+    let after = obj_of(&palette, &entries);
+    assert!(
+      after < before,
+      "split-merge must strictly improve the stalled objective: {before} -> {after}; \
+       palette={palette:?}"
+    );
+    // Palette length is preserved exactly (K-preserving move).
+    assert_eq!(palette.len(), 4);
+    // Every blob now has a dedicated center within a few LSBs.
+    for target in [
+      rgba(11, 11, 11, 255),
+      rgba(241, 241, 241, 255),
+      rgba(11, 240, 11, 255),
+      rgba(241, 11, 241, 255),
+    ] {
+      let tl = rgb_to_lab(target.r, target.g, target.b);
+      let covered = palette.iter().any(|&c| {
+        let cl = rgb_to_lab(c.r, c.g, c.b);
+        (cl.l - tl.l).abs() <= 300 && (cl.a - tl.a).abs() <= 300 && (cl.b - tl.b).abs() <= 300
+      });
+      assert!(
+        covered,
+        "blob {target:?} has no nearby center in {palette:?}"
+      );
+    }
+  }
+
+  #[test]
+  fn split_merge_never_worsens_objective() {
+    // Post-condition: on ANY input the refine returns a palette whose
+    // objective is <= the input's (it only ever adopts strict improvements).
+    // Exercise it on a noisy LCG-generated entry set (varied alphas too).
+    let mut g = Lcg(0xBADC0FFEE);
+    let mut items = Vec::new();
+    for _ in 0..24 {
+      let c = rgba(g.byte(), g.byte(), g.byte(), 32 + (g.byte() % 224));
+      items.push((c, 1 + (g.next_u32() % 4096) as u64));
+    }
+    let entries = make_entries(&items);
+    let seed = median_cut(&entries, 6, None);
+    let mut palette = seed.clone();
+    kmeans_refine(&mut palette, &entries, 4);
+    let before = obj_of(&palette, &entries);
+    let mut refined = palette.clone();
+    split_merge_refine(&mut refined, &entries, 4);
+    let after = obj_of(&refined, &entries);
+    assert!(
+      after <= before,
+      "split-merge must never worsen the objective: {before} -> {after}"
+    );
+    assert_eq!(
+      refined.len(),
+      palette.len(),
+      "palette size must be preserved"
+    );
+  }
+
+  #[test]
+  fn split_merge_is_deterministic_and_shard_invariant() {
+    // Same input must produce byte-identical output across calls AND across
+    // shard counts (all merges are integer adds; assign is a pure function).
+    let entries = four_blobs();
+    let seed = vec![
+      rgba(11, 11, 11, 255),
+      rgba(241, 241, 241, 255),
+      rgba(11, 240, 10, 255),
+      rgba(200, 30, 200, 255), // dead-ish slot near magenta but not on it
+    ];
+    let mut palettes: Vec<Vec<RGBA8>> = Vec::new();
+    for t in [1usize, 2, 4] {
+      let mut p = seed.clone();
+      shard_override::with(t, || split_merge_refine(&mut p, &entries, 4));
+      let mut again = seed.clone();
+      shard_override::with(t, || split_merge_refine(&mut again, &entries, 4));
+      assert_eq!(p, again, "T={t}: same-T runs diverged");
+      palettes.push(p);
+    }
+    for (i, p) in palettes.iter().enumerate().skip(1) {
+      assert_eq!(&palettes[0], p, "T={} differs from T=1", [1usize, 2, 4][i]);
+    }
+  }
+
+  #[test]
+  fn split_merge_iters_zero_is_noop() {
+    // iters == 0 is the max-speed config: no refinement at all, so the
+    // palette must come out byte-identical.
+    let entries = four_blobs();
+    let seed = vec![
+      rgba(11, 11, 11, 255),
+      rgba(241, 241, 241, 255),
+      rgba(11, 240, 10, 255),
+      rgba(240, 10, 240, 255),
+    ];
+    let mut p = seed.clone();
+    split_merge_refine(&mut p, &entries, 0);
+    assert_eq!(p, seed, "iters==0 must not touch the palette");
+  }
+
+  #[test]
+  fn split_merge_already_optimal_palette_stays() {
+    // A palette that already covers every blob exactly has ~zero internal SSE;
+    // the pass must leave it byte-identical (adoption requires STRICT
+    // improvement, and an all-zero-SSE scan breaks before any move).
+    let entries = make_entries(&[
+      (rgba(11, 11, 11, 255), 1000),
+      (rgba(241, 241, 241, 255), 1000),
+      (rgba(11, 240, 11, 255), 1000),
+      (rgba(241, 11, 241, 255), 1000),
+    ]);
+    let seed = vec![
+      rgba(11, 11, 11, 255),
+      rgba(241, 241, 241, 255),
+      rgba(11, 240, 11, 255),
+      rgba(241, 11, 241, 255),
+    ];
+    let mut p = seed.clone();
+    split_merge_refine(&mut p, &entries, 4);
+    assert_eq!(
+      p, seed,
+      "an exactly-covering palette must survive split-merge unchanged"
     );
   }
 
