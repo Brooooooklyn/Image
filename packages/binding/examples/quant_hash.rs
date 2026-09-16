@@ -1,10 +1,19 @@
-//! Byte-identity harness for the quantizer: prints an FNV-1a-64 hash of
-//! `quantize_rgba`'s output (palette + indices + quality) for the repo fixture
-//! across a fixed matrix of configs, plus a synthetic translucent variant that
-//! exercises the non-opaque `nearest_lab` path.
+//! Byte-identity + quality harness for the quantizer.
+//!
+//! Per config it prints:
+//!   * an FNV-1a-64 hash of `quantize_rgba` output (palette + indices + quality)
+//!     — identical hash across two checkouts == byte-identical output;
+//!   * `quality` (the internal gate score — only comparable within one build);
+//!   * `cover` — fixed-metric palette coverage: count-weighted mean over the
+//!     distinct posterized colors of dist2(color, NEAREST palette entry) with
+//!     dist2 = dr²+dg²+db²+3·da² (plain RGBA, no internal-metric dependence, so
+//!     it IS comparable across commits that change the working color space);
+//!   * `repro` — count-weighted mean dist2(posterized src, palette[indices[i]])
+//!     over pixels (per-pixel reproduction error incl. dither; lower is better).
 //!
 //! Run: `cargo run -p napi_rs_image --example quant_hash --no-default-features --release`
-//! Identical output across two checkouts == byte-identical quantizer output.
+
+use std::collections::HashMap;
 
 use image::ImageFormat;
 use napi_rs_image::{QuantizeConfig, quantize_rgba};
@@ -28,6 +37,15 @@ fn fnv(data: &[u8]) -> u64 {
   h
 }
 
+/// Fixed comparison metric: plain RGBA squared distance with alpha ×3.
+fn d2(p: RGBA8, q: RGBA8) -> i64 {
+  let dr = p.r as i64 - q.r as i64;
+  let dg = p.g as i64 - q.g as i64;
+  let db = p.b as i64 - q.b as i64;
+  let da = p.a as i64 - q.a as i64;
+  dr * dr + dg * dg + db * db + 3 * da * da
+}
+
 fn run(name: &str, px: &[RGBA8], w: usize, h: usize, cfg: &QuantizeConfig) {
   let out = quantize_rgba(px, w, h, cfg);
   let mut buf = Vec::with_capacity(out.palette.len() * 4 + out.indices.len() + 1);
@@ -36,7 +54,40 @@ fn run(name: &str, px: &[RGBA8], w: usize, h: usize, cfg: &QuantizeConfig) {
   }
   buf.extend_from_slice(&out.indices);
   buf.push(out.quality);
-  println!("{name:<28} {:016x}  (palette={}, quality={})", fnv(&buf), out.palette.len(), out.quality);
+
+  // Distinct-color histogram of the source (visible only) for the metrics.
+  let mut hist: HashMap<RGBA8, u64> = HashMap::new();
+  for &p in px {
+    if p.a > 0 {
+      *hist.entry(p).or_insert(0) += 1;
+    }
+  }
+  // cover: each distinct color's distance to its NEAREST palette entry.
+  let mut cover_num = 0f64;
+  let mut repro_num = 0f64;
+  let mut n = 0f64;
+  for (&c, &cnt) in &hist {
+    let mut best = i64::MAX;
+    for &e in &out.palette {
+      best = best.min(d2(c, e));
+    }
+    cover_num += cnt as f64 * best as f64;
+    n += cnt as f64;
+  }
+  // repro: per-pixel distance to the chosen entry.
+  for (i, &p) in px.iter().enumerate() {
+    if p.a > 0 {
+      repro_num += d2(p, out.palette[out.indices[i] as usize]) as f64;
+    }
+  }
+  println!(
+    "{name:<28} {:016x}  pal={:<3} q={:<3} cover={:<9.1} repro={:<9.1}",
+    fnv(&buf),
+    out.palette.len(),
+    out.quality,
+    cover_num / n.max(1.0),
+    repro_num / n.max(1.0)
+  );
 }
 
 fn main() {
@@ -47,9 +98,7 @@ fn main() {
   let mut pxa = px.clone();
   for (i, p) in pxa.iter_mut().enumerate() {
     let x = i % w;
-    let y = i / w;
     p.a = if x < w / 3 { 0 } else { (64 + (x * 191 / w)) as u8 };
-    let _ = y;
   }
 
   let cases: &[(&str, QuantizeConfig)] = &[
