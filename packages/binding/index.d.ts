@@ -601,6 +601,15 @@ export interface PngQuantOptions {
    * default: unset (palette size is derived from `maxQuality`)
    */
   colors?: number
+  /**
+   * Use the zopfli deflater for the final oxipng re-encode instead of
+   * libdeflater: much slower, slightly smaller output. Changes the output
+   * bytes vs the default path (still lossless; deterministic for a fixed
+   * zopfli version). Requires the `png_quantize_zopfli` cargo feature —
+   * passing true without it returns an InvalidArg error.
+   * Default: `false`
+   */
+  useZopfli?: boolean
 }
 
 export declare enum PngRowFilter {

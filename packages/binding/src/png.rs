@@ -226,6 +226,13 @@ pub struct PngQuantOptions {
   /// ramp; `minQuality` still applies.
   /// default: unset (palette size is derived from `maxQuality`)
   pub colors: Option<u32>,
+  /// Use the zopfli deflater for the final oxipng re-encode instead of
+  /// libdeflater: much slower, slightly smaller output. Changes the output
+  /// bytes vs the default path (still lossless; deterministic for a fixed
+  /// zopfli version). Requires the `png_quantize_zopfli` cargo feature —
+  /// passing true without it returns an InvalidArg error.
+  /// Default: `false`
+  pub use_zopfli: Option<bool>,
 }
 
 #[napi]
@@ -308,6 +315,17 @@ fn validate_png_quant_options(o: &PngQuantOptions) -> Result<()> {
     return Err(Error::new(
       Status::InvalidArg,
       format!("colors must be between 1 and 256, got {colors}"),
+    ));
+  }
+  // `useZopfli` needs `Deflater::Zopfli`, which only exists when `oxipng/zopfli`
+  // is compiled in (via `png_quantize_zopfli` or `oxipng_libdeflater`). Fail
+  // loudly at validation time — before the decode/quantize work — rather than
+  // silently falling back to libdeflater.
+  #[cfg(not(any(feature = "png_quantize_zopfli", feature = "oxipng_libdeflater")))]
+  if o.use_zopfli == Some(true) {
+    return Err(Error::new(
+      Status::InvalidArg,
+      "useZopfli requires the `png_quantize_zopfli` cargo feature (enables oxipng/zopfli)",
     ));
   }
   Ok(())
@@ -401,7 +419,15 @@ fn png_quantize_inner(input: &[u8], options: &PngQuantOptions) -> Result<Vec<u8>
     grayscale_reduction: true,
     idat_recoding: true,
     strip: oxipng::StripChunks::Safe,
-    deflater: oxipng::Deflater::Libdeflater { compression: 12 },
+    // `useZopfli` (validated above) selects the zopfli deflater — much slower,
+    // slightly smaller; deterministic for a fixed zopfli version but changes
+    // output bytes vs libdeflater. When no zopfli-enabling feature is compiled
+    // in the arm is cfg'd out and validation already rejected `useZopfli: true`.
+    deflater: match options.use_zopfli {
+      #[cfg(any(feature = "png_quantize_zopfli", feature = "oxipng_libdeflater"))]
+      Some(true) => oxipng::Deflater::Zopfli(oxipng::ZopfliOptions::default()),
+      _ => oxipng::Deflater::Libdeflater { compression: 12 },
+    },
     ..Default::default()
   };
   let final_png = match oxipng::optimize_from_memory(&output, &opts) {

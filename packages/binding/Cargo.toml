@@ -30,6 +30,12 @@ default            = ["binding", "oxipng/parallel"]
 binding            = []
 logo               = []
 oxipng_libdeflater = ["oxipng/zopfli", "oxipng/parallel"]
+# Opt-in: lets `PngQuantOptions::use_zopfli` select oxipng's zopfli deflater for
+# the final re-encode — much slower, slightly smaller output. Not in `default`:
+# it pulls in the zopfli crate and inflates encode time/binary size for a
+# marginal win. (`oxipng_libdeflater` also enables `oxipng/zopfli`, so the Rust
+# cfg accepts either feature.)
+png_quantize_zopfli = ["oxipng/zopfli"]
 with_simd          = ["mozjpeg-sys/nasm_simd_parallel_build"]
 
 [dependencies]
