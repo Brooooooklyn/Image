@@ -649,6 +649,53 @@ jobs:
       - name: cargo test
         run: cargo test -p napi_rs_image --no-default-features
 
+  test-rust-binding-asan:
+    name: Unit test binding under AddressSanitizer (cargo +nightly test)
+    runs-on: ${{ matrix.host }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Real x86_64: exercises the SSE4.1/AVX2 (and AVX-512 where the runner
+          # silicon has it) quantizer kernels' unaligned loads under ASan.
+          - host: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          # Real aarch64 Linux: exercises the NEON kernels under ASan. (macOS
+          # can't do this — hardened rustc ignores DYLD_INSERT_LIBRARIES, so
+          # instrumented proc-macro dylibs abort the build there.)
+          - host: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v7
+      - name: Setup nasm
+        uses: ilammy/setup-nasm@v1
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: rust-unit-test-asan-${{ matrix.target }}
+      # -Zsanitizer=address must apply to TARGET units only: instrumented
+      # proc-macro dylibs cannot load into the non-instrumented rustc process.
+      # `-Ztarget-applies-to-host` + `host.target-applies-to-host=false` splits
+      # the flag scopes so build-deps compile uninstrumented while the test
+      # binary is fully checked.
+      - name: cargo test (ASan)
+        run: |
+          cargo -Ztarget-applies-to-host test -p napi_rs_image --no-default-features --lib \
+            --target ${{ matrix.target }} \
+            --config 'target.${{ matrix.target }}.rustflags=["-Zsanitizer=address"]' \
+            --config 'host.target-applies-to-host=false'
+        env:
+          ASAN_OPTIONS: 'detect_leaks=1'
+
   benchmark:
     name: Benchmark pngQuantize (CodSpeed)
     runs-on: ubuntu-latest

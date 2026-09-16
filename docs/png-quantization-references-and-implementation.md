@@ -536,3 +536,13 @@ host (`avx512f/bw/dq/vl/vnni`, later resized to `standard-4` / 4 vCPU):
 This also unblocked the AVX-512F kernels (`4f99878`), which the doc previously
 rejected as unverifiable. Runtime detection keeps non-AVX-512 hosts on the
 AVX2/SSE4.1/scalar ladder, so the addition carries no correctness risk.
+
+The same sandbox also ran the suite under `-Zsanitizer=address` (nightly):
+**100/100 clean on x86_64** — every unaligned SIMD load in the SSE4.1/AVX2/
+AVX-512 kernels checked. On aarch64 the binding's own `cargo +nightly test`
+passes 97/97 under ASan on macOS (NEON path). Because ASan-instrumented
+proc-macro dylibs cannot load into the non-instrumented rustc host, the run
+uses cargo's `-Ztarget-applies-to-host` + `host.target-applies-to-host=false`
+split so only target units carry the instrumentation; CI repeats this on
+`ubuntu-latest` (x86_64) and `ubuntu-24.04-arm` (aarch64/NEON) — see the
+`test-rust-binding-asan` matrix job.
