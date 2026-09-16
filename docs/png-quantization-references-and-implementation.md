@@ -471,10 +471,11 @@ comparable across working-space changes).
    7/3/5/1 taps: the published 256-entry intensity-indexed 3-tap table
    (mirrored per the paper's symmetry), indexed by integer Rec.601 luma of the
    current `want`, serpentine-mirrored. f32 coefficients, normalized rows.
-6. **Palette merge-down** (`QuantizeConfig.merge_down`, ramp-derived sizes
-   only — an explicit `colors` request is a hard contract): merges the
+6. **Palette merge-down** (`PngQuantOptions.mergeDown`, opt-in, ramp-derived
+   sizes only — an explicit `colors` request is a hard contract): merges the
    cheapest Ward-cost pair while `quality ≥ min_quality + 2`, ≤ 8 steps,
-   recomputes indices wholesale.
+   recomputes indices wholesale. Costs extra remap+score passes, so it is off
+   by default — meaningful when real content is far below the derived size.
 
 ### 10d. API & encoding
 
@@ -482,27 +483,36 @@ comparable across working-space changes).
   the `maxQuality` ramp; `minQuality` gate unchanged.
 - `PngQuantOptions.useZopfli?: boolean` — opt-in zopfli deflater for the final
   oxipng pass (Cargo feature `png_quantize_zopfli`; `true` without it errors).
+- `PngQuantOptions.mergeDown?: boolean` — opt-in palette merge-down (§10c.6).
 - The throwaway intermediate lodepng encode runs at compression level 1 with
   auto-convert disabled — its DEFLATE output is almost always discarded under
   oxipng anyway.
 
-### 10e. Measured (1024×681 photo, Apple Silicon)
+### 10e. Measured (1024×681 photo, Apple Silicon, criterion 100 samples)
 
 ```
-              baseline  wave-2   notes
-default        ~433ms   ~207ms   (see merge-down note: opt-in cost)
-colors/256     ~435ms   ~208ms   ~2.1x
-no_dither/256  ~365ms   ~166ms   ~2.2x
-colors/16      ~280ms   ~143ms   ~2.0x
+                     baseline  byte-identical+par.  final (all quality work)
+default               ~433ms        ~207ms            ~285ms   (~1.5x)
+max_quality_75        ~382ms        ~188ms            ~268ms   (~1.4x)
+colors/16             ~280ms        ~143ms            ~172ms   (~1.6x)
+colors/64             ~328ms        ~161ms            ~230ms   (~1.4x)
+colors/256            ~435ms        ~208ms            ~306ms   (~1.4x)
+no_dither/256         ~365ms        ~166ms            ~197ms   (~1.9x)
+default_merge_down       —             —              ~418ms   (opt-in: ≈baseline,
+                                                              buys ~8 fewer slots)
 ```
+
+The middle column is the byte-identical state (LUTs + fast hashing + fused
+k-means + deterministic parallelism) on the pre-Oklab CIELAB metric — ~2.1x
+with zero output change. The final column carries the quality commits: Oklab
+conversion+recalibrated kernels, importance weighting, split-merge refinement,
+and Ostromoukhov cost real CPU for measurably better output (`repro` −6–32%).
 
 The Oklab u16 (Q16, scale 65535) quantization's worst-case ΔE² (4.29e9
 in-gamut; 3·65535² ≈ 1.29e10 over the stored domain) exceeded i32::MAX and
 temporarily forced f64 lanes on the opaque kernel; rescaling the working space
 to Q14 (16383) restores the i32 kernels unconditionally — `3·16383² =
 805_208_067 < i32::MAX` for ANY two stored triples, compile-time asserted in
-`lab.rs`. Measured on this machine (criterion, 100 samples): default
-665.6 → 371.3ms (−44%), max_quality_75 467.0 → 317.2ms (−32%), colors/256
-359.6 → 240.1ms (−33%), no_dither/256 274.4 → 199.1ms (−27%), colors/64
-205.4 → 178.7ms (−13%), colors/16 146.6 → 141.5ms (−3.5%). The sRGB→linear
-lookup table stays Q16 — only the stored Oklab components are Q14.
+`lab.rs`. Q16→Q14 measured on this machine: default −44%, max_quality_75 −32%,
+colors/256 −33%, no_dither/256 −27%, colors/64 −13%, colors/16 −3.5%. The
+sRGB→linear lookup table stays Q16 — only the stored Oklab components are Q14.

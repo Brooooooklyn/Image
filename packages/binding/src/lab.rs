@@ -474,6 +474,39 @@ mod tests {
     }
   }
 
+  /// Cross-platform determinism pin: `f32::cbrt` is the only non-exact op in the
+  /// forward map (it lowers to the platform libm). Hash the quantized triples of
+  /// a dense sRGB sweep — every color at multiples of 5 (52³ ≈ 140k colors), FNV-1a
+  /// over the (l,a,b) i32 triples — so a 1-ulp `cbrt` divergence on any platform
+  /// flips a component here and fails loudly instead of silently changing output
+  /// bytes. If this fails after a *source* change, recompute the constant and
+  /// audit the diff.
+  #[test]
+  fn dense_sweep_hash_pin() {
+    let mut h = 0xcbf29ce484222325u64;
+    let mut r = 0u16;
+    while r <= 255 {
+      let mut g = 0u16;
+      while g <= 255 {
+        let mut b = 0u16;
+        while b <= 255 {
+          let lab = rgb_to_oklab(r as u8, g as u8, b as u8);
+          for v in [lab.l, lab.a, lab.b] {
+            h ^= v as u64;
+            h = h.wrapping_mul(0x100000001b3);
+          }
+          b += 5;
+        }
+        g += 5;
+      }
+      r += 5;
+    }
+    assert_eq!(
+      h, 5501793295779600387u64,
+      "Oklab forward-map drifted on this platform"
+    );
+  }
+
   /// Sign / monotonicity sanity matching the reference table.
   #[test]
   fn sign_and_monotonicity_sanity() {
