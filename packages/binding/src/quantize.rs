@@ -2363,68 +2363,101 @@ fn diffuse(row: &mut [[f32; 4]], x: isize, factor: f32, err: &[f32; 4]) {
   }
 }
 
-/// Computes achieved quality in `0..=100` from the alpha-weighted RMSE between
-/// the quantizer's *input* pixels and their remapped palette colors.
+/// Divisor inside the quality curve `100 / (1 + rmse / D)`, calibrated to the
+/// PERCEPTUAL [`pdist_lab`] metric the score now sums (see [`quality_score`]).
 ///
-/// Quality measures how faithfully the palette reproduces the image the
-/// quantizer was actually asked to represent — i.e. the **posterized** pixels.
-/// Posterization is an explicit, user-requested lossy reduction (a no-op when
-/// `bits == 0`), so its error is deliberately excluded from the gate: a result
-/// that exactly reproduces the posterized image scores 100, and any *further*
-/// quantization error drives the score below 100. The mapping is a
-/// monotonically-decreasing heuristic for the `min_quality` gate, not a match to
-/// any external metric.
+/// `pdist_lab` for a pair of opaque colors is squared CIE76 ΔE in (×100)² units,
+/// so `rmse` runs ~`100·ΔE_rms`. Measured on the bundled photographic fixture:
+/// the 251-color default sums to `rmse ≈ 180` (mean ΔE ≈ 1.8), 64 colors ≈ 281,
+/// 16 colors ≈ 456. `D == 2048` maps those to scores 92 / 88 / 82 — almost
+/// exactly the operating points the old RGB-`dist2`/`64` curve produced (92 /
+/// 88 / 79), so the default `min_quality` gate at 70 keeps its meaning: the
+/// default reduction still lands ~92, well clear, while a genuinely thin
+/// palette falls off smoothly. A round power of two in the right band; the
+/// curve is a monotonically-decreasing heuristic for the `min_quality` gate,
+/// not a match to any external metric.
+const QUALITY_RMSE_DIVISOR: f64 = 2048.0;
+
+/// Computes achieved quality in `0..=100` as the population-weighted RMS of the
+/// PERCEPTUAL NEAREST-REMAP error: for each distinct visible posterized color,
+/// `pdist` to its nearest palette entry, weighted by its true population.
 ///
-/// Only *visible* (`a > 0`) pixels are scored. Fully-transparent pixels map to
-/// the exact transparent slot (zero error) but are arbitrarily numerous in a
-/// sprite/icon with a large transparent canvas; counting them in the denominator
-/// would dilute the visible-region error and let a badly-quantized icon pass the
-/// gate. An all-transparent image is lossless, so it scores 100.
-fn quality_score(px: &[RGBA8], bits: u8, palette: &[RGBA8], indices: &[u8]) -> u8 {
-  // Integer accumulator: every `dist2` term is a non-negative `i64` ≤ ~390150,
-  // and `n` ≤ pixel count ≤ 2^32, so the exact sum < 2^53 — the old `f64`
-  // accumulator was already exact for every real input, so summing in `u64` and
-  // converting once yields the IDENTICAL `mse` (and keeps the door open for
-  // deterministic parallelism later).
-  //
+/// # Why the nearest remap and not the emitted indices
+///
+/// The score answers the question the `min_quality` gate actually asks — "how
+/// well does this palette cover the image's color distribution?" The OLD metric
+/// measured `dist2(posterized_src, palette[indices[i]])` over the EMITTED
+/// indices, which the dithered remap deliberately fills with OFF-nearest picks:
+/// Floyd–Steinberg trades per-pixel exactness for local-mean accuracy, so
+/// scoring the dithered indices systematically penalizes the dither itself and
+/// could push a perfectly good pass below `min_quality`, triggering the
+/// 256-color retry for no real defect. Under the nearest-remap metric a
+/// non-dithered output's score IS its true reproduction error (the remap
+/// resolves every color to its argmin), and a dithered output is scored on the
+/// palette's coverage — the quantity the gate should protect.
+///
+/// # Why over `entries`
+///
+/// `entries` holds exactly the distinct posterized source colors a remap can
+/// resolve (canonical keys, `a > 0` only), each with its true pixel population,
+/// so `Σ count·pdist(nearest)` over entries IS the per-pixel sum — identical
+/// value for `O(distinct)` argmins instead of `O(pixels)`, and shardable over
+/// the entry range. Posterization stays an explicit user-requested reduction:
+/// it is already folded into the keys, so a result reproducing the posterized
+/// image exactly still scores 100.
+///
+/// The metric is the same [`pdist_lab`] the assignment/remap paths minimize,
+/// with the final-remap visibility guard DISABLED (`guard == 0`): dim/vanish
+/// penalties shape WHICH entry a visible pixel prefers, they are not a fidelity
+/// term, so scoring is pure `pdist`. The reserved transparent slot is excluded
+/// for every entry via `skip_transparent = color.a > 0` — a visible color must
+/// never be scored against the transparent slot.
+///
+/// Only *visible* (`a > 0`) colors are scored — `entries` contains nothing
+/// else. Fully-transparent pixels map to the exact transparent slot (zero
+/// error) but are arbitrarily numerous in a sprite/icon with a large
+/// transparent canvas; counting them would dilute the visible-region error and
+/// let a badly-quantized icon pass the gate. An all-transparent image has no
+/// entries and is lossless, so it scores 100.
+fn quality_score(entries: &[ColorCount], palette: &[RGBA8]) -> u8 {
+  let soa = PaletteLabSoa::from_palette(palette);
+  let kernel = quantize_simd::detect();
   // Sharded: each shard returns a `(sum_err, n, lossless)` triple over its
-  // contiguous pixel range; the partials merge in shard order via `u64` add
-  // and `&&` — associative and commutative, so the merged triple is identical
-  // for ANY shard count and the serial loop is the T == 1 case of this body.
-  let shards = shard_count(px.len(), PAR_MIN_PIXELS);
-  let partials = shard_reduce(px.len(), shards, |s, e| {
+  // contiguous entry range; the partials merge in shard order via saturating
+  // `u64` add and `&&` — associative and commutative, so the merged triple is
+  // identical for ANY shard count and the serial loop is the T == 1 case of
+  // this body.
+  let shards = shard_count(entries.len(), PAR_MIN_ENTRIES);
+  let partials = shard_reduce(entries.len(), shards, |s, e| {
     let mut sum_err = 0u64;
     let mut n = 0u64;
-    // Exact-lossless flag: stays true only while every visible pixel's chosen
-    // palette color is BYTE-IDENTICAL to its reference. The accumulated `dist2`
-    // alone cannot decide losslessness because `dist2` truncates the
-    // alpha-weighted RGB term with integer division (`* wa / 510`): for a < 255 a
-    // 1-LSB near-opaque RGB difference floors to 0, so a genuinely lossy remap can
-    // accumulate zero error and would otherwise report 100. Equality here is exact
-    // (no float, no `dist2`), so the score==100 verdict means true byte-identity.
-    // The shard flag is AND-ed into the global one below — `lossless` is a pure
-    // per-pixel predicate, so AND-ing in any order gives the same verdict.
+    // Exact-lossless flag: stays true only while every visible posterized color
+    // resolves to a BYTE-IDENTICAL palette entry. `pdist_lab` cannot see that
+    // distinction on its own: two DIFFERENT RGBA8 colors can share one fixed-point
+    // Lab (or differ only where `de·wa/510` truncates), so a genuinely lossy remap
+    // could accumulate zero error and would otherwise report 100. Equality here is
+    // exact (no float, no metric), so the score==100 verdict means true
+    // byte-identity. AND-ing shard flags in any order gives the same verdict.
     let mut lossless = true;
-    for i in s..e {
-      let p = px[i];
-      if p.a == 0 {
-        continue;
-      }
-      // Compare against the posterized reference, not the raw source, so the
-      // user's explicit posterization is never counted as quantizer error. With
-      // `bits == 0` (the default operating point) the reference IS the raw source,
-      // and the fast path returns 100 exactly when the output reproduces this same
-      // posterized reference byte-for-byte, so 100 keeps a single consistent
-      // meaning: "byte-identical to the (posterized) input on every visible pixel".
-      let reference = posterize(p, bits);
-      let q = palette[indices[i] as usize];
-      if q != reference {
+    for entry in &entries[s..e] {
+      let c = entry.color;
+      let qlab = rgb_to_lab(c.r, c.g, c.b);
+      // Palette-fidelity argmin: guard disabled, transparent slot skipped for
+      // visible colors (`c.a > 0` for every entry — kept explicit to pin the
+      // invariant that no visible color is scored against the reserved slot).
+      let idx = soa.nearest(kernel, qlab, c.a, c.a > 0, 0);
+      if palette[idx] != c {
         lossless = false;
       }
-      // `dist2` is provably non-negative (sums of squares × non-negative factors),
-      // so the `as u64` cast never wraps.
-      sum_err += dist2(reference, q) as u64;
-      n += 1;
+      // `pdist_lab` is a sum of non-negative terms; `.max(0)` is the same
+      // defensive clamp `kmeans_objective` uses before widening.
+      let d = pdist_lab(qlab, c.a, soa.labs[idx], soa.alpha[idx]).max(0) as u64;
+      // count·d ≤ ~2^64·1.5e9 only for a >4-gigapixel single-color image —
+      // saturate rather than wrap (the score floors at 0 there anyway), so the
+      // accumulation stays deterministic on pathological inputs. For any real
+      // image Σ count·d ≤ 2^33·1.5e9 < 2^53, exact.
+      sum_err = sum_err.saturating_add(entry.count.saturating_mul(d));
+      n += entry.count;
     }
     (sum_err, n, lossless)
   });
@@ -2432,31 +2465,27 @@ fn quality_score(px: &[RGBA8], bits: u8, palette: &[RGBA8], indices: &[u8]) -> u
   let mut n = 0u64;
   let mut lossless = true;
   for (se, nn, ll) in partials {
-    sum_err += se;
+    sum_err = sum_err.saturating_add(se);
     n += nn;
     lossless &= ll;
   }
   if n == 0 {
     return 100;
   }
-  // sum_err < 2^53 (see above), so this one-shot f64 conversion is exact —
-  // identical to the old per-element `as f64` accumulation.
+  // sum_err < 2^53 for every real input (see above), so this one-shot f64
+  // conversion is exact — identical to a per-element `as f64` accumulation.
   let mse = sum_err as f64 / n as f64;
-  // Only declare a perfect 100 when the output is byte-identical to the
-  // reference on every visible pixel. `mse <= 0.0` is necessary but NOT
-  // sufficient: `dist2`'s `* wa / 510` truncation can zero out a real
-  // near-opaque difference. The exact `lossless` flag closes that gap so the
-  // `min_quality == 100` lossless gate rejects any lossy visible remap.
+  // Only declare a perfect 100 when every visible posterized color resolves to a
+  // byte-identical palette entry — the exact `lossless` flag, not `mse <= 0.0`
+  // alone (a fixed-point Lab collision could zero a real difference).
   if mse <= 0.0 && lossless {
     return 100;
   }
   let rmse = mse.sqrt();
-  // Denominator calibrated empirically against the bundled photographic test
-  // image: an ordinary default 256-color reduction lands ~90 (comfortably above
-  // the default min_quality of 70), while heavier reductions fall off smoothly.
+  // `QUALITY_RMSE_DIVISOR` is calibrated to the pdist unit scale (see its doc).
   // The `.min(99.0)` below guarantees a lossy result can never report 100, so a
   // `min_quality` of 100 always rejects any lossy output.
-  let score = 100.0 / (1.0 + rmse / 64.0);
+  let score = 100.0 / (1.0 + rmse / QUALITY_RMSE_DIVISOR);
   let score = score.min(99.0);
   score.round().clamp(0.0, 99.0) as u8
 }
@@ -2615,7 +2644,9 @@ fn quantize_pass(
   }
 
   let palette = canonicalize(palette, &mut indices);
-  let quality = quality_score(px, bits, &palette, &indices);
+  // Score the palette's coverage of the TRUE distinct-color populations (the
+  // posterized canonical keys), not the emitted indices — see `quality_score`.
+  let quality = quality_score(&input.entries, &palette);
 
   QuantizeOutput {
     palette,
