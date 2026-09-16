@@ -2496,6 +2496,7 @@ __metadata:
     "@emnapi/runtime": "npm:2.0.0-alpha.5"
     "@napi-rs/cli": "npm:3.10.1"
     "@napi-rs/wasm-runtime": "npm:1.2.4"
+    emnapi: "npm:2.0.0-alpha.5"
   languageName: unknown
   linkType: soft
 
@@ -6215,6 +6216,18 @@ __metadata:
   version: 2.0.0
   resolution: "emittery@npm:2.0.0"
   checksum: 10c0/b8b5836e9fd368670e1ce5cb948feef30351ecebfbf589ac807c1f6b38c90d6556b2d48883f9b3c371fad59c92519b333dc3919a8ff5e351aea0f8b424203826
+  languageName: node
+  linkType: hard
+
+"emnapi@npm:2.0.0-alpha.5":
+  version: 2.0.0-alpha.5
+  resolution: "emnapi@npm:2.0.0-alpha.5"
+  peerDependencies:
+    node-addon-api: ">= 6.1.0"
+  peerDependenciesMeta:
+    node-addon-api:
+      optional: true
+  checksum: 10c0/56710a1577009c90fcbf5e36020335ad2dc5c1858cf9d642134acce50f4a06f9507127142bfb825b167d1597167a083248805f8e12eb235ed0dd57086d21ceb0
   languageName: node
   linkType: hard
 
