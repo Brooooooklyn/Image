@@ -17,7 +17,7 @@ use std::hash::BuildHasherDefault;
 use rgb::RGBA8;
 
 use crate::lab::{
-  Lab, MAX_DELTA_E76_SQ, delta_e76_sq, linear_to_srgb8, rgb_to_lab, srgb_to_linear_f,
+  Lab, MAX_DELTA_E76_SQ, delta_e76_sq, lab_to_rgb8, linear_to_srgb8, rgb_to_lab, srgb_to_linear_f,
 };
 use crate::quantize_simd::{self, OpaqueKernel};
 
@@ -1402,6 +1402,21 @@ fn channel_of(c: RGBA8, ch: usize) -> u8 {
   }
 }
 
+/// Round-to-nearest signed division `n / d` (`d > 0`), half-away-from-zero on
+/// the exact-half boundary. Used by the Lab-space centroid update, where `a`/`b`
+/// moment sums can be negative — a truncating `/` would bias dark/saturated
+/// centroids toward zero. Pure `i128` integer, so the centroid is identical on
+/// every platform.
+#[inline]
+fn idiv_round(n: i128, d: i128) -> i128 {
+  debug_assert!(d > 0);
+  if n >= 0 {
+    (n + d / 2) / d
+  } else {
+    -((-n + d / 2) / d)
+  }
+}
+
 /// Wu variance-minimizing median-cut (Xiaolin Wu, *Graphics Gems II*, 1991).
 ///
 /// Keeps the median-cut box-subdivision shape — start with one box of all visible
@@ -1686,20 +1701,25 @@ fn kmeans_objective(
 /// importance-weighted histogram counts built by `build_importance` (flat
 /// regions count ~fully, edges ~1/8), not raw pixel population.
 ///
-/// KEEP-BEST GUARD: the assignment minimizes alpha-weighted `dist2`, but the
-/// centroid update is the plain count-weighted RGBA mean, which is NOT that
-/// metric's minimizer when alpha varies (the per-pair RGB weight `(a_i+a_c)/510`
-/// couples to the center's own alpha). So Lloyd is NOT monotone here: a pass can
-/// RAISE the [`kmeans_objective`]. To never return a palette worse than its seed,
-/// we snapshot the best palette+objective starting from the INPUT (seed), and
-/// after EACH pass (centroid update + any D² reseed) adopt the new palette whenever
-/// its objective is `<=` the best seen — DISCARDING only a pass that strictly
-/// RAISED the objective; on return `*palette` holds the best. OPAQUE-NEUTRAL: for
-/// `a==255` (`wa==510`) `dist2` is plain RGB SSE and the count-weighted mean IS its
-/// exact per-assignment minimizer, so every pass is monotone non-increasing and the
-/// unguarded code returns the LAST pass — adopting on ties (`<=`) reproduces that
-/// byte-for-byte (q75 stays 262053). The compare is exact integer (`u128`), so the
-/// decision is fully deterministic — no float, no RNG.
+/// The centroid update is the weighted mean in LAB (mapped back through
+/// [`lab_to_rgb8`]) — the minimizer of the opaque `pdist` assignment objective
+/// (squared CIE76 is minimized at the component mean of the assigned Labs).
+/// Alpha keeps its own count-weighted mean: it is not a Lab component.
+///
+/// KEEP-BEST GUARD: for OPAQUE inputs the Lab-mean update is the assignment
+/// objective's exact minimizer, so every Lloyd pass is monotone
+/// non-increasing and adopting on ties (`<=`) returns the LAST pass — the
+/// pre-guard behavior, byte-for-byte, in that regime. When alpha varies,
+/// `pdist`'s per-pair `wa/510` color weighting and `da²·ALPHA_WEIGHT_LAB` term
+/// couple the assignment score to the center's own alpha, so the Lab mean is
+/// still only the color part's minimizer and a pass CAN raise
+/// [`kmeans_objective`]. To never return a palette worse than its seed, we
+/// snapshot the best palette+objective starting from the INPUT (seed), and
+/// after EACH pass (centroid update + any D² reseed) adopt the new palette
+/// whenever its objective is `<=` the best seen — DISCARDING only a pass that
+/// strictly RAISED the objective; on return `*palette` holds the best. The
+/// compare is exact integer (`u128`), so the decision is fully deterministic —
+/// no float, no RNG.
 fn kmeans_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) {
   // `iters == 0`: the palette already IS the seed and the loop below is a no-op,
   // so return before paying for a seed objective scan the unguarded code
@@ -1754,10 +1774,12 @@ fn kmeans_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) {
     // pass because the centroids moved.
     let soa = PaletteLabSoa::from_palette(palette);
 
-    // Accumulators per cluster.
-    let mut sr = vec![0u64; k];
-    let mut sg = vec![0u64; k];
-    let mut sb = vec![0u64; k];
+    // Accumulators per cluster: LAB-space moment sums (the assignment metric
+    // is pdist_lab, so the centroid that minimizes it is the weighted LAB
+    // mean, not an RGBA mean) plus the alpha sum and the weight.
+    let mut sl = vec![0i128; k];
+    let mut sc_a = vec![0i128; k];
+    let mut sc_b = vec![0i128; k];
     let mut sa = vec![0u64; k];
     let mut wn = vec![0u64; k];
 
@@ -1767,17 +1789,18 @@ fn kmeans_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) {
     // same `u128` accumulation — folding the old standalone objective pass into
     // the scan that was already running.
     //
-    // Sharded: each shard keeps its own per-cluster accumulators (5 × k `u64`s)
-    // plus a partial `u128` objective, merged into the shared accumulators in
-    // shard order below. Every merge is integer addition — associative and
-    // commutative — and each entry's assigned index is a pure function of
-    // (entry, palette), so `sr..wn`/`pass_obj` are identical for ANY shard
-    // count: the serial loop is simply the T == 1 case of the same body.
+    // Sharded: each shard keeps its own per-cluster accumulators (3 × k `i128`
+    // for the Lab moments + 2 × k `u64`) plus a partial `u128` objective, merged
+    // into the shared accumulators in shard order below. Every merge is integer
+    // addition — associative and commutative — and each entry's assigned index
+    // is a pure function of (entry, palette), so `sl..wn`/`pass_obj` are
+    // identical for ANY shard count: the serial loop is simply the T == 1 case
+    // of the same body.
     let mut pass_obj: u128 = 0;
     let partials = shard_reduce(entries.len(), shards, |s, end| {
-      let mut sr = vec![0u64; k];
-      let mut sg = vec![0u64; k];
-      let mut sb = vec![0u64; k];
+      let mut sl = vec![0i128; k];
+      let mut sc_a = vec![0i128; k];
+      let mut sc_b = vec![0i128; k];
       let mut sa = vec![0u64; k];
       let mut wn = vec![0u64; k];
       let mut obj: u128 = 0;
@@ -1800,21 +1823,22 @@ fn kmeans_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) {
           )
           .max(0) as u128;
         let c = e.count;
-        sr[idx] += e.color.r as u64 * c;
-        sg[idx] += e.color.g as u64 * c;
-        sb[idx] += e.color.b as u64 * c;
+        let el = entry_labs[ei];
+        sl[idx] += el.l as i128 * c as i128;
+        sc_a[idx] += el.a as i128 * c as i128;
+        sc_b[idx] += el.b as i128 * c as i128;
         sa[idx] += e.color.a as u64 * c;
         wn[idx] += c;
       }
-      (sr, sg, sb, sa, wn, obj)
+      (sl, sc_a, sc_b, sa, wn, obj)
     });
     // Merge shard partials in shard order — all integer adds, so the merged
     // accumulators equal the serial loop's for any T.
-    for (psr, psg, psb, psa, pwn, pobj) in partials {
+    for (psl, psc_a, psc_b, psa, pwn, pobj) in partials {
       for i in 0..k {
-        sr[i] += psr[i];
-        sg[i] += psg[i];
-        sb[i] += psb[i];
+        sl[i] += psl[i];
+        sc_a[i] += psc_a[i];
+        sc_b[i] += psc_b[i];
         sa[i] += psa[i];
         wn[i] += pwn[i];
       }
@@ -1844,6 +1868,18 @@ fn kmeans_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) {
     pre_pass.extend_from_slice(palette);
 
     // Recompute centroids; collect empty clusters for re-seeding.
+    //
+    // The centroid update is the WEIGHTED MEAN IN LAB — the space the
+    // assignment metric actually minimizes (for opaque inputs `pdist` is pure
+    // squared CIE76, whose minimizer over an assigned set is exactly the
+    // component mean of the entries' Labs). The old RGBA-mean update minimized
+    // a DIFFERENT objective than the assignment minimized, which is why Lloyd
+    // could be non-monotone even on opaque images and the keep-best guard had
+    // to rescue passes. The Lab mean is mapped back to sRGB8 by the integer
+    // `lab_to_rgb8` (inverse of the forward conversion — the round trip is
+    // within 1 LSB over the whole cube, so a singleton cluster still lands on
+    // its own color). Alpha is NOT a Lab component: it keeps its own
+    // count-weighted mean (round-nearest, as before).
     let mut empty: Vec<usize> = Vec::new();
     for i in 0..k {
       if wn[i] == 0 {
@@ -1851,10 +1887,16 @@ fn kmeans_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) {
         continue;
       }
       let n = wn[i];
+      let ni = n as i128;
+      let (r, g, b) = lab_to_rgb8(Lab {
+        l: idiv_round(sl[i], ni) as i32,
+        a: idiv_round(sc_a[i], ni) as i32,
+        b: idiv_round(sc_b[i], ni) as i32,
+      });
       palette[i] = RGBA8 {
-        r: ((sr[i] + n / 2) / n) as u8,
-        g: ((sg[i] + n / 2) / n) as u8,
-        b: ((sb[i] + n / 2) / n) as u8,
+        r,
+        g,
+        b,
         a: ((sa[i] + n / 2) / n) as u8,
       };
     }
@@ -3803,12 +3845,14 @@ mod tests {
     // implementation produces. All six entries here carry count == 10, so the
     // count factor is uniform — but it still rescales `total`, hence the modular
     // draw `r = lcg % total` and the spread of picks. P3 Phase 2 moved the reseed D²
-    // from RGB `dist2` to perceptual `pdist` (CIE76 ΔE), which reshapes the residual
-    // weights and so the spread of picks (was [c5, c3, c2, c0] under `dist2`); the
-    // reseeded slots are still all valid entry colors and fully deterministic.
+    // from RGB `dist2` to perceptual `pdist` (CIE76 ΔE), and the Lab-space centroid
+    // update moved the live centers the D² baseline measures against, reshaping the
+    // residual weights and so the spread of picks ([c5, c3, c2, c0] under `dist2`,
+    // then [c4, c3, c5, c2] under the RGBA-mean centroid); the reseeded slots are
+    // still all valid entry colors and fully deterministic.
     assert_eq!(
       &palette[2..],
-      &[c4, c3, c5, c2],
+      &[c4, c2, c1, c3],
       "population-weighted (count · pdist D²) LCG must pick these specific reseeded \
        slots (canary; RGB `dist2` D² gave [c5, c3, c2, c0])"
     );
@@ -3828,20 +3872,29 @@ mod tests {
     // stale baseline assigns that entry a different residual than the nearest-live
     // baseline. That flips which entry the fixed-LCG `count · D²` walk lands on:
     //   - STALE (buggy) baseline reseeds slot 2 to the 90,000-px satellite.
-    //   - NEAREST-LIVE (fixed) baseline reseeds slot 2 to the 1,000,000-px anchor.
-    // P3 Phase 2 moved the reseed D² to perceptual `pdist` (CIE76 ΔE), so this
-    // construction was re-derived by exhaustively simulating BOTH baselines over the
-    // exact `pdist` reseed math; it is a genuine divergence, not a coincidence. The
-    // load-bearing entry is the satellite: it is ASSIGNED to cluster 1 but its
-    // NEAREST LIVE center after the centroid move is cluster 0 — the exact stale-vs-
-    // nearest-live distinction. The larger stale residual inflates the satellite's
-    // `count·D²` weight, shifting the modular LCG draw into the satellite's bucket.
-    let anchor = rgba(40, 140, 100, 255); // 1,000,000 px — the nearest-live pick
+    //   - NEAREST-LIVE (fixed) baseline reseeds slot 2 to a high-population entry.
+    // P3 Phase 2 moved the reseed D² to perceptual `pdist` (CIE76 ΔE) and the
+    // Lab-space centroid update moved where the live centers land, so this
+    // construction was re-verified by exhaustively simulating BOTH baselines over
+    // the exact `pdist` reseed math under the new centroids; it is a genuine
+    // divergence, not a coincidence. Under the Lab centroids (live centers move
+    // to (101,184,90) and (140,36,80)) the two baselines still diverge: the
+    // stale baseline lands the modular draw on the 90,000-px satellite
+    // (r = 28_417_565_679_501 of total 31_655_967_030_000) while the
+    // nearest-live baseline lands it on the 800,000-px `live_pick` below
+    // (r = 19_044_618_099_501 of total 28_793_954_700_000). The load-bearing
+    // entry is the satellite: it is ASSIGNED to cluster 1 but its NEAREST LIVE
+    // center after the centroid move is cluster 0 — the exact stale-vs-
+    // nearest-live distinction. The larger stale residual inflates the
+    // satellite's `count·D²` weight, shifting the modular LCG draw into the
+    // satellite's bucket.
+    let anchor = rgba(40, 140, 100, 255); // 1,000,000 px — live center 0's anchor
+    let live_pick = rgba(153, 238, 58, 255); // 800,000 px — the nearest-live pick
     let satellite = rgba(248, 168, 8, 255); // 90,000 px — the stale (buggy) pick
     let entries = make_entries(&[
       (anchor, 1_000_000),
       (rgba(123, 4, 83, 255), 600_000),
-      (rgba(153, 238, 58, 255), 800_000),
+      (live_pick, 800_000),
       (satellite, 90_000),
       (rgba(244, 240, 166, 255), 40_000),
     ]);
@@ -3852,12 +3905,12 @@ mod tests {
     let mut palette = vec![p0, p1, far];
     kmeans_refine(&mut palette, &entries, 1);
 
-    // The dead slot must be reseeded from the NEAREST-LIVE-center D² baseline,
-    // i.e. the high-population anchor — NOT the lower-population satellite the
-    // stale (moved old-assigned center) baseline would pick.
+    // The dead slot must be reseeded from the NEAREST-LIVE-center D² baseline —
+    // a high-population entry — NOT the lower-population satellite the stale
+    // (moved old-assigned center) baseline would pick.
     assert_eq!(
-      palette[2], anchor,
-      "nearest-live-center D² reseed must pick the high-population anchor {anchor:?}, \
+      palette[2], live_pick,
+      "nearest-live-center D² reseed must pick the high-population entry {live_pick:?}, \
        not the satellite {satellite:?} the stale moved-assigned-center baseline picks; \
        palette={palette:?}"
     );
@@ -3866,11 +3919,12 @@ mod tests {
       "stale moved-assigned-center baseline pick {satellite:?} must NOT win"
     );
 
-    // The full reseeded palette is pinned (slots 0/1 are recomputed centroids,
-    // identical under both baselines since the fix only changes the reseed D²).
+    // The full reseeded palette is pinned (slots 0/1 are the recomputed LAB-mean
+    // centroids, identical under both baselines since the fix only changes the
+    // reseed D² — verified by the exhaustive simulation above).
     assert_eq!(
       palette,
-      vec![rgba(94, 185, 83, 255), rgba(139, 25, 73, 255), anchor],
+      vec![rgba(101, 184, 90, 255), rgba(140, 36, 80, 255), live_pick],
       "nearest-live-center reseed palette pin"
     );
 
@@ -5201,30 +5255,37 @@ mod tests {
   #[test]
   fn kmeans_guard_never_worsens_objective() {
     // FIX #2 canary: k-means here is NOT monotone. The assignment minimizes the
-    // alpha-weighted `dist2`, but the centroid update is the plain count-weighted
-    // RGBA mean, which is not that metric's minimizer when alpha varies (the
-    // per-pair RGB weight `(a_i+a_c)/510` couples to the center's own alpha). So a
-    // pass can RAISE the objective — and the unguarded code kept it unconditionally,
-    // which could trip `min_quality` and force the 256-color retry. The keep-best
-    // guard makes `kmeans_refine` return a palette whose objective is `<=` the
-    // seed's.
+    // alpha-weighted `pdist`; the centroid update is now the count-weighted LAB
+    // mean — the exact minimizer of `pdist`'s COLOR term — but `pdist` couples
+    // the color weight to the center's own alpha (`(a_q+a_c)/510`), so for
+    // varying-alpha clusters the Lab mean still is not the joint minimizer and
+    // a pass can RAISE the objective. The old RGBA-mean update made this far
+    // more common (it minimized a different objective entirely, so even OPAQUE
+    // inputs could regress); the keep-best guard makes `kmeans_refine` return a
+    // palette whose objective is `<=` the seed's regardless.
     //
-    // These 7 partial-alpha entries are a verified counterexample under the perceptual
-    // `pdist` objective: the K=2 median-cut seed scores 10_622_975_578, and ONE raw
-    // (unguarded) refine pass RAISES it to 10_686_135_592. The guard must REJECT that
-    // pass and keep the seed. This exercises the guard's REJECTION path (not just
-    // adoption): we compute the unguarded pass HERE (not pin it from a comment), prove
-    // it worsens, and prove `kmeans_refine` returns the seed objective instead.
-    // (Found by `unguarded_kmeans_pass` + an exhaustive deterministic search over
-    // random low-alpha inputs; no cluster empties, so the pass needs no reseed.)
+    // These 9 partial-alpha entries are a verified counterexample under the
+    // perceptual `pdist` objective AND the Lab-mean update: the K=2 median-cut
+    // seed scores 11_683_579_965, and ONE raw (unguarded) refine pass RAISES it
+    // to 11_750_920_311. The guard must REJECT that pass and keep the seed.
+    // This exercises the guard's REJECTION path (not just adoption): we compute
+    // the unguarded pass HERE (not pin it from a comment), prove it worsens,
+    // and prove `kmeans_refine` returns the seed objective instead.
+    // (Re-derived for the Lab-centroid update by `unguarded_kmeans_pass` + a
+    // deterministic LCG search over random low-alpha inputs — found on try 5;
+    // no cluster empties, so the pass needs no reseed. The earlier RGBA-mean
+    // counterexample no longer worsens: the Lab mean fixed exactly the color
+    // part that made it regress.)
     let entries = make_entries(&[
-      (rgba(10, 245, 33, 32), 524),
-      (rgba(68, 231, 156, 22), 1518),
-      (rgba(116, 106, 11, 27), 851),
-      (rgba(225, 232, 89, 20), 534),
-      (rgba(231, 158, 17, 14), 1635),
-      (rgba(231, 250, 145, 23), 1948),
-      (rgba(236, 35, 221, 15), 575),
+      (rgba(46, 84, 138, 32), 2100),
+      (rgba(60, 105, 233, 14), 265),
+      (rgba(54, 208, 214, 3), 2146),
+      (rgba(192, 218, 212, 25), 527),
+      (rgba(97, 119, 81, 8), 2059),
+      (rgba(236, 1, 35, 24), 222),
+      (rgba(18, 174, 238, 15), 3029),
+      (rgba(68, 54, 231, 7), 1437),
+      (rgba(62, 53, 14, 14), 581),
     ]);
 
     // Seed: the K=2 median-cut palette over the TRUE entries. `kmeans_objective`
@@ -5238,18 +5299,18 @@ mod tests {
     let entry_alphas: Vec<u8> = entries.iter().map(|e| e.color.a).collect();
     let obj_seed = kmeans_objective(&seed, &entries, &entry_labs, &entry_alphas);
     assert_eq!(
-      obj_seed, 10_622_975_578,
+      obj_seed, 11_683_579_965,
       "perceptual seed objective pin (median_cut K=2)"
     );
 
     // What ONE UNGUARDED pass would produce — computed here, not pinned from a comment,
-    // so the rejection coverage is real. It WORSENS the seed (the non-monotone case the
-    // guard exists to catch: assignment minimizes `pdist`, but the count-weighted RGBA
-    // mean centroid is not that metric's minimizer when alpha varies).
+    // so the rejection coverage is real. It WORSENS the seed (the residual non-monotone
+    // case the guard exists to catch: the Lab mean minimizes `pdist`'s color term but
+    // not the alpha-coupled joint objective).
     let unguarded = unguarded_kmeans_pass(&seed, &entries).expect("no cluster empties here");
     let obj_unguarded = kmeans_objective(&unguarded, &entries, &entry_labs, &entry_alphas);
     assert_eq!(
-      obj_unguarded, 10_686_135_592,
+      obj_unguarded, 11_750_920_311,
       "unguarded one-pass objective pin"
     );
     assert!(
@@ -5964,35 +6025,37 @@ mod tests {
   }
 
   // One UNGUARDED k-means pass: assign every entry to its perceptual-nearest palette
-  // entry, then move each centroid to the count-weighted RGBA mean — identical math to
-  // `kmeans_refine`'s pass body, minus the keep-best guard and the empty-cluster
-  // reseed. Returns `None` if any cluster empties (so callers can skip the reseed case).
+  // entry, then move each centroid to the count-weighted LAB mean (mapped back through
+  // `lab_to_rgb8`) — identical math to `kmeans_refine`'s pass body, minus the keep-best
+  // guard and the empty-cluster reseed. Returns `None` if any cluster empties (so
+  // callers can skip the reseed case).
   #[cfg(test)]
   fn unguarded_kmeans_pass(palette: &[RGBA8], entries: &[ColorCount]) -> Option<Vec<RGBA8>> {
     let k = palette.len();
     let pal_labs = palette_labs(palette);
     let pal_alphas: Vec<u8> = palette.iter().map(|p| p.a).collect();
-    let mut sr = vec![0u64; k];
-    let mut sg = vec![0u64; k];
-    let mut sb = vec![0u64; k];
+    let mut sl = vec![0i128; k];
+    let mut sc_a = vec![0i128; k];
+    let mut sc_b = vec![0i128; k];
     let mut sa = vec![0u64; k];
     let mut wn = vec![0u64; k];
     for e in entries {
+      let el = rgb_to_lab(e.color.r, e.color.g, e.color.b);
       let idx = nearest_lab(
         &pal_labs,
         &pal_alphas,
-        rgb_to_lab(e.color.r, e.color.g, e.color.b),
+        el,
         e.color.a,
         e.color.a > 0,
         // Mirrors `kmeans_refine`'s clustering assignment: guard disabled.
         0,
       );
-      let c = e.count;
-      sr[idx] += e.color.r as u64 * c;
-      sg[idx] += e.color.g as u64 * c;
-      sb[idx] += e.color.b as u64 * c;
-      sa[idx] += e.color.a as u64 * c;
-      wn[idx] += c;
+      let c = e.count as i128;
+      sl[idx] += el.l as i128 * c;
+      sc_a[idx] += el.a as i128 * c;
+      sc_b[idx] += el.b as i128 * c;
+      sa[idx] += e.color.a as u64 * e.count;
+      wn[idx] += e.count;
     }
     let mut out = palette.to_vec();
     for i in 0..k {
@@ -6000,10 +6063,16 @@ mod tests {
         return None;
       }
       let n = wn[i];
+      let ni = n as i128;
+      let (r, g, b) = lab_to_rgb8(Lab {
+        l: idiv_round(sl[i], ni) as i32,
+        a: idiv_round(sc_a[i], ni) as i32,
+        b: idiv_round(sc_b[i], ni) as i32,
+      });
       out[i] = RGBA8 {
-        r: ((sr[i] + n / 2) / n) as u8,
-        g: ((sg[i] + n / 2) / n) as u8,
-        b: ((sb[i] + n / 2) / n) as u8,
+        r,
+        g,
+        b,
         a: ((sa[i] + n / 2) / n) as u8,
       };
     }

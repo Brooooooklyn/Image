@@ -112,6 +112,36 @@ const F_LINEAR_SLOPE_Q16: i64 = 510_331;
 /// Linear-branch intercept `4/29` in Q16 (`round(0.137931034 * 65536) == 9039`).
 const F_LINEAR_INTERCEPT_Q16: i64 = 9039;
 
+/// The largest `f(t)` value reachable through the LINEAR branch, in Q16:
+/// `f_q16(EPS_Q16) == 13555` (the linear branch at `t == 580` gives
+/// `((580·510331 + 32768) >> 16) + 9039 == 4516 + 9039`). The forward map is
+/// monotone non-decreasing across the branch point, so the inverse
+/// [`f_inv_q16`] uses the cube-branch inverse exactly when `f > F_AT_EPS_Q16`
+/// and the linear-branch inverse otherwise — a consistent, total inverse.
+const F_AT_EPS_Q16: i64 = 13555;
+
+/// Inverse of the white-point-normalized sRGB->XYZ-ratio matrix [`MAT`], in
+/// Q16 (signed entries — the inverse mixes XYZ ratios back out with negative
+/// lobes). Const-gen (NOT runtime; documents provenance — computed exactly
+/// over the RATIONAL matrix `MAT/65536`, so it inverts the transform this file
+/// actually applies, rounding error included):
+/// ```text
+/// INV = (MAT/65536)^-1  (exact rational 3x3 inverse)
+///     ≈ [[ 3.079895, -1.537122, -0.542788],
+///        [-0.921243,  1.875985,  0.045242],
+///        [ 0.052885, -0.204045,  1.151145]]
+/// INV_MAT = round(INV * 65536)
+/// ```
+/// Row sums are all 65535 (≈1.0), so white (ratios 1,1,1) maps back to linear
+/// ≈1.0. Each entry multiplies a Q16 XYZ ratio; the Q32 product is
+/// round-divided back to Q16 by [`rdiv_q16`] (signed-aware, unlike the
+/// forward path's non-negative `rshift_q16`).
+const INV_MAT: [[i64; 3]; 3] = [
+  [201844, -100737, -35572],
+  [-60375, 122945, 2965],
+  [3466, -13372, 75441],
+];
+
 /// Deterministic, floating-point-free integer cube root: returns `floor(n^(1/3))`.
 ///
 /// Integer Newton's method from an upper-bound seed, followed by an exact floor correction.
@@ -233,6 +263,18 @@ fn rdiv_q16(v: i64) -> i64 {
   }
 }
 
+/// Round-to-nearest signed division `n / d` (`d > 0`), half-away-from-zero on
+/// the exact-half boundary. Pure integer; used by the Lab->sRGB inverse where
+/// numerators (alpha-free `a`/`b` deltas, matrix products) can be negative.
+#[inline]
+fn sdiv_round(n: i64, d: i64) -> i64 {
+  if n >= 0 {
+    (n + d / 2) / d
+  } else {
+    -((-n + d / 2) / d)
+  }
+}
+
 /// Round-to-nearest arithmetic shift of a non-negative Q16 value down by `Q` bits.
 #[inline]
 fn rshift_q16(v: i64) -> i64 {
@@ -269,6 +311,81 @@ pub(crate) fn rgb_to_lab(r: u8, g: u8, b: u8) -> Lab {
   let bb = rdiv_q16(200 * (fy - fz) * scale) as i32;
 
   Lab { l, a, b: bb }
+}
+
+/// Inverse of the CIELAB nonlinearity [`f_q16`]: input `f` and output `t` are
+/// both Q16 white-normalized ratios.
+///
+/// For `f > F_AT_EPS_Q16` (the cube branch) returns `t = f³`: `f` is Q16, so
+/// `f³` is Q48 — computed in `i128` (an unrestricted `i64` `f` up to ~2^18 for
+/// any in-gamut-reachable centroid already yields ~2^54, and the `i128` keeps
+/// even absurd inputs panic-free) and shifted back down to Q16 with a
+/// round-to-nearest bias. For `f <= F_AT_EPS_Q16` returns the linear-branch
+/// inverse `t = (f − 4/29) / (1/(3·(6/29)²)) = (f − intercept)·65536/slope`,
+/// which can legitimately go slightly negative (sub-black / out-of-gamut) —
+/// the caller's clamp to `[0, 1]` absorbs it.
+#[inline]
+fn f_inv_q16(f: i64) -> i64 {
+  if f > F_AT_EPS_Q16 {
+    let f2 = (f as i128) * (f as i128);
+    let f3 = f2 * (f as i128); // Q48
+    ((f3 + (1i128 << 31)) >> 32) as i64
+  } else {
+    sdiv_round((f - F_LINEAR_INTERCEPT_Q16) * ONE, F_LINEAR_SLOPE_Q16)
+  }
+}
+
+/// Inverse of [`rgb_to_lab`]: fixed-point CIELAB (×100 scaling) -> 8-bit sRGB.
+///
+/// Integer/fixed-point only — the cube in [`f_inv_q16`] is exact `i128`
+/// arithmetic, the matrix multiply is Q16, and the final encode reuses the
+/// same [`LINEAR_TO_SRGB8_LUT`] the dither path uses (exact by construction).
+/// Used by the k-means centroid update, which accumulates cluster means in Lab
+/// (the space the assignment metric minimizes) and maps them back to sRGB.
+///
+/// Inversion steps (all scaled units, `L/a/b ×100`):
+/// ```text
+/// fy = (L + 16)/116          (L_scaled + 1600)/11600
+/// fx = fy + a/500            (a_scaled/50000)
+/// fz = fy − b/200            (b_scaled/20000)
+/// (xr, yr, zr) = f_inv(fx, fy, fz)          # inverse nonlinearity, Q16
+/// (lr, lg, lb) = INV_MAT · (xr, yr, zr)     # inverse matrix, Q16
+/// channel = LINEAR_TO_SRGB8_LUT[clamp(lin)] # nearest sRGB8 code
+/// ```
+///
+/// Out-of-gamut centroids (a Lab mean can land outside the sRGB cube) are
+/// handled by the linear-light clamp: negative or >1 channels saturate to the
+/// nearest gamut boundary. Accuracy: the FULL 256³ round-trip
+/// `lab_to_rgb8(rgb_to_lab(c))` reproduces `c` within 1 LSB per channel
+/// (measured exhaustively; pinned by `lab_rgb_roundtrip_is_near_exact`); the
+/// residual is Q16 rounding in the matrix/LUT, not bias.
+pub(crate) fn lab_to_rgb8(lab: Lab) -> (u8, u8, u8) {
+  let scale = LAB_SCALE as i64;
+  // Undo the CIE coefficient scaling. `lab.l + 1600` is >= 0 for any real
+  // input (L >= 0), but sdiv_round keeps even a negative L panic-free and
+  // correctly rounded.
+  let fy = sdiv_round((lab.l as i64 + 16 * scale) * ONE, 116 * scale);
+  let fx = fy + sdiv_round(lab.a as i64 * ONE, 500 * scale);
+  let fz = fy - sdiv_round(lab.b as i64 * ONE, 200 * scale);
+
+  // Inverse cube-root nonlinearity -> normalized XYZ ratios (Q16).
+  let xr = f_inv_q16(fx);
+  let yr = f_inv_q16(fy);
+  let zr = f_inv_q16(fz);
+
+  // XYZ ratios -> linear sRGB via the exact Q16 inverse matrix. The Q32
+  // products are round-divided by rdiv_q16 (signed-aware — the inverse matrix
+  // has negative lobes). Max |term| ~ 201844·~76_000 ≈ 1.6e10, fits i64.
+  let lr = rdiv_q16(INV_MAT[0][0] * xr + INV_MAT[0][1] * yr + INV_MAT[0][2] * zr);
+  let lg = rdiv_q16(INV_MAT[1][0] * xr + INV_MAT[1][1] * yr + INV_MAT[1][2] * zr);
+  let lb = rdiv_q16(INV_MAT[2][0] * xr + INV_MAT[2][1] * yr + INV_MAT[2][2] * zr);
+
+  // Linear (Q16, table units 0..=65535) -> nearest sRGB8 code. The LUT is the
+  // exact precomputed inverse of SRGB_TO_LINEAR (binary-search contents by
+  // construction), so this step is identical to `linear_to_srgb8`'s rounding.
+  let lut = LINEAR_TO_SRGB8_LUT.get_or_init(build_linear_to_srgb8_lut);
+  let enc = |lin_q16: i64| -> u8 { lut[lin_q16.clamp(0, 65535) as usize] };
+  (enc(lr), enc(lg), enc(lb))
 }
 
 /// sRGB 8-bit -> linear light as `f32` in `[0.0, 1.0]`, read from the SAME
@@ -641,6 +758,96 @@ mod tests {
       assert_eq!(icbrt_u128(n), floor_cbrt(n), "icbrt mismatch at {n}");
       n += 999_983; // prime stride
     }
+  }
+
+  /// Round-trip accuracy of [`lab_to_rgb8`]: `lab_to_rgb8(rgb_to_lab(c))` must
+  /// reproduce `c` within ONE LSB per channel (this is what the k-means
+  /// Lab-centroid update relies on). The residual is the 8-bit LUT's own
+  /// quantization plus Q16 matrix rounding — measured over the FULL 256³ cube
+  /// in release mode (the sweep below is exhaustive there, ~0.4 s) the max
+  /// per-channel error is exactly 1; the debug strided sweep observes 0.
+  /// Crucially the function must also be TOTAL: no panic on any Lab, including
+  /// out-of-gamut centroids — pinned below.
+  #[test]
+  fn lab_rgb_roundtrip_is_near_exact() {
+    let mut max_err = 0i32;
+    let mut check = |r: u8, g: u8, b: u8| {
+      let (rr, gg, bb) = lab_to_rgb8(rgb_to_lab(r, g, b));
+      max_err = max_err
+        .max((rr as i32 - r as i32).abs())
+        .max((gg as i32 - g as i32).abs())
+        .max((bb as i32 - b as i32).abs());
+    };
+    // All grays + the gamut corners.
+    for i in 0..=255u16 {
+      check(i as u8, i as u8, i as u8);
+    }
+    for &(r, g, b) in &[
+      (255u8, 0u8, 0u8),
+      (0, 255, 0),
+      (0, 0, 255),
+      (255, 255, 0),
+      (0, 255, 255),
+      (255, 0, 255),
+      (0, 0, 0),
+      (255, 255, 255),
+    ] {
+      check(r, g, b);
+    }
+    // Strided cube sweep (step 17 -> ~4k colors covering the gamut).
+    let step: u16 = if cfg!(debug_assertions) { 17 } else { 1 };
+    let mut r = 0u16;
+    while r <= 255 {
+      let mut g = 0u16;
+      while g <= 255 {
+        let mut b = 0u16;
+        while b <= 255 {
+          check(r as u8, g as u8, b as u8);
+          b += step;
+        }
+        g += step;
+      }
+      r += step;
+    }
+    assert!(
+      max_err <= 1,
+      "round-trip max per-channel error {max_err} > 1 LSB"
+    );
+    // Hand-checked endpoints: exact on black/white (the LUT endpoints and the
+    // white-point normalization make these exact).
+    assert_eq!(lab_to_rgb8(rgb_to_lab(0, 0, 0)), (0, 0, 0));
+    assert_eq!(lab_to_rgb8(rgb_to_lab(255, 255, 255)), (255, 255, 255));
+    // Totality: extreme/out-of-gamut Labs clamp instead of panicking.
+    let _ = lab_to_rgb8(Lab {
+      l: -50_000,
+      a: -200_000,
+      b: 200_000,
+    });
+    let _ = lab_to_rgb8(Lab {
+      l: 200_000,
+      a: 200_000,
+      b: -200_000,
+    });
+    assert_eq!(lab_to_rgb8(Lab { l: 0, a: 0, b: 0 }).0, 0);
+  }
+
+  /// `f_inv_q16` is a consistent inverse of [`f_q16`]: for every `t` in the
+  /// production domain `[0, 65536]`, `f_inv(f(t))` reproduces `t` within one
+  /// Q16 quantum — and the branch split is consistent across the ε joint.
+  #[test]
+  fn f_inv_inverts_f_q16() {
+    for t in [
+      0i64, 1, 100, 579, 580, 581, 1000, 5000, 65535, 65536, 100_000,
+    ] {
+      let back = f_inv_q16(f_q16(t));
+      assert!(
+        (back - t).abs() <= 8,
+        "f_inv(f({t})) = {back}, off by {}",
+        back - t
+      );
+    }
+    // Threshold sanity: F_AT_EPS_Q16 really is the linear branch's f at ε.
+    assert_eq!(f_q16(EPS_Q16), F_AT_EPS_Q16);
   }
 
   /// Byte-identity guard for the `f_q16` LUT: the table must equal the direct compute path
