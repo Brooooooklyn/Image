@@ -333,6 +333,25 @@ fn png_quantize_inner(input: &[u8], options: &PngQuantOptions) -> Result<Vec<u8>
   let palette = out.palette;
   let pixels = out.indices;
   let mut encoder = lodepng::Encoder::new();
+  // Cheapen this encode: its bytes are almost always thrown away — the oxipng
+  // pass below re-encodes from decoded pixels, and the lodepng output is only
+  // kept when oxipng errors or fails to produce a smaller file. So emit the
+  // cheapest VALID PNG lodepng can make:
+  //  - `set_auto_convert(false)` skips `auto_choose_color`, a full-image
+  //    histogram analysis that picks a minimal colortype/bitdepth. We keep the
+  //    8-bit palette we set explicitly; oxipng's own reductions pick a smaller
+  //    representation in the re-encode anyway.
+  //  - `set_level(1)` replaces the default zlib level 7 with flate2's fastest
+  //    still-compressing level (lodepng 3.x maps `set_level` onto flate2; the
+  //    other legacy CompressSettings knobs are deprecated no-ops, and palette
+  //    images already take the zero-filter path via `filter_palette_zero`).
+  // CAVEAT: on the oxipng-error / not-smaller fallback path the returned bytes
+  // may differ from before (weaker intermediate compression, always 8-bit
+  // palette) — still a valid, lossless PNG. On the happy path (oxipng succeeds
+  // and shrinks) the output is byte-identical to before, because oxipng decodes
+  // pixels rather than reusing the compressed IDAT bytes.
+  encoder.set_auto_convert(false);
+  encoder.settings_mut().set_level(1);
   encoder.set_palette(palette.as_slice()).map_err(|err| {
     Error::new(
       Status::GenericFailure,
@@ -465,6 +484,10 @@ mod tests {
     let cfg = quantize::QuantizeConfig::from_options(options);
     let out = quantize::quantize_rgba(rgba_bytes.as_rgba(), width as usize, height as usize, &cfg);
     let mut encoder = lodepng::Encoder::new();
+    // Mirror the cheapened encode settings in `png_quantize_inner` so this stays
+    // a faithful replica of the intermediate lodepng step.
+    encoder.set_auto_convert(false);
+    encoder.settings_mut().set_level(1);
     encoder
       .set_palette(out.palette.as_slice())
       .expect("palette");
