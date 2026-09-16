@@ -71,11 +71,13 @@ test('pngQuantize roundtrip preserves dimensions and shrinks file', async (t) =>
   t.is(out.height, height)
   t.true(dest.length < PNG.length)
   // P2 size-lock: the quantized PNG is losslessly recompressed by the in-repo oxipng
-  // pass. The bare lodepng encode of this fixture is 262053 bytes; recompression brings
-  // it to ~250061. Asserting < 255000 locks the oxipng pass in: drop it and this fails
-  // (262053 > 255000). Loose enough to survive minor quantizer drift, tight enough to
-  // catch the recompression being skipped.
-  t.true(dest.length < 255000, `expected recompressed < 255000, got ${dest.length}`)
+  // pass. Recompression output on this fixture is ~262547 bytes; the bare lodepng
+  // encode of the same index stream is ~278k+. Asserting < 270000 locks the oxipng
+  // pass in: drop it and this fails (~278k > 270000). Loose enough to survive
+  // quantizer drift (the Oklab remap emits a higher-fidelity — and slightly less
+  // DEFLATE-friendly — index stream than the CIELAB pipeline this bound was first
+  // calibrated on), tight enough to catch the recompression being skipped.
+  t.true(dest.length < 270000, `expected recompressed < 270000, got ${dest.length}`)
 })
 
 test('pngQuantize shrinks the file at both low and high quality', async (t) => {

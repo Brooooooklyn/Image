@@ -1468,6 +1468,18 @@ fn idiv_round(n: i128, d: i128) -> i128 {
   }
 }
 
+/// Ward-style merge cost `n_i·n_j·d / (n_i+n_j)` — the population-weighted
+/// objective increase of folding two clusters into their weighted-mean
+/// centroid. The multiply MUST precede the division: `n_i·n_j/(n_i+n_j)`
+/// truncates to 0 whenever both counts are 1 (common under importance
+/// weighting), which would zero every candidate's cost and degenerate the
+/// cheapest-pair argmin to lexicographic order. `n_i·n_j ≤ ~1.8e19`,
+/// `d ≤ ~1.07e9` (`pdist_oklab`'s Q14 bound) → product < 2^94, inside u128.
+#[inline]
+fn ward_merge_cost(ni: u128, nj: u128, d: u128) -> u128 {
+  ni * nj * d / (ni + nj)
+}
+
 /// Wu variance-minimizing median-cut (Xiaolin Wu, *Graphics Gems II*, 1991).
 ///
 /// Keeps the median-cut box-subdivision shape — start with one box of all visible
@@ -2281,9 +2293,7 @@ fn split_merge_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) 
         let ni = acc.wn[i] as u128;
         let nj = acc.wn[j] as u128;
         let d = pdist_oklab(soa.labs[i], soa.alpha[i], soa.labs[j], soa.alpha[j]).max(0) as u128;
-        // n_i·n_j ≤ ~1.8e19 (2·u32-max counts) and d ≤ ~1.07e9 (`pdist_oklab`'s
-        // Q14-scale bound), so the cost stays far inside u128.
-        let cost = ni * nj / (ni + nj) * d;
+        let cost = ward_merge_cost(ni, nj, d);
         if cost < best_cost {
           best_cost = cost;
           mi = i;
@@ -3359,13 +3369,17 @@ fn quantize_pass(
   } = *input;
   // Reserve one exact fully-transparent slot if needed so transparency stays
   // lossless. We hand median-cut one fewer slot and prepend the slot after.
+  // A palette of 1 cannot hold both a visible color and the transparent slot —
+  // transparency is a correctness invariant, so a transparent image raises the
+  // slot floor to 2 even under an explicit `colors: 1` request.
   let transparent = RGBA8 {
     r: 0,
     g: 0,
     b: 0,
     a: 0,
   };
-  let reserve = has_transparent && max_colors >= 2;
+  let max_colors = if has_transparent { max_colors.max(2) } else { max_colors };
+  let reserve = has_transparent;
   let cut_colors = if reserve { max_colors - 1 } else { max_colors };
 
   // `cluster`/`split_entries`/`true_counts` were built once by the caller
@@ -3512,9 +3526,13 @@ fn merge_down(input: &PassInput, out: QuantizeOutput, cfg: &QuantizeConfig) -> Q
         let d = pdist_oklab(soa.labs[i], palette[i].a, soa.labs[j], palette[j].a).max(0) as u128;
         let wi = w[i] as u128;
         let wj = w[j] as u128;
-        let denom = wi + wj;
-        // w_i·w_j·d ≤ 2^66 · ~1.07e9 < 2^97 — far inside u128.
-        let cost = if denom == 0 { 0 } else { wi * wj / denom * d };
+        // wi+wj == 0 means both slots are dead — the merged color is
+        // unobservable, so cost 0 (they're the cheapest possible merge).
+        let cost = if wi + wj == 0 {
+          0
+        } else {
+          ward_merge_cost(wi, wj, d)
+        };
         if best.is_none_or(|(bc, _, _)| cost < bc) {
           best = Some((cost, i, j));
         }
@@ -7292,5 +7310,70 @@ mod tests {
       on.palette.len(),
       on.quality
     );
+  }
+
+  #[test]
+  fn colors_one_preserves_transparency() {
+    // Codex P1: `colors: 1` on an image containing both transparent and visible
+    // pixels must still preserve the transparent region — the transparent-slot
+    // reservation raises the effective floor to 2 slots. Without it, every
+    // transparent pixel maps onto the single opaque color.
+    let mut px = vec![rgba(200, 30, 30, 255); 50];
+    px.extend(vec![rgba(0, 0, 0, 0); 50]);
+    let out = quantize_rgba(
+      &px,
+      10,
+      10,
+      &QuantizeConfig {
+        max_colors: 1,
+        min_quality: 0,
+        kmeans_iters: 2,
+        dither: false,
+        posterization: 0,
+        merge_down: false,
+      },
+    );
+    let tidx = out
+      .palette
+      .iter()
+      .position(|c| c.a == 0)
+      .expect("transparent image must keep an a==0 slot even at colors=1");
+    for (i, &p) in px.iter().enumerate() {
+      if p.a == 0 {
+        assert_eq!(out.indices[i] as usize, tidx, "transparent px {i} vanished");
+      } else {
+        assert_ne!(
+          out.indices[i] as usize, tidx,
+          "visible px {i} mapped onto the transparent slot"
+        );
+      }
+    }
+    // A 1-color request on an OPAQUE image still yields exactly one slot.
+    let opaque = quantize_rgba(
+      &px[..50],
+      10,
+      5,
+      &QuantizeConfig {
+        max_colors: 1,
+        min_quality: 0,
+        kmeans_iters: 2,
+        dither: false,
+        posterization: 0,
+        merge_down: false,
+      },
+    );
+    assert_eq!(opaque.palette.len(), 1);
+  }
+
+  #[test]
+  fn ward_merge_cost_multiply_before_divide() {
+    // Codex P2: `ni*nj/(ni+nj)*d` truncates to 0 for count-1 pairs, degenerating
+    // cheapest-pair selection to lexicographic order. The fixed formula keeps
+    // the distance factor visible: a nearer rare pair must beat a farther one.
+    assert_eq!(ward_merge_cost(1, 1, 0), 0);
+    assert_eq!(ward_merge_cost(1, 1, 100), 50); // (1·1·100)/2 — nonzero
+    assert!(ward_merge_cost(1, 1, 40) < ward_merge_cost(1, 1, 100));
+    // Population weighting still dominates color distance.
+    assert!(ward_merge_cost(1, 1, 100) < ward_merge_cost(1000, 1000, 1));
   }
 }
