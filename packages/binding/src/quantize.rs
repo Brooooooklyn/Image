@@ -77,6 +77,9 @@ const DIM_WEIGHT: i64 = 2 * ALPHA_WEIGHT_LAB;
 /// to DISABLE the guard). Flat-additive integer term — no `wa/510` discount, so a dim
 /// entry cannot soften its own penalty. Overflow-safe: `≤ DIM_WEIGHT · 255² ≈ 1.95e8`,
 /// and `pdist_lab + dim_penalty ≤ ~1.5e9 ≪ i64::MAX`.
+/// Test-only: production callers go through `quantize_simd::general_argmin`, which
+/// reproduces this term (and `vanish_penalty`) in f64 lanes — see quantize_simd.rs.
+#[cfg(test)]
 #[inline]
 fn dim_penalty(src_a: u8, entry_a: u8) -> i64 {
   if src_a > 0 && entry_a < src_a {
@@ -130,7 +133,9 @@ const VANISH_GUARD_MAX_ENTRY: i64 = 50;
 const _: () = {
   let s = VANISH_GUARD_MIN_SRC;
   let e = VANISH_GUARD_MAX_ENTRY;
-  let dim_score = 1500 * (255 - e).pow(2) + 3000 * (s - e).pow(2) + VANISH_WEIGHT * (s - e).pow(3);
+  let dim_score = ALPHA_WEIGHT_LAB * (255 - e).pow(2)
+    + DIM_WEIGHT * (s - e).pow(2)
+    + VANISH_WEIGHT * (s - e).pow(3);
   assert!(dim_score > MAX_DELTA_E76_SQ);
 };
 
@@ -171,6 +176,8 @@ const _: () = {
 /// stay byte-identical. It is also a literal no-op on a fully-opaque image: nothing is dimmer than an
 /// `a == 255` source, the term is `0`, and the bundled-photo bytes are preserved. Overflow-safe:
 /// `≤ VANISH_WEIGHT · 255³ ≈ 1.66e9`, and `pdist_lab + dim_penalty + vanish_penalty ≲ 2.6e9 ≪ i64::MAX`.
+/// Test-only: production callers go through `quantize_simd::general_argmin` — see `dim_penalty`.
+#[cfg(test)]
 #[inline]
 fn vanish_penalty(guard_src_alpha: u8, entry_a: u8) -> i64 {
   if guard_src_alpha > entry_a {
@@ -391,7 +398,23 @@ impl PaletteLabSoa {
     if self.all_opaque && qa == 255 {
       quantize_simd::opaque_argmin(kernel, &self.l, &self.a, &self.b, [qlab.l, qlab.a, qlab.b])
     } else {
-      nearest_lab(&self.labs, &self.alpha, qlab, qa, skip_transparent, guard)
+      // Translucent / transparent-slot scan: `general_argmin` reproduces
+      // `nearest_lab` bit-for-bit (exact-integer semantics in f64 lanes — see
+      // quantize_simd.rs), including skip_transparent, the dim/vanish
+      // penalties, lowest-index ties, and the tier-2 all-transparent fallback.
+      quantize_simd::general_argmin(
+        kernel,
+        &self.l,
+        &self.a,
+        &self.b,
+        &self.alpha,
+        qlab.l,
+        qlab.a,
+        qlab.b,
+        qa,
+        skip_transparent,
+        guard,
+      )
     }
   }
 }
@@ -568,6 +591,338 @@ fn canonical_key(c: RGBA8, bits: u8) -> RGBA8 {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Deterministic sharding (`std::thread::scope`; std-only, no new deps).
+//
+// Every parallel stage below shares one pattern: split the input into
+// `T = min(num_cpus::get(), MAX_SHARDS)` CONTIGUOUS shards, run the SAME shard
+// body on each (on scoped workers when T > 1, inline when T == 1), and merge
+// the per-shard partials in shard order. The shard bodies are parameterized
+// over a `(start, end)` range or a slice, so the serial path IS the T == 1
+// case of the same code — serial and parallel can never diverge.
+//
+// BYTE-IDENTITY UNDER ANY T: every cross-thread reduction merged here is
+// integer-associative (counts, channel sums, error sums, AND-flags) or a pure
+// function of (key, palette) — e.g. a per-key argmin memo returns the same
+// value whichever shard computes it. Integer add/min/AND are associative AND
+// commutative, so the merged value cannot depend on how the range was cut.
+// THAT is why no fixed T is pinned anywhere: the output is T-invariant by
+// construction and `num_cpus` is free to vary by host. (Each call site
+// documents why its own reduction qualifies.)
+//
+// wasm32 has no OS threads: `shard_count` is hard-wired to 1 there, so every
+// stage degenerates to its own serial shard — identical code, identical
+// bytes. Below each site's threshold the same happens on any host.
+// ---------------------------------------------------------------------------
+
+/// Upper bound on worker shards: enough to saturate a typical desktop without
+/// paying spawn cost for huge core-count servers.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_SHARDS: usize = 8;
+
+/// Pixel-count floor for engaging the threaded paths in [`build_histogram`],
+/// [`remap_nearest`], and [`quality_score`]. Below ~256k px the spawn+join
+/// cost of scoped threads outweighs the sharded work. The threshold can never
+/// change output bytes: serial is the T == 1 case of the same shard body.
+const PAR_MIN_PIXELS: usize = 1 << 18;
+
+/// Distinct-color (entry) count floor for the k-means stages: the D×K
+/// assignment scan and the per-entry Lab build are only worth sharding when
+/// the histogram itself is large.
+const PAR_MIN_ENTRIES: usize = 1 << 16;
+
+/// Number of shards for a stage processing `work` items, or 1 to stay serial
+/// (small inputs, single-CPU hosts, and always on wasm32). Capped at
+/// `min(num_cpus::get(), MAX_SHARDS)` and never exceeds `work`.
+fn shard_count(work: usize, threshold: usize) -> usize {
+  #[cfg(test)]
+  if let Some(n) = shard_override::get() {
+    // Tests pin the shard count directly to prove output is T-invariant.
+    return n.clamp(1, work.max(1));
+  }
+  #[cfg(target_arch = "wasm32")]
+  {
+    let _ = (work, threshold);
+    1 // wasm32 has no threads: every stage is its own serial shard.
+  }
+  #[cfg(not(target_arch = "wasm32"))]
+  {
+    if work < threshold {
+      return 1;
+    }
+    num_cpus::get().min(MAX_SHARDS).clamp(1, work.max(1))
+  }
+}
+
+/// Contiguous, balanced split of `0..len` into at most `shards` non-empty
+/// ranges whose sizes differ by at most one element (the first `len % shards`
+/// shards take the extra element). `len == 0` yields `[(0, 0)]`, so a shard
+/// body still runs once on the empty range exactly as the serial loop would.
+fn shard_bounds(len: usize, shards: usize) -> Vec<(usize, usize)> {
+  let shards = shards.max(1).min(len.max(1));
+  let base = len / shards;
+  let extra = len % shards;
+  let mut bounds = Vec::with_capacity(shards);
+  let mut start = 0;
+  for i in 0..shards {
+    let size = base + usize::from(i < extra);
+    bounds.push((start, start + size));
+    start += size;
+  }
+  bounds
+}
+
+/// Runs `body(start, end)` once per shard of `0..len` and returns the partials
+/// in shard order for the caller's (associative) merge. `body` must be pure:
+/// it reads only shared immutable inputs and writes only into its return
+/// value, so running it inline, on a worker, or under a different shard count
+/// yields the same bytes — see the sharding banner above.
+#[cfg(not(target_arch = "wasm32"))]
+fn shard_reduce<T, F>(len: usize, shards: usize, body: F) -> Vec<T>
+where
+  T: Send,
+  F: Fn(usize, usize) -> T + Sync,
+{
+  let bounds = shard_bounds(len, shards);
+  if bounds.len() <= 1 {
+    // Serial path — literally `body(0, len)`.
+    return bounds.iter().map(|&(s, e)| body(s, e)).collect();
+  }
+  let body = &body; // one shared &F across workers (F: Sync => &F: Send)
+  let mut results: Vec<Option<T>> = Vec::new();
+  results.resize_with(bounds.len(), || None);
+  let failed = std::thread::scope(|scope| {
+    let mut handles = Vec::with_capacity(bounds.len());
+    let mut failed = Vec::new(); // ~always empty; see the recovery loop below
+    for (i, &(s, e)) in bounds.iter().enumerate() {
+      match std::thread::Builder::new().spawn_scoped(scope, move || body(s, e)) {
+        Ok(h) => handles.push((i, h)),
+        Err(_) => failed.push(i), // spawn refused: run this shard inline later
+      }
+    }
+    // Join ALL handles before rethrowing: a worker panic is a bug the serial
+    // path shares (same body), so we rethrow the first payload in SHARD ORDER
+    // — the closest match to where a serial `body` would panic — only after
+    // every worker has joined, so scope auto-join can never panic mid-unwind.
+    let mut first_err = None;
+    for (i, h) in handles {
+      match h.join() {
+        Ok(v) => results[i] = Some(v),
+        Err(payload) => {
+          if first_err.is_none() {
+            first_err = Some(payload);
+          }
+        }
+      }
+    }
+    if let Some(payload) = first_err {
+      std::panic::resume_unwind(payload);
+    }
+    failed
+  });
+  // A shard whose thread could not be spawned (OS resource exhaustion) runs
+  // here on the calling thread: `body` is pure, so its partial is identical
+  // wherever it executes — threading itself never panics.
+  for i in failed {
+    let (s, e) = bounds[i];
+    results[i] = Some(body(s, e));
+  }
+  results
+    .into_iter()
+    .map(|r| r.expect("every shard either joined or ran inline"))
+    .collect()
+}
+
+/// wasm32 counterpart of [`shard_reduce`]: no threads, so the single shard is
+/// the whole range — identical code path, identical bytes.
+#[cfg(target_arch = "wasm32")]
+fn shard_reduce<T, F>(len: usize, _shards: usize, body: F) -> Vec<T>
+where
+  F: Fn(usize, usize) -> T,
+{
+  // `shard_bounds(len, 1)` is `[(0, len)]` — the whole range as one shard.
+  shard_bounds(len, 1)
+    .into_iter()
+    .map(|(s, e)| body(s, e))
+    .collect()
+}
+
+/// Scatter variant of [`shard_reduce`]: `body` writes each shard's output into
+/// a DISJOINT mutable slice (the same contiguous split), so no merge is needed
+/// at all — the filled buffer equals the serial fill for any shard count as
+/// long as `body` is a pure function of its input slice.
+#[cfg(not(target_arch = "wasm32"))]
+fn shard_scatter<I, O, F>(input: &[I], out: &mut [O], shards: usize, body: F)
+where
+  I: Sync,
+  O: Send,
+  F: Fn(&[I], &mut [O]) + Sync,
+{
+  debug_assert_eq!(input.len(), out.len());
+  let bounds = shard_bounds(input.len(), shards);
+  if bounds.len() <= 1 {
+    body(input, out);
+    return;
+  }
+  let body = &body;
+  // `rest` reborrows `out`, so `out` itself is usable again after the scope
+  // for the (rare) spawn-failure recovery loop.
+  let mut rest: &mut [O] = out;
+  let failed = std::thread::scope(|scope| {
+    let mut handles = Vec::with_capacity(bounds.len());
+    let mut failed = Vec::new();
+    for &(s, e) in &bounds {
+      // Split off this shard's disjoint output slice; bounds are contiguous
+      // and cover `0..len`, so the walk hands out the whole buffer exactly once.
+      let (head, tail) = rest.split_at_mut(e - s);
+      rest = tail;
+      let in_c = &input[s..e];
+      match std::thread::Builder::new().spawn_scoped(scope, move || body(in_c, head)) {
+        Ok(h) => handles.push(h),
+        Err(_) => failed.push((s, e)),
+      }
+    }
+    // Join every worker before rethrowing the first (shard-order) panic —
+    // same reason as `shard_reduce`: a `body` panic mirrors the serial path,
+    // and a clean join-all keeps scope auto-join from panicking mid-unwind.
+    let mut first_err = None;
+    for h in handles {
+      match h.join() {
+        Ok(()) => {}
+        Err(payload) => {
+          if first_err.is_none() {
+            first_err = Some(payload);
+          }
+        }
+      }
+    }
+    if let Some(payload) = first_err {
+      std::panic::resume_unwind(payload);
+    }
+    failed
+  });
+  for (s, e) in failed {
+    // Spawn was refused: fill that shard's range inline — pure body, same bytes.
+    body(&input[s..e], &mut out[s..e]);
+  }
+}
+
+/// wasm32 counterpart of [`shard_scatter`]: the whole range in one call.
+#[cfg(target_arch = "wasm32")]
+fn shard_scatter<I, O, F>(input: &[I], out: &mut [O], _shards: usize, body: F)
+where
+  F: Fn(&[I], &mut [O]),
+{
+  debug_assert_eq!(input.len(), out.len());
+  body(input, out);
+}
+
+/// Two-output variant of [`shard_scatter`], for per-element maps that produce
+/// a pair of aligned arrays in one pass (the `entry_labs`/`entry_alphas`
+/// build). Same disjointness and T-invariance argument.
+#[cfg(not(target_arch = "wasm32"))]
+fn shard_scatter2<I, O1, O2, F>(
+  input: &[I],
+  out1: &mut [O1],
+  out2: &mut [O2],
+  shards: usize,
+  body: F,
+) where
+  I: Sync,
+  O1: Send,
+  O2: Send,
+  F: Fn(&[I], &mut [O1], &mut [O2]) + Sync,
+{
+  debug_assert_eq!(input.len(), out1.len());
+  debug_assert_eq!(input.len(), out2.len());
+  let bounds = shard_bounds(input.len(), shards);
+  if bounds.len() <= 1 {
+    body(input, out1, out2);
+    return;
+  }
+  let body = &body;
+  let mut rest1: &mut [O1] = out1;
+  let mut rest2: &mut [O2] = out2;
+  let failed = std::thread::scope(|scope| {
+    let mut handles = Vec::with_capacity(bounds.len());
+    let mut failed = Vec::new();
+    for &(s, e) in &bounds {
+      let (h1, t1) = rest1.split_at_mut(e - s);
+      let (h2, t2) = rest2.split_at_mut(e - s);
+      rest1 = t1;
+      rest2 = t2;
+      let in_c = &input[s..e];
+      match std::thread::Builder::new().spawn_scoped(scope, move || body(in_c, h1, h2)) {
+        Ok(h) => handles.push(h),
+        Err(_) => failed.push((s, e)),
+      }
+    }
+    let mut first_err = None;
+    for h in handles {
+      match h.join() {
+        Ok(()) => {}
+        Err(payload) => {
+          if first_err.is_none() {
+            first_err = Some(payload);
+          }
+        }
+      }
+    }
+    if let Some(payload) = first_err {
+      std::panic::resume_unwind(payload);
+    }
+    failed
+  });
+  for (s, e) in failed {
+    body(&input[s..e], &mut out1[s..e], &mut out2[s..e]);
+  }
+}
+
+/// wasm32 counterpart of [`shard_scatter2`].
+#[cfg(target_arch = "wasm32")]
+fn shard_scatter2<I, O1, O2, F>(
+  input: &[I],
+  out1: &mut [O1],
+  out2: &mut [O2],
+  _shards: usize,
+  body: F,
+) where
+  F: Fn(&[I], &mut [O1], &mut [O2]),
+{
+  debug_assert_eq!(input.len(), out1.len());
+  debug_assert_eq!(input.len(), out2.len());
+  body(input, out1, out2);
+}
+
+/// Test-only shard-count override, mirroring `quantize_simd::test_override`:
+/// lets a test pin T on a small input to prove output bytes are T-invariant.
+#[cfg(test)]
+mod shard_override {
+  use std::cell::Cell;
+
+  thread_local! {
+    static OVERRIDE: Cell<Option<usize>> = const { Cell::new(None) };
+  }
+
+  pub fn get() -> Option<usize> {
+    OVERRIDE.with(|c| c.get())
+  }
+
+  /// Runs `f` with the shard count forced to `n`, restoring the unset state
+  /// afterwards (the guard resets even if `f` panics).
+  pub fn with<R>(n: usize, f: impl FnOnce() -> R) -> R {
+    struct Reset;
+    impl Drop for Reset {
+      fn drop(&mut self) {
+        OVERRIDE.with(|c| c.set(None));
+      }
+    }
+    let _reset = Reset;
+    OVERRIDE.with(|c| c.set(Some(n)));
+    f()
+  }
+}
+
 /// Builds the distinct-color histogram (post-posterization).
 ///
 /// The per-color count is `u64`: a single color may cover every pixel, so its
@@ -575,10 +930,29 @@ fn canonical_key(c: RGBA8, bits: u8) -> RGBA8 {
 /// wrap a `u32` counter — silently in release, with a panic in debug — making
 /// the dominant color near-zero-weight before the cap/split guards can act).
 fn build_histogram(px: &[RGBA8], bits: u8) -> FastMap<RGBA8, u64> {
-  let mut hist: FastMap<RGBA8, u64> = FastMap::default();
-  for &p in px {
-    let key = canonical_key(p, bits);
-    *hist.entry(key).or_insert(0) += 1;
+  // Sharded: each shard accumulates its own histogram over a contiguous pixel
+  // range, then the shard maps merge in shard order via `count += count`.
+  // Integer addition is associative and commutative, so the merged map has
+  // identical CONTENT for ANY shard count — and content is all that matters,
+  // because this map's iteration order is never observed downstream (every
+  // consumer probes by key or re-sorts; see [`FastMap`]). With T == 1 the
+  // single partial IS the serial histogram — same body, same bytes.
+  let shards = shard_count(px.len(), PAR_MIN_PIXELS);
+  let partials = shard_reduce(px.len(), shards, |s, e| {
+    let mut m: FastMap<RGBA8, u64> = FastMap::default();
+    for &p in &px[s..e] {
+      let key = canonical_key(p, bits);
+      *m.entry(key).or_insert(0) += 1;
+    }
+    m
+  });
+  let mut it = partials.into_iter();
+  // The first shard's map becomes the base (T == 1: no merge pass at all).
+  let mut hist = it.next().unwrap_or_default();
+  for m in it {
+    for (k, v) in m {
+      *hist.entry(k).or_insert(0) += v;
+    }
   }
   hist
 }
@@ -968,6 +1342,12 @@ fn median_cut(
   max_colors: usize,
   true_counts: Option<&FastMap<u32, u64>>,
 ) -> Vec<RGBA8> {
+  // Deliberately SERIAL: the greedy box loop picks the single best split each
+  // round and every later split decision depends on the boxes produced by
+  // earlier ones — an inherently sequential dependency chain, not a reducible
+  // map. (This is also why output is deterministic: one box, one split, one
+  // total order.)
+  //
   // `entries` are pre-collected and deterministically sorted by the caller, so
   // the seed box order never depends on map iteration order.
   let mut boxes: Vec<MCBox> = vec![MCBox::new(entries.to_vec())];
@@ -1059,6 +1439,10 @@ fn median_cut(
 /// D² reseed, the Wu split, and `quality_score` are byte-identical; the guard touches ONLY the two
 /// final-remap sites. On a fully-opaque image every entry is `a == 255`, nothing is dimmer than an
 /// `a == 255` source, both terms are `0`, and output is byte-identical there too.
+/// Test-only now: production general-path calls go through [`quantize_simd::general_argmin`],
+/// which reproduces this scan bit-for-bit in f64 lanes (verified by the `kernel_matches_scalar`
+/// and `general_matches_scalar_*` tests); this stays compiled for tests as the readable reference.
+#[cfg(test)]
 #[inline]
 fn nearest_lab(
   palette_labs: &[Lab],
@@ -1173,17 +1557,26 @@ fn kmeans_objective(
   debug_assert_eq!(entries.len(), entry_alphas.len());
   let soa = PaletteLabSoa::from_palette(palette);
   let kernel = quantize_simd::detect();
-  let mut obj: u128 = 0;
-  for (ei, e) in entries.iter().enumerate() {
-    // `entry_labs[ei]` IS `rgb_to_lab(e.color)` — the caller caches it once per
-    // refine instead of recomputing the cube-root conversion per objective call.
-    let qlab = entry_labs[ei];
-    // Clustering objective: guard disabled (`0`) so the keep-best metric is pure `pdist`.
-    let idx = soa.nearest(kernel, qlab, entry_alphas[ei], entry_alphas[ei] > 0, 0);
-    let d = pdist_lab(qlab, entry_alphas[ei], soa.labs[idx], soa.alpha[idx]).max(0) as u128;
-    obj += e.count as u128 * d;
-  }
-  obj
+  // Sharded: each shard accumulates a partial `u128` objective over its
+  // contiguous entry range; the partials sum in shard order. Integer addition
+  // is associative and commutative and each entry's argmin is a pure function
+  // of (entry, palette), so the total is identical for ANY shard count.
+  let shards = shard_count(entries.len(), PAR_MIN_ENTRIES);
+  shard_reduce(entries.len(), shards, |s, e| {
+    let mut obj: u128 = 0;
+    for ei in s..e {
+      // `entry_labs[ei]` IS `rgb_to_lab(e.color)` — the caller caches it once per
+      // refine instead of recomputing the cube-root conversion per objective call.
+      let qlab = entry_labs[ei];
+      // Clustering objective: guard disabled (`0`) so the keep-best metric is pure `pdist`.
+      let idx = soa.nearest(kernel, qlab, entry_alphas[ei], entry_alphas[ei] > 0, 0);
+      let d = pdist_lab(qlab, entry_alphas[ei], soa.labs[idx], soa.alpha[idx]).max(0) as u128;
+      obj += entries[ei].count as u128 * d;
+    }
+    obj
+  })
+  .into_iter()
+  .sum()
 }
 
 /// Lloyd / k-means relaxation over the histogram cells.
@@ -1224,11 +1617,27 @@ fn kmeans_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) {
   // pass each iter, plus the D² reseed) and `rgb_to_lab` is the cube-root cost, so
   // computing it per-entry-per-scan would dominate. Alphas are kept alongside for
   // the perceptual `pdist_lab` alpha term.
-  let entry_labs: Vec<Lab> = entries
-    .iter()
-    .map(|e| rgb_to_lab(e.color.r, e.color.g, e.color.b))
-    .collect();
-  let entry_alphas: Vec<u8> = entries.iter().map(|e| e.color.a).collect();
+  //
+  // Sharded parallel map: each shard fills its own disjoint `labs`/`alphas`
+  // range with values that are a pure function of the entry (no reduction at
+  // all), so the arrays are identical for ANY shard count. `shard_count` is
+  // computed once here and reused by the per-pass assignment scan below
+  // (`entries.len()` is fixed for the whole refine).
+  let shards = shard_count(entries.len(), PAR_MIN_ENTRIES);
+  let mut entry_labs = vec![rgb_to_lab(0, 0, 0); entries.len()];
+  let mut entry_alphas = vec![0u8; entries.len()];
+  shard_scatter2(
+    entries,
+    &mut entry_labs,
+    &mut entry_alphas,
+    shards,
+    |chunk, labs, alphas| {
+      for (i, e) in chunk.iter().enumerate() {
+        labs[i] = rgb_to_lab(e.color.r, e.color.g, e.color.b);
+        alphas[i] = e.color.a;
+      }
+    },
+  );
 
   // Best-seen palette starts at the seed; the guard never returns worse than
   // this. `best_obj` starts at u128::MAX so the FIRST pass's fused objective —
@@ -1261,24 +1670,59 @@ fn kmeans_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) {
     // exactly `kmeans_objective(p_i)` — same entries order, same `pdist_lab`,
     // same `u128` accumulation — folding the old standalone objective pass into
     // the scan that was already running.
+    //
+    // Sharded: each shard keeps its own per-cluster accumulators (5 × k `u64`s)
+    // plus a partial `u128` objective, merged into the shared accumulators in
+    // shard order below. Every merge is integer addition — associative and
+    // commutative — and each entry's assigned index is a pure function of
+    // (entry, palette), so `sr..wn`/`pass_obj` are identical for ANY shard
+    // count: the serial loop is simply the T == 1 case of the same body.
     let mut pass_obj: u128 = 0;
-    for (ei, e) in entries.iter().enumerate() {
-      // Clustering assignment: guard disabled so centroids/palette stay byte-identical.
-      let idx = soa.nearest(
-        kernel,
-        entry_labs[ei],
-        entry_alphas[ei],
-        entry_alphas[ei] > 0,
-        0,
-      );
-      pass_obj += e.count as u128
-        * pdist_lab(entry_labs[ei], entry_alphas[ei], soa.labs[idx], soa.alpha[idx]).max(0) as u128;
-      let c = e.count;
-      sr[idx] += e.color.r as u64 * c;
-      sg[idx] += e.color.g as u64 * c;
-      sb[idx] += e.color.b as u64 * c;
-      sa[idx] += e.color.a as u64 * c;
-      wn[idx] += c;
+    let partials = shard_reduce(entries.len(), shards, |s, end| {
+      let mut sr = vec![0u64; k];
+      let mut sg = vec![0u64; k];
+      let mut sb = vec![0u64; k];
+      let mut sa = vec![0u64; k];
+      let mut wn = vec![0u64; k];
+      let mut obj: u128 = 0;
+      for ei in s..end {
+        let e = &entries[ei];
+        // Clustering assignment: guard disabled so centroids/palette stay byte-identical.
+        let idx = soa.nearest(
+          kernel,
+          entry_labs[ei],
+          entry_alphas[ei],
+          entry_alphas[ei] > 0,
+          0,
+        );
+        obj += e.count as u128
+          * pdist_lab(
+            entry_labs[ei],
+            entry_alphas[ei],
+            soa.labs[idx],
+            soa.alpha[idx],
+          )
+          .max(0) as u128;
+        let c = e.count;
+        sr[idx] += e.color.r as u64 * c;
+        sg[idx] += e.color.g as u64 * c;
+        sb[idx] += e.color.b as u64 * c;
+        sa[idx] += e.color.a as u64 * c;
+        wn[idx] += c;
+      }
+      (sr, sg, sb, sa, wn, obj)
+    });
+    // Merge shard partials in shard order — all integer adds, so the merged
+    // accumulators equal the serial loop's for any T.
+    for (psr, psg, psb, psa, pwn, pobj) in partials {
+      for i in 0..k {
+        sr[i] += psr[i];
+        sg[i] += psg[i];
+        sb[i] += psb[i];
+        sa[i] += psa[i];
+        wn[i] += pwn[i];
+      }
+      pass_obj += pobj;
     }
 
     // Keep-best adoption of p_i (the palette this pass just scanned): identical
@@ -1439,30 +1883,40 @@ fn kmeans_refine(palette: &mut [RGBA8], entries: &[ColorCount], iters: u8) {
 fn remap_nearest(px: &[RGBA8], palette: &[RGBA8], bits: u8) -> Vec<u8> {
   // Palette Labs cached once (SoA); the per-color cache only computes `rgb_to_lab`
   // for each DISTINCT canonical key once (perceptual assignment via the dispatched scan).
+  // `soa`/`kernel` are detected ONCE here and shared read-only by every shard —
+  // detecting inside a worker would still return the same value, but hoisting
+  // is cheaper and keeps the test-only kernel override on the calling thread.
   let soa = PaletteLabSoa::from_palette(palette);
   let kernel = quantize_simd::detect();
-  // Order-free memo (probe-only): FastMap is byte-identical here because the map
-  // is never iterated — each distinct key produces its index on first sight.
-  let mut cache: FastMap<RGBA8, u8> = FastMap::default();
-  let mut indices = Vec::with_capacity(px.len());
-  for &p in px {
-    let key = canonical_key(p, bits);
-    let idx = *cache.entry(key).or_insert_with(|| {
-      // `key` IS the (posterized) source pixel, so its alpha is the source visibility:
-      // `skip_transparent = key.a > 0` (a visible key must not resolve to the transparent
-      // slot) and the FINAL-REMAP visibility guard is keyed on the same source alpha
-      // `key.a` (posterize never touches alpha) so a visible pixel cannot vanish onto a
-      // much-dimmer entry.
-      soa.nearest(
-        kernel,
-        rgb_to_lab(key.r, key.g, key.b),
-        key.a,
-        key.a > 0,
-        key.a,
-      ) as u8
-    });
-    indices.push(idx);
-  }
+  // Pre-allocated output, filled via disjoint per-shard slices: each shard
+  // keeps its own memo `cache` and writes ONLY its own `indices` range.
+  // Order-free memo (probe-only): FastMap is byte-identical here because the
+  // map is never iterated — each distinct key produces its index on first
+  // sight. The per-key argmin is a pure function of (key, palette), so a shard
+  // boundary can only make two shards compute the same key twice — never a
+  // different index. The buffer is therefore identical for ANY shard count.
+  let mut indices = vec![0u8; px.len()];
+  let shards = shard_count(px.len(), PAR_MIN_PIXELS);
+  shard_scatter(px, &mut indices, shards, |chunk, out| {
+    let mut cache: FastMap<RGBA8, u8> = FastMap::default();
+    for (i, &p) in chunk.iter().enumerate() {
+      let key = canonical_key(p, bits);
+      out[i] = *cache.entry(key).or_insert_with(|| {
+        // `key` IS the (posterized) source pixel, so its alpha is the source visibility:
+        // `skip_transparent = key.a > 0` (a visible key must not resolve to the transparent
+        // slot) and the FINAL-REMAP visibility guard is keyed on the same source alpha
+        // `key.a` (posterize never touches alpha) so a visible pixel cannot vanish onto a
+        // much-dimmer entry.
+        soa.nearest(
+          kernel,
+          rgb_to_lab(key.r, key.g, key.b),
+          key.a,
+          key.a > 0,
+          key.a,
+        ) as u8
+      });
+    }
+  });
   indices
 }
 
@@ -1708,6 +2162,10 @@ fn remap_dither(px: &[RGBA8], width: usize, height: usize, palette: &[RGBA8], bi
   if width == 0 || height == 0 {
     return indices;
   }
+  // Deliberately SERIAL: error diffusion propagates each pixel's quantization
+  // residual into not-yet-visited neighbors, so pixel i's target depends on
+  // the exact accumulated state left by its serpentine predecessors — a
+  // sequential recurrence no sharding can reproduce byte-identically.
   // Cache the palette Labs ONCE (SoA): the palette is fixed across every pixel, so
   // `rgb_to_lab` runs `palette.len()` times here, not once per pixel. The per-pixel
   // query Lab (for `want`) is still computed per pixel — `want` varies — but that is
@@ -1928,35 +2386,55 @@ fn quality_score(px: &[RGBA8], bits: u8, palette: &[RGBA8], indices: &[u8]) -> u
   // accumulator was already exact for every real input, so summing in `u64` and
   // converting once yields the IDENTICAL `mse` (and keeps the door open for
   // deterministic parallelism later).
+  //
+  // Sharded: each shard returns a `(sum_err, n, lossless)` triple over its
+  // contiguous pixel range; the partials merge in shard order via `u64` add
+  // and `&&` — associative and commutative, so the merged triple is identical
+  // for ANY shard count and the serial loop is the T == 1 case of this body.
+  let shards = shard_count(px.len(), PAR_MIN_PIXELS);
+  let partials = shard_reduce(px.len(), shards, |s, e| {
+    let mut sum_err = 0u64;
+    let mut n = 0u64;
+    // Exact-lossless flag: stays true only while every visible pixel's chosen
+    // palette color is BYTE-IDENTICAL to its reference. The accumulated `dist2`
+    // alone cannot decide losslessness because `dist2` truncates the
+    // alpha-weighted RGB term with integer division (`* wa / 510`): for a < 255 a
+    // 1-LSB near-opaque RGB difference floors to 0, so a genuinely lossy remap can
+    // accumulate zero error and would otherwise report 100. Equality here is exact
+    // (no float, no `dist2`), so the score==100 verdict means true byte-identity.
+    // The shard flag is AND-ed into the global one below — `lossless` is a pure
+    // per-pixel predicate, so AND-ing in any order gives the same verdict.
+    let mut lossless = true;
+    for i in s..e {
+      let p = px[i];
+      if p.a == 0 {
+        continue;
+      }
+      // Compare against the posterized reference, not the raw source, so the
+      // user's explicit posterization is never counted as quantizer error. With
+      // `bits == 0` (the default operating point) the reference IS the raw source,
+      // and the fast path returns 100 exactly when the output reproduces this same
+      // posterized reference byte-for-byte, so 100 keeps a single consistent
+      // meaning: "byte-identical to the (posterized) input on every visible pixel".
+      let reference = posterize(p, bits);
+      let q = palette[indices[i] as usize];
+      if q != reference {
+        lossless = false;
+      }
+      // `dist2` is provably non-negative (sums of squares × non-negative factors),
+      // so the `as u64` cast never wraps.
+      sum_err += dist2(reference, q) as u64;
+      n += 1;
+    }
+    (sum_err, n, lossless)
+  });
   let mut sum_err = 0u64;
   let mut n = 0u64;
-  // Exact-lossless flag: stays true only while every visible pixel's chosen
-  // palette color is BYTE-IDENTICAL to its reference. The accumulated `dist2`
-  // alone cannot decide losslessness because `dist2` truncates the
-  // alpha-weighted RGB term with integer division (`* wa / 510`): for a < 255 a
-  // 1-LSB near-opaque RGB difference floors to 0, so a genuinely lossy remap can
-  // accumulate zero error and would otherwise report 100. Equality here is exact
-  // (no float, no `dist2`), so the score==100 verdict means true byte-identity.
   let mut lossless = true;
-  for (i, &p) in px.iter().enumerate() {
-    if p.a == 0 {
-      continue;
-    }
-    // Compare against the posterized reference, not the raw source, so the
-    // user's explicit posterization is never counted as quantizer error. With
-    // `bits == 0` (the default operating point) the reference IS the raw source,
-    // and the fast path returns 100 exactly when the output reproduces this same
-    // posterized reference byte-for-byte, so 100 keeps a single consistent
-    // meaning: "byte-identical to the (posterized) input on every visible pixel".
-    let reference = posterize(p, bits);
-    let q = palette[indices[i] as usize];
-    if q != reference {
-      lossless = false;
-    }
-    // `dist2` is provably non-negative (sums of squares × non-negative factors),
-    // so the `as u64` cast never wraps.
-    sum_err += dist2(reference, q) as u64;
-    n += 1;
+  for (se, nn, ll) in partials {
+    sum_err += se;
+    n += nn;
+    lossless &= ll;
   }
   if n == 0 {
     return 100;
@@ -2430,6 +2908,137 @@ mod tests {
     assert_eq!(a.palette, b.palette, "palette must be deterministic");
     assert_eq!(a.indices, b.indices, "indices must be deterministic");
     assert_eq!(a.quality, b.quality);
+  }
+
+  // ---- Deterministic-sharding tests ----
+
+  /// The shard split itself: contiguous, non-empty (unless len == 0), covering
+  /// `0..len` exactly once, with sizes differing by at most one element.
+  #[test]
+  fn shard_bounds_cover_range_exactly() {
+    for len in [0usize, 1, 2, 5, 7, 64, 255, 1000] {
+      for shards in [1usize, 2, 3, 8, 64] {
+        let b = shard_bounds(len, shards);
+        assert!(!b.is_empty(), "len={len} shards={shards}: empty bounds");
+        assert_eq!(b[0].0, 0, "len={len} shards={shards}: must start at 0");
+        assert_eq!(
+          b.last().unwrap().1,
+          len,
+          "len={len} shards={shards}: must end at len"
+        );
+        let mut covered = 0usize;
+        let mut prev_end = 0usize;
+        for &(s, e) in &b {
+          assert_eq!(s, prev_end, "len={len} shards={shards}: gap in coverage");
+          assert!(s <= e, "len={len} shards={shards}: inverted range");
+          if len > 0 {
+            assert!(s < e, "len={len} shards={shards}: empty shard");
+          }
+          covered += e - s;
+          prev_end = e;
+        }
+        assert_eq!(covered, len, "len={len} shards={shards}: coverage != len");
+      }
+    }
+  }
+
+  /// THE threading contract: quantizer output must be byte-identical no matter
+  /// how many shards each parallel stage splits into. `shard_override` pins T
+  /// on a small input (below every `PAR_MIN_*` threshold, so nothing engages by
+  /// default) — the per-site merges are integer-associative or per-key-pure,
+  /// so any divergence here means a stage broke the reduction contract.
+  #[test]
+  fn output_is_shard_count_invariant() {
+    // >max_colors distinct colors with varied alpha + a fully-transparent tail,
+    // so every stage runs: sharded histogram, entry-Lab build, k-means
+    // assignment, remap (nearest AND dither variants), and quality scoring.
+    let mut g = Lcg(0xBADC_0FFE);
+    let (w, h) = (68usize, 64usize); // 4352 px
+    let mut px = Vec::with_capacity(w * h);
+    for _ in 0..(w * h - 256) {
+      let a = 1 + (g.next_u32() % 255) as u8; // visible, varied alpha
+      px.push(rgba(g.byte(), g.byte(), g.byte(), a));
+    }
+    for _ in 0..256 {
+      px.push(rgba(g.byte(), g.byte(), g.byte(), 0)); // transparent tail
+    }
+    for dither in [false, true] {
+      let c = cfg(48, dither, 6);
+      let serial = shard_override::with(1, || quantize_rgba(&px, w, h, &c));
+      for t in [2usize, 3, 8] {
+        let par = shard_override::with(t, || quantize_rgba(&px, w, h, &c));
+        assert_eq!(
+          serial.palette, par.palette,
+          "dither={dither} T={t}: palette differs"
+        );
+        assert_eq!(
+          serial.indices, par.indices,
+          "dither={dither} T={t}: indices differ"
+        );
+        assert_eq!(
+          serial.quality, par.quality,
+          "dither={dither} T={t}: quality differs"
+        );
+      }
+    }
+  }
+
+  /// The k-means D² reseed path under sharding: a seeded palette with dead
+  /// slots forces `!empty.is_empty()`, so the serial reseed runs against
+  /// shard-merged accumulators — the merged `wn`/`sr..` must be identical for
+  /// every T for the same reseed picks (and thus palette) to result.
+  #[test]
+  fn kmeans_refine_shard_count_invariant() {
+    let anchor = rgba(60, 128, 128, 255);
+    let hi = rgba(60, 148, 128, 255);
+    let lo = rgba(60, 128, 148, 255);
+    let far = rgba(200, 30, 200, 255);
+    let entries = make_entries(&[(anchor, 1_000_000), (hi, 100_000), (lo, 1), (far, 5)]);
+    let seed = vec![anchor, far, rgba(0, 0, 255, 255)];
+    let mut palettes: Vec<Vec<RGBA8>> = Vec::new();
+    for t in [1usize, 2, 4] {
+      let mut palette = seed.clone();
+      shard_override::with(t, || kmeans_refine(&mut palette, &entries, 6));
+      // Same T, re-run: deterministic under a fixed shard count too.
+      let mut again = seed.clone();
+      shard_override::with(t, || kmeans_refine(&mut again, &entries, 6));
+      assert_eq!(palette, again, "T={t}: same-T runs diverged");
+      palettes.push(palette);
+    }
+    // Every shard count must land on the serial (T == 1) palette.
+    for (i, p) in palettes.iter().enumerate().skip(1) {
+      assert_eq!(&palettes[0], p, "T={} differs from T=1", [1usize, 2, 4][i]);
+    }
+  }
+
+  /// The REAL threshold-engaged path: a `>= PAR_MIN_PIXELS` image runs with the
+  /// host's `num_cpus`-chosen shard count (no override), and its output must
+  /// equal a forced T == 1 run byte-for-byte. On a single-core host the real
+  /// count is 1 anyway, so the check stays consistent everywhere.
+  #[test]
+  fn threshold_engaged_output_matches_serial() {
+    let (w, h) = (512usize, 512usize); // 262144 px == PAR_MIN_PIXELS
+    let mut px = Vec::with_capacity(w * h);
+    for y in 0..h {
+      for x in 0..w {
+        // ~5000 distinct opaque colors (forces the full pipeline past the fast
+        // path) + a fully-transparent column.
+        let idx = (x * 13 + y * 7) % 5000;
+        let c = rgba(
+          (idx & 0xff) as u8,
+          ((idx >> 8) & 0xff) as u8,
+          (idx * 37) as u8,
+          255,
+        );
+        px.push(if x == 0 { rgba(0, 0, 0, 0) } else { c });
+      }
+    }
+    let c = cfg(64, false, 4);
+    let serial = shard_override::with(1, || quantize_rgba(&px, w, h, &c));
+    let real = quantize_rgba(&px, w, h, &c); // real num_cpus-driven sharding
+    assert_eq!(serial.palette, real.palette, "palette differs");
+    assert_eq!(serial.indices, real.indices, "indices differ");
+    assert_eq!(serial.quality, real.quality, "quality differs");
   }
 
   #[test]
