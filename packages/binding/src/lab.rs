@@ -22,6 +22,8 @@
 //!   means `53.58`. This scale gives ~0.01-unit resolution, far finer than the ≤0.5 accuracy bar.
 //! - `delta_e76_sq` returns dL² + da² + db² in those (×100) squared units as `i64`.
 
+use std::sync::OnceLock;
+
 /// A CIELAB color stored in fixed-point integers (each component scaled by [`LAB_SCALE`]).
 ///
 /// No floating-point fields, so two `Lab` values produced on different platforms from the same
@@ -151,12 +153,67 @@ fn icbrt_u128(n: u128) -> u128 {
   x
 }
 
+/// Number of `t` values covered by [`F_Q16_LUT`]. The production domain of [`f_q16`] is a
+/// white-normalized XYZ ratio `rshift_q16(MAT row · SRGB_TO_LINEAR[...])` where every linear
+/// value is `<= 65535`, so `t <= (65537 * 65535 + HALF) >> 16 == 65536` (65537 is the largest
+/// MAT row sum — two rows sum 65537, the third 65536). The table covers `[0, 131072)`, ~2x
+/// margin over the reachable max, so every production `t` is in range.
+const F_Q16_LUT_LEN: usize = 131_072;
+
+/// Lazily-built exact lookup table for [`f_q16`] over `t ∈ [0, F_Q16_LUT_LEN)` —
+/// `F_Q16_LUT_LEN` × `i32` = 512 KiB of heap, built once per process (131072 integer cube
+/// roots, a few ms).
+///
+/// # Determinism
+///
+/// `LUT[i]` is filled by [`f_q16_compute`] — the exact integer path `f_q16` used to run,
+/// BOTH branches included — so the table equals the pre-LUT function BY CONSTRUCTION, not by
+/// approximation. The contents are a pure function of the index: whichever thread wins the
+/// `OnceLock` init race writes the same bytes, and every later read goes through one acquire
+/// load, so lookups are identical on every platform and every run (init ORDER cannot affect
+/// the CONTENTS). `OnceLock` is sound on single-threaded wasm32.
+static F_Q16_LUT: OnceLock<Box<[i32; F_Q16_LUT_LEN]>> = OnceLock::new();
+
+/// Fills [`F_Q16_LUT`] by calling the exact compute path for every covered `t`.
+/// Heap-allocated via `Vec` so the 512 KiB table is never a stack temporary (small-stack
+/// threads / wasm).
+#[cold]
+fn build_f_q16_lut() -> Box<[i32; F_Q16_LUT_LEN]> {
+  let mut t = vec![0i32; F_Q16_LUT_LEN];
+  for (i, e) in t.iter_mut().enumerate() {
+    *e = f_q16_compute(i as i64) as i32;
+  }
+  t.into_boxed_slice()
+    .try_into()
+    .expect("vec len == F_Q16_LUT_LEN")
+}
+
 /// CIELAB nonlinearity `f(t)`, input and output both **Q16**.
 ///
 /// `t` is a white-normalized XYZ ratio in Q16. For `t > ε` returns `t^(1/3)` via the integer cube
 /// root; otherwise returns the linear branch `t / (3·(6/29)²) + 4/29`. Integer-only.
+///
+/// This is the hottest helper in the module — one call per XYZ channel, three per
+/// [`rgb_to_lab`], once per dither-remap pixel — and its `t > ε` branch costs a u128-division
+/// Newton iteration, so in-range calls are served by [`F_Q16_LUT`]. Inputs outside the
+/// covered range (unreachable in production: `t` is a sum of non-negative terms bounded by
+/// 65536) fall through to [`f_q16_compute`], keeping `f_q16` total and byte-identical to the
+/// pre-LUT implementation for EVERY `i64`, in-range or not.
 #[inline]
 fn f_q16(t: i64) -> i64 {
+  // `t as u64` (not `usize`) so the bounds check is width-independent: a negative `t` wraps to a
+  // huge u64 on every platform — including wasm32, where `usize` is 32 bits — and takes the
+  // fallback instead of aliasing into the table.
+  if (t as u64) < F_Q16_LUT_LEN as u64 {
+    F_Q16_LUT.get_or_init(build_f_q16_lut)[t as usize] as i64
+  } else {
+    f_q16_compute(t)
+  }
+}
+
+/// The exact compute path behind [`f_q16`] — the pre-LUT body, unchanged. Used to FILL
+/// [`F_Q16_LUT`], as the out-of-range fallback, and by tests as the reference implementation.
+fn f_q16_compute(t: i64) -> i64 {
   if t > EPS_Q16 {
     // t is Q16. Shift left by 32 so the value represents `t_real * 2^48`; its integer cube
     // root is `t_real^(1/3) * 2^16`, i.e. the result in Q16.
@@ -236,10 +293,44 @@ pub(crate) fn srgb_to_linear_f(c: u8) -> f32 {
 /// == c` for every `c` (pinned by `linear_srgb_roundtrip_is_exact`), so a flat /
 /// zero-error pixel re-encodes to its original code and dither-free regions stay
 /// byte-identical to a plain sRGB remap.
+///
+/// # Lookup table
+///
+/// `q` is closed and tiny (`[0, 65535]`), so the nearest-code search is tabulated in
+/// [`LINEAR_TO_SRGB8_LUT`]: `q` is computed exactly as the pre-LUT body did (same
+/// clamp/multiply/round and the same saturating `as` cast — NaN still maps to `q == 0`,
+/// `±inf` clamps to the endpoints), then one table load returns what the search returned.
+/// `LUT[q] == linear_to_srgb8_lookup(q)` BY CONSTRUCTION (the fill calls the preserved
+/// body, tie-break included), so outputs are byte-identical for every `lin`; the
+/// `OnceLock` init race cannot change the contents. 64 KiB of heap, built once.
 #[inline]
 pub(crate) fn linear_to_srgb8(lin: f32) -> u8 {
-  // Quantize the linear value to the table's Q16 units (0..=65535).
+  // Quantize the linear value to the table's Q16 units (0..=65535) — identical to the
+  // pre-LUT body.
   let q = (lin.clamp(0.0, 1.0) * 65535.0).round() as i64;
+  LINEAR_TO_SRGB8_LUT.get_or_init(build_linear_to_srgb8_lut)[q as usize]
+}
+
+/// Lazily-built exact inverse table for [`linear_to_srgb8`] indexed by the quantized linear
+/// value `q ∈ [0, 65535]` — 64 KiB of heap, built once per process. See the determinism
+/// argument on [`F_Q16_LUT`]: filled by the exact search below, so identical by construction.
+static LINEAR_TO_SRGB8_LUT: OnceLock<Box<[u8; 65536]>> = OnceLock::new();
+
+/// Fills [`LINEAR_TO_SRGB8_LUT`] by calling the preserved binary-search body for every
+/// reachable `q`. Heap-allocated via `Vec` so the table is never a stack temporary.
+#[cold]
+fn build_linear_to_srgb8_lut() -> Box<[u8; 65536]> {
+  let mut t = vec![0u8; 65536];
+  for (q, e) in t.iter_mut().enumerate() {
+    *e = linear_to_srgb8_lookup(q as i64);
+  }
+  t.into_boxed_slice().try_into().expect("vec len == 65536")
+}
+
+/// The pre-LUT body of [`linear_to_srgb8`], unchanged: nearest-code binary search over
+/// [`SRGB_TO_LINEAR`] for a quantized linear value `q` (table units, 0..=65535). Now used to
+/// FILL [`LINEAR_TO_SRGB8_LUT`] and as the test reference.
+fn linear_to_srgb8_lookup(q: i64) -> u8 {
   // First code whose linear value is >= q (table is strictly increasing).
   let mut lo = 0usize;
   let mut hi = 255usize;
@@ -549,6 +640,55 @@ mod tests {
     while n < (1u128 << 40) {
       assert_eq!(icbrt_u128(n), floor_cbrt(n), "icbrt mismatch at {n}");
       n += 999_983; // prime stride
+    }
+  }
+
+  /// Byte-identity guard for the `f_q16` LUT: the table must equal the direct compute path
+  /// over its ENTIRE covered domain (the fill already guarantees this by construction — the
+  /// test pins the index/fill math itself), and out-of-range `t` must take the exact
+  /// fallback so `f_q16` stays total and identical for every `i64`.
+  #[test]
+  fn f_q16_lut_matches_compute_everywhere() {
+    for t in 0..F_Q16_LUT_LEN as i64 {
+      assert_eq!(f_q16(t), f_q16_compute(t), "LUT mismatch at t={t}");
+    }
+    // Outside the covered range the exact compute path is used: negatives (unreachable in
+    // production but inside the i64 domain), the first uncovered index, and a large value
+    // whose `(t << 32)` still fits u128.
+    for t in [-200_000i64, -1, F_Q16_LUT_LEN as i64, 200_000, 1 << 40] {
+      assert_eq!(f_q16(t), f_q16_compute(t), "fallback mismatch at t={t}");
+    }
+  }
+
+  /// Byte-identity guard for the `linear_to_srgb8` LUT: the table must equal the preserved
+  /// binary-search body at EVERY reachable `q` (all 65536 of them), plus a dense float sweep
+  /// and edge values so the q-quantization + indexing path is covered end to end.
+  #[test]
+  fn linear_to_srgb8_lut_matches_lookup() {
+    // Reference: the same q-quantization as `linear_to_srgb8`, routed to the preserved
+    // pre-LUT search body instead of the table.
+    let reference = |lin: f32| -> u8 {
+      let q = (lin.clamp(0.0, 1.0) * 65535.0).round() as i64;
+      linear_to_srgb8_lookup(q)
+    };
+    // Every reachable q: `lin = q/65535` re-quantizes to exactly `q` (f32 relative error
+    // ~1e-7 « 0.5/65535), so this indexes LUT[q] and compares it to the search.
+    for q in 0..=65535i64 {
+      assert_eq!(
+        linear_to_srgb8(q as f32 / 65535.0),
+        linear_to_srgb8_lookup(q),
+        "LUT mismatch at q={q}"
+      );
+    }
+    // Dense sweep including sub-step values between grid points and out-of-range inputs
+    // that exercise the clamp.
+    for i in 0..=200_000i64 {
+      let lin = i as f32 / 200_000.0 * 1.5 - 0.25;
+      assert_eq!(linear_to_srgb8(lin), reference(lin), "sweep mismatch at {lin}");
+    }
+    // Edge values: NaN and the infinities take the same saturating-cast path as before.
+    for lin in [f32::NAN, f32::NEG_INFINITY, f32::INFINITY, -0.0] {
+      assert_eq!(linear_to_srgb8(lin), reference(lin), "edge mismatch at {lin}");
     }
   }
 }
