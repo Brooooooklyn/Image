@@ -616,6 +616,39 @@ jobs:
           # at link time (macOS linker) instead of failing on undefined references.
           RUSTFLAGS: '-C link-arg=-undefined -C link-arg=dynamic_lookup'
 
+  test-rust-binding-x86:
+    name: Unit test binding on x86_64 (cargo test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # nasm is still needed: `--no-default-features` drops the `#[napi]` modules but
+      # the C-dep crates (aom/mozjpeg/webp) remain non-optional and still compile.
+      - name: Setup nasm
+        uses: ilammy/setup-nasm@v1
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: rust-unit-test-cargo-cache-x86
+      # The quantizer's byte-identity contract spans architectures, but the
+      # kernel==scalar equivalence gates (`kernel_matches_scalar_avx2/sse41`,
+      # `general_matches_scalar_*`) are cfg'd to x86_64 — on aarch64-only CI they
+      # compile out and never execute. This job executes them on real x86_64
+      # hardware (ubuntu-latest has SSE4.1 universally and AVX2 on current
+      # runners; the tests self-skip when a feature is absent). `--no-default-
+      # features` is required: the napi-gated code can't link outside Node, and
+      # there is no ELF equivalent of the macOS dynamic_lookup flag.
+      - name: cargo test
+        run: cargo test -p napi_rs_image --no-default-features
+
   benchmark:
     name: Benchmark pngQuantize (CodSpeed)
     runs-on: ubuntu-latest

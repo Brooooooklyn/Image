@@ -597,7 +597,9 @@ export interface PngQuantOptions {
   /**
    * Explicit palette size, 1-256 (1 produces a single-color palette).
    * When set, it takes precedence over the `maxQuality`-derived color-count
-   * ramp; `minQuality` still applies.
+   * ramp; `minQuality` still applies, and a failing first pass may retry at
+   * up to 256 colors to satisfy it (the size is a floor on effort, not a
+   * hard cap when quality demands more).
    * default: unset (palette size is derived from `maxQuality`)
    */
   colors?: number

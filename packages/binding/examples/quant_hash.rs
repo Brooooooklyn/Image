@@ -65,11 +65,15 @@ fn run(name: &str, px: &[RGBA8], w: usize, h: usize, cfg: &QuantizeConfig) {
       *hist.entry(p).or_insert(0) += 1;
     }
   }
+  // Iterate a sorted snapshot: HashMap order varies per process (RandomState),
+  // which would make the f64 sums below differ in the last ulp between runs.
+  let mut hist: Vec<(RGBA8, u64)> = hist.into_iter().collect();
+  hist.sort_by_key(|&(c, _)| (c.r, c.g, c.b, c.a));
   // cover: each distinct color's distance to its NEAREST palette entry.
   let mut cover_num = 0f64;
   let mut repro_num = 0f64;
   let mut n = 0f64;
-  for (&c, &cnt) in &hist {
+  for &(c, cnt) in &hist {
     let mut best = i64::MAX;
     for &e in &out.palette {
       best = best.min(d2(c, e));
