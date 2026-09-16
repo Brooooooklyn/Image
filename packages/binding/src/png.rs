@@ -438,7 +438,7 @@ fn png_quantize_inner(input: &[u8], options: &PngQuantOptions) -> Result<Vec<u8>
   // pngQuantize is a size optimizer, so it must NEVER hand back a file at least as
   // large as the caller gave us. For an already-optimized / already-indexed input
   // (classically a smooth truecolor gradient whose PAETH-filtered DEFLATE stream is
-  // tiny), re-quantizing to an indexed palette + Floyd-Steinberg dither injects
+  // tiny), re-quantizing to an indexed palette + error-diffusion dither injects
   // incompressible noise that can exceed the original. In that case the original
   // bytes are both smaller AND higher-fidelity, so return them verbatim. The caller
   // then receives the un-quantized original rather than a larger palette PNG — a
@@ -828,7 +828,7 @@ mod tests {
     // Codex P2: pngQuantize is a size optimizer, so it must NEVER return a file at
     // least as large as the input. The adversarial case is an ALREADY-OPTIMIZED PNG:
     // a smooth gradient stored as truecolor with PAETH filtering compresses to a few
-    // hundred bytes, but re-quantizing it to an indexed palette + Floyd-Steinberg
+    // hundred bytes, but re-quantizing it to an indexed palette + error-diffusion
     // dither injects incompressible noise that is many times larger. The guard in
     // png_quantize_inner returns the original bytes whenever the quantized result is
     // not strictly smaller.
