@@ -240,12 +240,15 @@ jobs:
     steps:
       - name: Setup tools
         run: |
-          apt-get update
+          echo "deb http://snapshot.debian.org/archive/debian/20260824T000000Z bullseye main" > /etc/apt/sources.list
+          echo "deb http://snapshot.debian.org/archive/debian/20260824T000000Z bullseye-updates main" >> /etc/apt/sources.list
+          echo "deb http://snapshot.debian.org/archive/debian-security/20260824T000000Z bullseye-security main" >> /etc/apt/sources.list
+          apt-get -o Acquire::Check-Valid-Until=false update
           apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libatomic1-armhf-cross git build-essential cmake ninja-build wget curl gnupg
           echo "deb http://apt.llvm.org/bullseye/ llvm-toolchain-bullseye-19 main" >> /etc/apt/sources.list
           echo "deb-src http://apt.llvm.org/bullseye/ llvm-toolchain-bullseye-19 main" >> /etc/apt/sources.list
           wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | apt-key add -
-          apt-get update
+          apt-get -o Acquire::Check-Valid-Until=false update
           apt-get install -y clang-19
           ln -s /usr/bin/clang-19 /usr/bin/clang
           ln -s /usr/bin/clang++-19 /usr/bin/clang++
