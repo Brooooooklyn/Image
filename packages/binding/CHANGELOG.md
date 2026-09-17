@@ -3,6 +3,16 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+# [1.15.0](https://github.com/Brooooooklyn/Image/compare/%40napi-rs%2Fimage%401.14.0...%40napi-rs%2Fimage%401.15.0) (2026-09-17)
+
+### Features
+
+- **transformer:** add composite() with sharp blend modes, gravity, tiling ([#138](https://github.com/Brooooooklyn/Image/issues/138)) ([#223](https://github.com/Brooooooklyn/Image/issues/223)) ([d36da74](https://github.com/Brooooooklyn/Image/commit/d36da74f20137b384c91b0c781bd1693fb18ff37))
+
+### Performance Improvements
+
+- **quantize:** ~1.5-2x faster quantizer + Oklab/Ostromoukhov quality pass, SIMD verified on x86/ARM ([#249](https://github.com/Brooooooklyn/Image/issues/249)) ([f9277fc](https://github.com/Brooooooklyn/Image/commit/f9277fc7d079e978c28fb15721e52e68f484231c))
+
 # [1.14.0](https://github.com/Brooooooklyn/Image/compare/@napi-rs/image@1.13.0...@napi-rs/image@1.14.0) (2026-06-26)
 
 ### Bug Fixes
