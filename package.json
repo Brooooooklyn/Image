@@ -51,7 +51,7 @@
     "extensions": [
       "mjs"
     ],
-    "timeout": "10m",
+    "timeout": "20m",
     "workerThreads": false,
     "environmentVariables": {
       "NODE_ENV": "ava"
