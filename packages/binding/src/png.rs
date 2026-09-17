@@ -454,7 +454,12 @@ fn png_quantize_inner(input: &[u8], options: &PngQuantOptions) -> Result<Vec<u8>
   // then receives the un-quantized original rather than a larger palette PNG — a
   // deliberate trade-off (Codex P2): pngQuantize never grows a file. `>=` (not `>`)
   // also keeps the lossless original when the sizes merely tie.
-  if final_png.len() >= input.len() {
+  //
+  // EXCEPTION: an explicit `colors` request is an output contract — `colors: 1`
+  // promises a single-color palette, and handing back the (larger-content)
+  // original would silently violate it. With `colors` set we keep the quantized
+  // result even when it grows the file.
+  if options.colors.is_none() && final_png.len() >= input.len() {
     return Ok(input.to_vec());
   }
   Ok(final_png)

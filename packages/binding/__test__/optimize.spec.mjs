@@ -150,6 +150,29 @@ test('pngQuantize rejects out-of-range options', async (t) => {
   t.not(err?.code, 'InvalidArg')
 })
 
+test('pngQuantize honors an explicit colors contract even when the file grows', async (t) => {
+  if (process.env.NAPI_RS_FORCE_WASI) {
+    t.pass()
+    return
+  }
+  // A 4x4 truecolor PNG is tiny; the indexed re-encode carries PLTE chunk
+  // overhead, so the quantized output can exceed the input. The never-grow
+  // fallback would then return the ORIGINAL verbatim — silently dropping the
+  // explicit `colors: 1` contract. With `colors` set the quantized result is
+  // kept instead: assert the output is really an indexed PNG (IHDR color type
+  // byte at offset 25 == 3), i.e. a single-color palette, not the source.
+  const px = new Uint8Array(4 * 4 * 4)
+  for (let i = 0; i < 16; i++) {
+    px[i * 4 + 0] = (i * 16) & 0xff
+    px[i * 4 + 1] = (i * 37) & 0xff
+    px[i * 4 + 2] = (i * 73) & 0xff
+    px[i * 4 + 3] = 255
+  }
+  const tiny = Transformer.fromRgbaPixels(px, 4, 4).pngSync()
+  const out = await pngQuantize(tiny, { colors: 1, minQuality: 0 })
+  t.is(out[25], 3, 'output is an indexed (palette) PNG, not the truecolor original')
+})
+
 test('pngQuantize rejects a non-PNG (JPEG) input', async (t) => {
   if (process.env.NAPI_RS_FORCE_WASI) {
     t.pass()
