@@ -308,15 +308,10 @@ fn validate_png_quant_options(o: &PngQuantOptions) -> Result<()> {
       format!("maxQuality must be between 0 and 100, got {max}"),
     ));
   }
-  if min > max {
-    return Err(Error::new(
-      Status::InvalidArg,
-      format!("minQuality ({min}) must not exceed maxQuality ({max})"),
-    ));
-  }
   // `colors` is an explicit palette size: 1 is legal (a single-color palette).
   // When set it overrides the `maxQuality`→color-count ramp in
-  // `QuantizeConfig::from_options` (wiring lands with the quantizer change);
+  // `QuantizeConfig::from_options`, making `maxQuality` dead — so the
+  // `minQuality > maxQuality` ordering check below is skipped in that case.
   // `minQuality` still applies as the acceptance gate.
   if let Some(colors) = o.colors
     && !(1..=256).contains(&colors)
@@ -324,6 +319,12 @@ fn validate_png_quant_options(o: &PngQuantOptions) -> Result<()> {
     return Err(Error::new(
       Status::InvalidArg,
       format!("colors must be between 1 and 256, got {colors}"),
+    ));
+  }
+  if o.colors.is_none() && min > max {
+    return Err(Error::new(
+      Status::InvalidArg,
+      format!("minQuality ({min}) must not exceed maxQuality ({max})"),
     ));
   }
   // `useZopfli` needs `Deflater::Zopfli`, which only exists when `oxipng/zopfli`

@@ -139,6 +139,15 @@ test('pngQuantize rejects out-of-range options', async (t) => {
   await t.throwsAsync(() => pngQuantize(PNG, { maxQuality: 101 }))
   await t.throwsAsync(() => pngQuantize(PNG, { minQuality: 200 }))
   await t.throwsAsync(() => pngQuantize(PNG, { minQuality: 80, maxQuality: 50 }))
+
+  // `colors` overrides the maxQuality ramp entirely, so an inverted min>max
+  // pair is not a validation error in that case — maxQuality is dead. If the
+  // quality gate rejects anyway it must be a GenericFailure, never InvalidArg.
+  const err = await pngQuantize(PNG, { colors: 16, minQuality: 80, maxQuality: 50 }).then(
+    () => null,
+    (e) => e,
+  )
+  t.not(err?.code, 'InvalidArg')
 })
 
 test('pngQuantize rejects a non-PNG (JPEG) input', async (t) => {
