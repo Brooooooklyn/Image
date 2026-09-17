@@ -558,11 +558,11 @@ Review fixes (`e701404`, both confirmed defects introduced by this branch):
   count-1 pairs truncated to 0 and cheapest-pair selection degenerated.
   Split-merge and merge_down share `ward_merge_cost = ni*nj*d/(ni+nj)`.
 
-CodSpeed moved from `simulation` to `walltime` on the `codspeed-macro`
-ARM64 runner. Simulation counts instructions under Valgrind — it serializes
-the scoped-thread shards and charges spawn overhead, so this branch showed
-−14% there while real x86 hardware measured −34% (4 vCPU) / +2.9% (1 CPU,
-the honest serial cost of the quality-model work). Wall-clock on the macro
-runner measures the NEON path with real threads. Caveat: the metric baseline
-re-establishes post-merge, and ARM64 wall time is noisier than instruction
-counts for sub-5% diffs.
+CodSpeed moved from `simulation` to `walltime`. Simulation counts
+instructions under Valgrind — it serializes the scoped-thread shards and
+charges spawn overhead, so this branch showed −14% there while real x86
+hardware measured −34% (4 vCPU) / +2.9% (1 CPU, the honest serial cost of
+the quality-model work). CodSpeed's low-noise `codspeed-macro` runners are
+unavailable on personal GitHub accounts, so walltime runs on the hosted
+x86_64 runner — real threads, real AVX2, noisier for sub-5% diffs. The
+baseline re-establishes on merge.
