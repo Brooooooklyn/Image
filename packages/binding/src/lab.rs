@@ -4,19 +4,19 @@
 //!
 //! The quantizer's palette-selection pipeline is integer-only by design so its output is
 //! byte-identical across x86 / arm / wasm. Perceptual palette distance must preserve that
-//! property. The forward map is pure `f32` linear algebra plus `f32::cbrt` — IEEE-754
-//! `add`/`mul`/`cbrt` are correctly rounded on every target's libm (single-precision cube
-//! root is small enough that mainstream libms return the correctly-rounded result), and the
-//! Q14 quantization absorbs any sub-ulp residue — so the stored components are
-//! bit-identical across platforms in practice, and every comparison derived from them is
-//! exact integer math. The published Oklab matrices (B. Ottosson, "A perceptual color space
+//! property. The forward map is pure `f32` linear algebra plus a deterministic
+//! cube root ([`cbrt_deterministic`] — pure IEEE-754 `+`/`*`/`/` Newton iteration,
+//! no libm call, since `f32::cbrt` is not guaranteed correctly rounded on every
+//! target's libm), and the Q14 quantization absorbs any sub-ulp residue — so the
+//! stored components are bit-identical across platforms, and every comparison
+//! derived from them is exact integer math. The published Oklab matrices (B. Ottosson, "A perceptual color space
 //! for image processing", updated 2021-01-25) are applied verbatim in `f32`.
 //!
 //! # Fixed-point scheme
 //! - sRGB -> linear: the shared `SRGB_TO_LINEAR: [u32; 256]` Q16 table (the same table the
 //!   dither's linear-light path uses — one notion of "linear" everywhere).
-//! - linear sRGB -> Oklab: the published M1 matrix, `f32::cbrt` on each LMS response, then
-//!   the published M2 matrix — all `f32`.
+//! - linear sRGB -> Oklab: the published M1 matrix, [`cbrt_deterministic`] on each
+//!   LMS response, then the published M2 matrix — `f32` except the cbrt's `f64` core.
 //! - output `OkLab` quantizes each component to a **Q14** triple (stored as `i32`):
 //!   `Lq = round(L * 16383)`, `aq = round((a + 0.5) * 16383)`, `bq = round((b + 0.5) * 16383)`.
 //!   The `+0.5` bias maps the in-gamut `a`/`b` range (~±0.34) comfortably inside `0..=16383`;
@@ -205,6 +205,41 @@ fn linear_to_srgb8_lookup(q: i64) -> u8 {
   }
 }
 
+/// Deterministic cube root in pure IEEE-754 `f64` arithmetic — bit-identical on
+/// every platform, unlike `f32::cbrt` which lowers to the target's libm and can
+/// differ by 1 ulp between libm builds (glibc vs Apple libm vs wasi-libc),
+/// breaking the cross-architecture byte-identity contract.
+///
+/// Construction: a bit-hack seed plus a FIXED count of Newton iterations for
+/// `y³ = x`. Every op is a correctly-rounded IEEE `+`, `*`, or `/` — mandated
+/// identical on every target — and the update is written as `(y + y + t) / 3`
+/// with no `mul + add` pair, so no FMA contraction can alter the result.
+/// Determinism is what matters (not correct rounding): a fixed iteration count
+/// makes even a last-ulp oscillation cycle reproduce identically everywhere.
+#[inline]
+fn cbrt_deterministic(x: f64) -> f64 {
+  if x == 0.0 {
+    return x; // preserves -0.0
+  }
+  let ax = x.abs();
+  // Bit-hack seed: for a normal f64 x = m·2^E, `bits/3` puts the exponent field
+  // at (1023+E)/3 ≈ 341+E/3; adding (1023-341)<<52 restores the bias so the
+  // seed lands within ~10% of the true root. The f32 input cast to f64 is
+  // always a normal f64 (f32's smallest subnormal ~1.4e-45 far exceeds f64's
+  // normal floor ~2.2e-308), so the hack applies to every reachable input.
+  let mut y = f64::from_bits(ax.to_bits() / 3 + 0x2AA0_0000_0000_0000);
+  // Newton: y ← (2y + x/y²)/3, written without a fusible mul+add pair.
+  for _ in 0..8 {
+    let t = ax / (y * y);
+    y = (y + y + t) / 3.0;
+  }
+  if x < 0.0 {
+    -y
+  } else {
+    y
+  }
+}
+
 /// Convert an 8-bit sRGB color to the quantized Oklab triple.
 ///
 /// The forward map is the published Oklab construction (Ottosson, matrices updated
@@ -213,7 +248,7 @@ fn linear_to_srgb8_lookup(q: i64) -> u8 {
 /// ```text
 /// (lr, lg, lb) = SRGB_TO_LINEAR[..] / 65535          # table-exact linear light
 /// (l, m, s)  = M1 · (lr, lg, lb)                     # approximate cone responses
-/// (l', m', s') = (cbrt(l), cbrt(m), cbrt(s))         # f32::cbrt, NOT powf
+/// (l', m', s') = (cbrt(l), cbrt(m), cbrt(s))         # deterministic cbrt, NOT powf/libm
 /// (L, a, b)  = M2 · (l', m', s')
 /// ```
 ///
@@ -241,10 +276,11 @@ pub(crate) fn rgb_to_oklab(r: u8, g: u8, b: u8) -> OkLab {
   let m = 0.2119034982f32 * lr + 0.6806995451f32 * lg + 0.1073969566f32 * lb;
   let s = 0.0883024619f32 * lr + 0.2817188376f32 * lg + 0.6299787005f32 * lb;
 
-  // Perceptual nonlinearity: plain f32::cbrt (never powf).
-  let l_ = l.cbrt();
-  let m_ = m.cbrt();
-  let s_ = s.cbrt();
+  // Perceptual nonlinearity: deterministic cube root (never powf, never the
+  // platform libm — see `cbrt_deterministic`).
+  let l_ = cbrt_deterministic(l as f64) as f32;
+  let m_ = cbrt_deterministic(m as f64) as f32;
+  let s_ = cbrt_deterministic(s as f64) as f32;
 
   // M2: LMS' -> Oklab (published constants, f32).
   let big_l = 0.2104542553f32 * l_ + 0.7936177850f32 * m_ - 0.0040720468f32 * s_;
@@ -474,13 +510,12 @@ mod tests {
     }
   }
 
-  /// Cross-platform determinism pin: `f32::cbrt` is the only non-exact op in the
-  /// forward map (it lowers to the platform libm). Hash the quantized triples of
-  /// a dense sRGB sweep — every color at multiples of 5 (52³ ≈ 140k colors), FNV-1a
-  /// over the (l,a,b) i32 triples — so a 1-ulp `cbrt` divergence on any platform
-  /// flips a component here and fails loudly instead of silently changing output
-  /// bytes. If this fails after a *source* change, recompute the constant and
-  /// audit the diff.
+  /// Cross-platform determinism pin: hash the quantized triples of a dense sRGB
+  /// sweep — every color at multiples of 5 (52³ ≈ 140k colors), FNV-1a over the
+  /// (l,a,b) i32 triples — so any drift in the forward map (matrices, the
+  /// deterministic cbrt, Q14 rounding) fails loudly instead of silently changing
+  /// output bytes. If this fails after a *source* change, recompute the constant
+  /// and audit the diff.
   #[test]
   fn dense_sweep_hash_pin() {
     let mut h = 0xcbf29ce484222325u64;
@@ -505,6 +540,41 @@ mod tests {
       h, 5501793295779600387u64,
       "Oklab forward-map drifted on this platform"
     );
+  }
+
+  /// Pin `cbrt_deterministic`'s exact bit pattern: these outputs must never
+  /// change, on any platform — the whole point is that no libm is involved.
+  /// Values were produced by the pure-IEEE Newton path itself; if a refactor
+  /// alters even the last bit here, cross-platform byte identity is gone.
+  #[test]
+  fn cbrt_deterministic_bit_pin() {
+    for (x, want_bits) in [
+      (0.0f64, 0.0f64.to_bits()),
+      (1.0, 1.0f64.to_bits()),
+      (0.5, 0x3fe9_65fe_a53d_6e3c),
+      (1e-45, 0x3cd2_03af_9ee7_5615),
+      (1e-20, 0x3e8c_ea94_cb5c_6ff0),
+      (1.1, 0x3ff0_8438_2783_23a4),
+    ] {
+      assert_eq!(
+        cbrt_deterministic(x).to_bits(),
+        want_bits,
+        "cbrt_deterministic({x:e}) drifted"
+      );
+    }
+    // Negation symmetry and convergence across the LMS domain.
+    for k in 0..=1000u64 {
+      let x = k as f64 / 1000.0;
+      assert_eq!(
+        cbrt_deterministic(-x).to_bits(),
+        (-cbrt_deterministic(x)).to_bits()
+      );
+      let y = cbrt_deterministic(x);
+      assert!(
+        (y * y * y - x).abs() <= 1e-15 * x.max(1e-300),
+        "cbrt({x}) = {y} not converged"
+      );
+    }
   }
 
   /// Sign / monotonicity sanity matching the reference table.
