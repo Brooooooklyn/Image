@@ -159,8 +159,8 @@ test('pngQuantize honors an explicit colors contract even when the file grows', 
   // overhead, so the quantized output can exceed the input. The never-grow
   // fallback would then return the ORIGINAL verbatim — silently dropping the
   // explicit `colors: 1` contract. With `colors` set the quantized result is
-  // kept instead: assert the output is really an indexed PNG (IHDR color type
-  // byte at offset 25 == 3), i.e. a single-color palette, not the source.
+  // kept instead. Assert on DECODED pixels, not the container colortype:
+  // oxipng's lossless reductions may collapse a 1-entry palette to truecolor.
   const px = new Uint8Array(4 * 4 * 4)
   for (let i = 0; i < 16; i++) {
     px[i * 4 + 0] = (i * 16) & 0xff
@@ -170,7 +170,19 @@ test('pngQuantize honors an explicit colors contract even when the file grows', 
   }
   const tiny = Transformer.fromRgbaPixels(px, 4, 4).pngSync()
   const out = await pngQuantize(tiny, { colors: 1, minQuality: 0 })
-  t.is(out[25], 3, 'output is an indexed (palette) PNG, not the truecolor original')
+  const tf = new Transformer(out)
+  const { width, height } = tf.metadataSync()
+  const raw = tf.rawPixelsSync()
+  // raw is the decoded channel layout — RGB or RGBA depending on the
+  // (losslessly-reduced) container type; stride derives from the byte count.
+  const ch = raw.length / (width * height)
+  const distinct = new Set()
+  for (let i = 0; i < raw.length; i += ch) {
+    let key = 0
+    for (let c = 0; c < ch; c++) key = (key * 257 + raw[i + c]) >>> 0
+    distinct.add(key)
+  }
+  t.is(distinct.size, 1, 'output decodes to exactly one color — not the 16-color original')
 })
 
 test('pngQuantize rejects a non-PNG (JPEG) input', async (t) => {

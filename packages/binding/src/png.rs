@@ -224,6 +224,8 @@ pub struct PngQuantOptions {
   /// Explicit palette size, 1-256 (1 produces a single-color palette).
   /// When set, it takes precedence over the `maxQuality`-derived color-count
   /// ramp; `minQuality` still applies.
+  /// Transparency exception: an image containing both transparent and visible
+  /// pixels floors the palette at 2 entries (one exact a=0 + one visible).
   /// default: unset (palette size is derived from `maxQuality`)
   pub colors: Option<u32>,
   /// Use the zopfli deflater for the final oxipng re-encode instead of

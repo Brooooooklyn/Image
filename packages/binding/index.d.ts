@@ -600,6 +600,10 @@ export interface PngQuantOptions {
    * ramp; `minQuality` still applies, and a failing first pass may retry at
    * up to 256 colors to satisfy it (the size is a floor on effort, not a
    * hard cap when quality demands more).
+   * Transparency exception: an image containing both transparent and visible
+   * pixels floors the palette at 2 entries (one exact a=0 + one visible) —
+   * `colors: 1` then yields 2 entries rather than mapping transparency onto
+   * a visible color.
    * default: unset (palette size is derived from `maxQuality`)
    */
   colors?: number
