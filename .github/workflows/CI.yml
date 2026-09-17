@@ -17,6 +17,9 @@ env:
       - docs/**
       - website/**
   pull_request: null
+  # Lets CodSpeed trigger backtest runs (e.g. a walltime baseline on main) and
+  # anyone re-run the workflow manually.
+  workflow_dispatch: null
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
