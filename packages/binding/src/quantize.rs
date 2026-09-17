@@ -69,8 +69,9 @@ const ALPHA_WEIGHT_LAB: i64 = 4000;
 /// `(4000 + DIM_WEIGHT) · 244² > de(green,red) ≈ 7.25e7`, i.e. `DIM_WEIGHT > -2_782`;
 /// 8000 gives the combined weight ~10× headroom. It is NOT bounded above by any pinned
 /// test because the penalty is applied ONLY
-/// at the two remap sites (`remap_nearest`, `remap_dither`) — clustering, `kmeans_objective`,
-/// the D² reseed, the Wu split, and `quality_score` all pass `guard_src_alpha = 0` and so
+/// at the two remap sites (`remap_nearest`, `remap_dither`) plus `quality_score`'s argmin
+/// (which must select the entry the remaps emit) — clustering, `kmeans_objective`,
+/// the D² reseed, and the Wu split pass `guard_src_alpha = 0` and so
 /// are byte-identical. Being one-sided and PROPORTIONAL, small dimming stays negligible
 /// (e.g. `a=8 → a=3`: `8000·25 = 2.0e5 ≪` a typical `pdist` gap), so legitimate
 /// partial-alpha remaps are not disturbed (no hard cliff). OPAQUE-NEUTRAL by construction:
@@ -1587,9 +1588,10 @@ fn median_cut(
 /// cube roots. Lower index wins ties (`<`), exactly like the old `dist2` `nearest`.
 ///
 /// `guard_src_alpha` is the FINAL-REMAP visibility guard: the raw SOURCE pixel's alpha
-/// when this is a real remap of a source pixel (`remap_nearest`, `remap_dither`), or `0`
-/// to DISABLE the guard for clustering-context calls (`kmeans_objective`, `kmeans_refine`,
-/// the `nearest` wrapper used by the Wu split and `quality_score`). It drives TWO SCORE terms
+/// when this is a real remap of a source pixel (`remap_nearest`, `remap_dither`), the
+/// source color's alpha in `quality_score` (whose argmin must select the entry the
+/// remaps emit), or `0` to DISABLE the guard for clustering-context calls
+/// (`kmeans_objective`, `kmeans_refine`, the `nearest` wrapper used by the Wu split). It drives TWO SCORE terms
 /// so a visible source pixel cannot be assigned to a much-dimmer entry and VANISH, both added to
 /// the `pdist_oklab` distance and both keyed on the raw source alpha: the gentle quadratic
 /// [`dim_penalty`] (see [`DIM_WEIGHT`]) that biases ANY visible source away from dimmer entries,
@@ -1606,8 +1608,8 @@ fn median_cut(
 /// whereas the guard must key on the RAW source visibility — exactly like `skip_transparent`. The
 /// clustering callers pass `0`, so both terms vanish (`guard_src_alpha > entry_a` and
 /// `entry_a < guard_src_alpha` are both false at `0`) and the palette, the keep-best objective, the
-/// D² reseed, the Wu split, and `quality_score` are byte-identical; the guard touches ONLY the two
-/// final-remap sites. On a fully-opaque image every entry is `a == 255`, nothing is dimmer than an
+/// D² reseed, and the Wu split are byte-identical; the guard otherwise touches ONLY the two
+/// final-remap sites and `quality_score`'s argmin. On a fully-opaque image every entry is `a == 255`, nothing is dimmer than an
 /// `a == 255` source, both terms are `0`, and output is byte-identical there too.
 /// Test-only now: production general-path calls go through [`quantize_simd::general_argmin`],
 /// which reproduces this scan bit-for-bit in f64 lanes (verified by the `kernel_matches_scalar`
@@ -3184,12 +3186,15 @@ const QUALITY_RMSE_DIVISOR: f64 = 2048.0;
 /// it is already folded into the keys, so a result reproducing the posterized
 /// image exactly still scores 100.
 ///
-/// The metric is the same [`pdist_oklab`] the assignment/remap paths minimize,
-/// with the final-remap visibility guard DISABLED (`guard == 0`): dim/vanish
-/// penalties shape WHICH entry a visible pixel prefers, they are not a fidelity
-/// term, so scoring is pure `pdist`. The reserved transparent slot is excluded
-/// for every entry via `skip_transparent = color.a > 0` — a visible color must
-/// never be scored against the transparent slot.
+/// The metric is the same [`pdist_oklab`] the assignment/remap paths minimize.
+/// The argmin passes `guard = c.a` so it selects the SAME entry both final
+/// remaps emit for that source color — scoring a different entry would let the
+/// gate approve a palette whose actual mapping falls below `min_quality` — but
+/// the accumulated distance stays pure `pdist`: dim/vanish penalties shape
+/// WHICH entry is chosen, they are not a fidelity term. The reserved
+/// transparent slot is excluded for every entry via
+/// `skip_transparent = color.a > 0` — a visible color must never be scored
+/// against the transparent slot.
 ///
 /// Only *visible* (`a > 0`) colors are scored — `entries` contains nothing
 /// else. Fully-transparent pixels map to the exact transparent slot (zero
@@ -3220,10 +3225,14 @@ fn quality_score(entries: &[ColorCount], palette: &[RGBA8]) -> u8 {
     for entry in &entries[s..e] {
       let c = entry.color;
       let qoklab = rgb_to_oklab(c.r, c.g, c.b);
-      // Palette-fidelity argmin: guard disabled, transparent slot skipped for
-      // visible colors (`c.a > 0` for every entry — kept explicit to pin the
-      // invariant that no visible color is scored against the reserved slot).
-      let idx = soa.nearest(kernel, qoklab, c.a, c.a > 0, 0);
+      // Palette-fidelity argmin: `guard = c.a` selects the entry the final
+      // remaps actually emit for this source color (posterization never
+      // touches alpha, so `c.a` IS the raw source alpha both remaps key on);
+      // transparent slot skipped for visible colors (`c.a > 0` for every
+      // entry — kept explicit to pin the invariant that no visible color is
+      // scored against the reserved slot). The scored distance below remains
+      // pure `pdist` — the guard chooses the entry, it is not added to `d`.
+      let idx = soa.nearest(kernel, qoklab, c.a, c.a > 0, c.a);
       if palette[idx] != c {
         lossless = false;
       }
@@ -5241,6 +5250,50 @@ mod tests {
         "lossless case must reproduce every visible pixel byte-for-byte"
       );
     }
+  }
+
+  /// The quality gate must score the palette entry the final remaps actually
+  /// EMIT, not a different unguarded argmin: an opaque (64,96,160) source with
+  /// palette [(64,96,160,a=224), opaque blue] is remapped by the visibility
+  /// guard onto the BLUE entry (a dim same-hue entry would partially vanish an
+  /// opaque pixel), so the gate must accumulate that entry's pure `pdist`.
+  /// Scoring the unguarded pick instead would overstate fidelity and let the
+  /// output pass `min_quality` below the requested threshold.
+  #[test]
+  fn quality_score_scores_the_guarded_remap_pick() {
+    let src = rgba(64, 96, 160, 255);
+    let palette = [rgba(64, 96, 160, 224), rgba(0, 0, 255, 255)];
+    let soa = PaletteOkLabSoa::from_palette(&palette);
+    let q = rgb_to_oklab(src.r, src.g, src.b);
+
+    // PROVE-FAIL guard: this palette must actually diverge — the unguarded
+    // argmin picks the same-hue a=224 entry while the guarded remap argmin
+    // (what `remap_nearest`/`remap_dither` emit) picks opaque blue. If a future
+    // change removes the divergence, this test proves nothing and must be
+    // rebuilt.
+    let emitted = soa.nearest(OpaqueKernel::Scalar, q, 255, true, 255);
+    let unguarded = soa.nearest(OpaqueKernel::Scalar, q, 255, true, 0);
+    assert_eq!(emitted, 1, "guarded remap must emit the opaque blue entry");
+    assert_ne!(
+      emitted, unguarded,
+      "scenario must diverge: unguarded argmin picks entry {unguarded}"
+    );
+
+    // The gate's score must equal the score of the EMITTED entry's pure pdist.
+    let entries = [ColorCount {
+      color: src,
+      count: 100,
+    }];
+    let d = pdist_oklab(q, 255, soa.labs[emitted], palette[emitted].a).max(0) as f64;
+    let expected = (100.0 / (1.0 + d.sqrt() / QUALITY_RMSE_DIVISOR))
+      .min(99.0)
+      .round()
+      .clamp(0.0, 99.0) as u8;
+    let score = quality_score(&entries, &palette);
+    assert_eq!(
+      score, expected,
+      "quality_score must score the emitted entry (score {expected}), not the        unguarded pick"
+    );
   }
 
   #[test]
