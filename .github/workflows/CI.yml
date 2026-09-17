@@ -17,6 +17,9 @@ env:
       - docs/**
       - website/**
   pull_request: null
+  # Lets CodSpeed trigger backtest runs (e.g. a walltime baseline on main) and
+  # anyone re-run the workflow manually.
+  workflow_dispatch: null
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -616,8 +619,95 @@ jobs:
           # at link time (macOS linker) instead of failing on undefined references.
           RUSTFLAGS: '-C link-arg=-undefined -C link-arg=dynamic_lookup'
 
+  test-rust-binding-x86:
+    name: Unit test binding on x86_64 (cargo test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # nasm is still needed: `--no-default-features` drops the `#[napi]` modules but
+      # the C-dep crates (aom/mozjpeg/webp) remain non-optional and still compile.
+      - name: Setup nasm
+        uses: ilammy/setup-nasm@v1
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: rust-unit-test-cargo-cache-x86
+      # The quantizer's byte-identity contract spans architectures, but the
+      # kernel==scalar equivalence gates (`kernel_matches_scalar_avx2/sse41`,
+      # `general_matches_scalar_*`) are cfg'd to x86_64 — on aarch64-only CI they
+      # compile out and never execute. This job executes them on real x86_64
+      # hardware (ubuntu-latest has SSE4.1 universally and AVX2 on current
+      # runners; the tests self-skip when a feature is absent). `--no-default-
+      # features` is required: the napi-gated code can't link outside Node, and
+      # there is no ELF equivalent of the macOS dynamic_lookup flag.
+      - name: cargo test
+        run: cargo test -p napi_rs_image --no-default-features
+
+  test-rust-binding-asan:
+    name: Unit test binding under AddressSanitizer (cargo +nightly test)
+    runs-on: ${{ matrix.host }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Real x86_64: exercises the SSE4.1/AVX2 (and AVX-512 where the runner
+          # silicon has it) quantizer kernels' unaligned loads under ASan.
+          - host: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          # Real aarch64 Linux: exercises the NEON kernels under ASan. (macOS
+          # can't do this — hardened rustc ignores DYLD_INSERT_LIBRARIES, so
+          # instrumented proc-macro dylibs abort the build there.)
+          - host: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v7
+      - name: Setup nasm
+        uses: ilammy/setup-nasm@v1
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: rust-unit-test-asan-${{ matrix.target }}
+      # -Zsanitizer=address must apply to TARGET units only: instrumented
+      # proc-macro dylibs cannot load into the non-instrumented rustc process.
+      # `-Ztarget-applies-to-host` + `host.target-applies-to-host=false` splits
+      # the flag scopes so build-deps compile uninstrumented while the test
+      # binary is fully checked.
+      - name: cargo test (ASan)
+        run: |
+          cargo -Ztarget-applies-to-host test -p napi_rs_image --no-default-features --lib \
+            --target ${{ matrix.target }} \
+            --config 'target.${{ matrix.target }}.rustflags=["-Zsanitizer=address"]' \
+            --config 'host.target-applies-to-host=false'
+        env:
+          ASAN_OPTIONS: 'detect_leaks=1'
+
   benchmark:
     name: Benchmark pngQuantize (CodSpeed)
+    # Wall-clock mode: `simulation` (Valgrind instruction counting) serializes
+    # the quantizer's scoped-thread shards and charges spawn overhead, so a
+    # benchmark whose speedup IS multithreading + SIMD reads as a regression
+    # there (−14% reported vs −34% measured natively). `codspeed-macro` runners
+    # — CodSpeed's low-noise bare-metal option for walltime — are unavailable on
+    # personal accounts, so this runs on the GitHub x86_64 runner: noisier for
+    # sub-5% diffs, but it measures real threads and the real AVX2 path.
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -640,7 +730,9 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: codspeed-cargo-cache
+          # Macro runners are ARM64 — arch in the key keeps the cache disjoint
+          # from any x86 entries.
+          key: codspeed-cargo-cache-${{ runner.arch }}
       - name: Install cargo-codspeed
         uses: taiki-e/install-action@v2
         env:
@@ -648,17 +740,17 @@ jobs:
         with:
           tool: cargo-codspeed
       # `--no-default-features` drops the `binding` feature, so the bench links only the
-      # pure quantizer core -- no `napi_*` symbols (the CodSpeed runner is Valgrind, which
-      # binds eagerly and cannot resolve them). No RUSTFLAGS override here, so the repo's
-      # `.cargo/config.toml` `[target.x86_64-unknown-linux-gnu]` `+avx2` applies as usual.
+      # pure quantizer core -- no `napi_*` symbols to resolve. The repo's
+      # `.cargo/config.toml` `[target.x86_64-unknown-linux-gnu]` `+avx2` applies, and
+      # under walltime mode the AVX2 kernels genuinely execute (not just counted).
       - name: Build benchmarks
-        run: cargo codspeed build -p napi_rs_image --bench quantize --no-default-features
+        run: cargo codspeed build -m walltime -p napi_rs_image --bench quantize --no-default-features
       - name: Run benchmarks
         # Auth via OIDC (the job's `id-token: write` permission) -- CodSpeed's
         # recommended method, so no long-lived `CODSPEED_TOKEN` secret is needed.
         uses: CodSpeedHQ/action@v5
         with:
-          mode: simulation
+          mode: walltime
           run: cargo codspeed run -p napi_rs_image
 
   publish:
@@ -676,6 +768,8 @@ jobs:
       - test-linux-arm-gnueabihf-binding
       - test-wasi-on-nodejs
       - test-rust-binding
+      - test-rust-binding-x86
+      - test-rust-binding-asan
     steps:
       - uses: actions/checkout@v7
       - name: Setup node

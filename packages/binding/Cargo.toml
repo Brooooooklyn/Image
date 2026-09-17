@@ -30,6 +30,12 @@ default            = ["binding", "oxipng/parallel"]
 binding            = []
 logo               = []
 oxipng_libdeflater = ["oxipng/zopfli", "oxipng/parallel"]
+# Opt-in: lets `PngQuantOptions::use_zopfli` select oxipng's zopfli deflater for
+# the final re-encode — much slower, slightly smaller output. Not in `default`:
+# it pulls in the zopfli crate and inflates encode time/binary size for a
+# marginal win. (`oxipng_libdeflater` also enables `oxipng/zopfli`, so the Rust
+# cfg accepts either feature.)
+png_quantize_zopfli = ["oxipng/zopfli"]
 with_simd          = ["mozjpeg-sys/nasm_simd_parallel_build"]
 
 [dependencies]
@@ -92,7 +98,8 @@ napi-build = "2"
 [dev-dependencies]
 # Drop-in criterion replacement, imported as `criterion`: a plain `cargo bench` runs
 # stock criterion, while `cargo codspeed build/run` switches the same benches to
-# CodSpeed instrumentation in CI. Released in lockstep with the `cargo-codspeed` CLI.
+# CodSpeed instrumentation in CI (walltime mode on the ARM64 macro runner).
+# Released in lockstep with the `cargo-codspeed` CLI.
 criterion = { package = "codspeed-criterion-compat", version = "5" }
 
 [[bench]]

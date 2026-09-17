@@ -352,7 +352,7 @@ aarch64 (local Apple Silicon, NEON vs pre-SIMD):
 | **CIEDE2000** metric | not done | Heavier; CIE76 is "perceptually decent" (Celebi fn18). The first lever if quality regresses |
 | **HyAB** distance | evaluated, rejected | Needs median-L* centroid update; marginal, large-difference-only gain |
 | **Octree** init | not used | median-cut+k-means wins quality for offline use |
-| **AVX-512** kernel | not done | CodSpeed's Valgrind can't execute it (no CI measurement); no local AVX-512 execution proof available (TCG support partial); narrow/shrinking host base; would break the uniform argmin structure. Not worth adding **blind** to a byte-identity guarantee |
+| **AVX-512** kernel | done (`4f99878`) | Was rejected blind — CodSpeed's Valgrind can't execute it and no local AVX-512 hardware existed. Unblocked by Cloudflare Sandbox (x86_64, avx512f/bw/dq/vl): `opaque_scan_avx512` (16-wide i32, masked strict compare) + `general_scan_avx512` (8-wide f64) verified byte-identical there; dispatch prefers it where probed |
 | Lab-space **splitting** | not used | `median-cut-lab`: Lab splits don't beat RGB; the perceptual win is in mapping |
 
 ---
@@ -411,3 +411,158 @@ Clean-room MIT implementation; no copyleft source was read. Shipped in **PR #208
 (clean-room quantizer) and accelerated in **PR #211** (runtime-dispatched SIMD,
 byte-identical). Determinism is the invariant that makes the SIMD safe and the output
 reproducible across x86 / aarch64 / wasm.
+
+---
+
+## 10. The 2026-09 optimization pass (branch `perf/quantize-optimizations`)
+
+A full audit → implement cycle. Three waves; byte-identical work is separated from
+output-changing work so each quality commit can be reverted independently.
+Verification harness: `packages/binding/examples/quant_hash.rs` (FNV-1a of
+palette+indices+quality, plus fixed RGBA metrics `cover`/`repro` that stay
+comparable across working-space changes).
+
+### 10a. Byte-identical speed (no output change; 18/18 harness hashes identical)
+
+- `lab.rs`: `f_q16` and `linear_to_srgb8` → exact 64K lookup tables (the per-pixel
+  integer cube-root and binary search are gone; LUT filled by the preserved body,
+  so identical by construction).
+- `quantize.rs`: multiply-xor `FastHasher` for the histogram/memo maps (all are
+  re-sorted, so hasher order never leaks into output); k-means reuses cached entry
+  Oklab values and fuses objective+assignment; fixed-point early exit on
+  converged palettes; `Cow` for `split_entries`; median-cut sort reuse; dither
+  zero-residual early-out and zero-error run memoization; integer quality
+  accumulation; `posterization` clamped `min(7)` (previously a shift ≥ 8 could
+  panic on direct `QuantizeConfig` calls).
+
+### 10b. Deterministic parallelism + general-path SIMD (still byte-identical)
+
+- `std::thread::scope` sharding for histogram, k-means assignment/objective,
+  `remap_nearest`, `quality_score`, and entry-space builds. Every cross-thread
+  merge is integer-associative or per-key-pure, so output is identical for ANY
+  shard count (tested at 1..=T). Error diffusion remains serial — its state is a
+  scan-order recurrence.
+- The translucent/general `nearest` path got an exact f64-lane kernel: every
+  score term is an integer < 2^53 and the divide is correctly-rounded, so the f64
+  scan is bit-identical to the i64 scalar reference. One transparent pixel no
+  longer drops the whole image off SIMD.
+
+### 10c. Quality changes (each its own commit; output changes are deliberate)
+
+1. **Quality gate scores the remap, not the dithered indices** — dithering
+   deliberately picks non-nearest entries; scoring them punished the mechanism
+   that improves perceived quality and could fire pointless 256-retries.
+2. **Importance-weighted histogram** — noisy/high-activity regions get less
+   palette budget; stable content gets more (integer weights, deterministic).
+3. **Oklab working space** replaces CIELAB end-to-end: `rgb_to_oklab` uses the
+   shared Q16 sRGB→linear table + published M1/M2 matrices + `f32::cbrt`
+   (correctly-rounded, deterministic), quantized to Q14 (16383-scale) `i32`
+   triples so ALL
+   downstream machinery (median-cut split space stays RGBA8; k-means centroids,
+   split-merge, `pdist`, both SIMD kernels) is unchanged in shape. Centroid
+   updates now happen in the assignment space via integer `oklab_to_rgb8`.
+   Weights recalibrated to the Oklab scale; `QUALITY_RMSE_DIVISOR` re-tuned so
+   the public `minQuality` 0..100 gate keeps its operating points. Fixed-metric
+   A/B: `repro` improved 6–32% on every harness case; `cover` improved on 8/12.
+4. **Deterministic split-and-merge refinement** after Lloyd (Kaukoranta-style):
+   escapes local optima behind the keep-best guard; Ward-style merge costs,
+   no RNG.
+5. **Ostromoukhov variable-coefficient error diffusion** replaces fixed
+   7/3/5/1 taps: the published 256-entry intensity-indexed 3-tap table
+   (mirrored per the paper's symmetry), indexed by integer Rec.601 luma of the
+   current `want`, serpentine-mirrored. f32 coefficients, normalized rows.
+6. **Palette merge-down** (`PngQuantOptions.mergeDown`, opt-in, ramp-derived
+   sizes only — an explicit `colors` request is a hard contract): merges the
+   cheapest Ward-cost pair while `quality ≥ min_quality + 2`, ≤ 8 steps,
+   recomputes indices wholesale. Costs extra remap+score passes, so it is off
+   by default — meaningful when real content is far below the derived size.
+
+### 10d. API & encoding
+
+- `PngQuantOptions.colors?: number` — explicit palette size 1..=256, overrides
+  the `maxQuality` ramp; `minQuality` gate unchanged.
+- `PngQuantOptions.useZopfli?: boolean` — opt-in zopfli deflater for the final
+  oxipng pass (Cargo feature `png_quantize_zopfli`; `true` without it errors).
+- `PngQuantOptions.mergeDown?: boolean` — opt-in palette merge-down (§10c.6).
+- The throwaway intermediate lodepng encode runs at compression level 1 with
+  auto-convert disabled — its DEFLATE output is almost always discarded under
+  oxipng anyway.
+
+### 10e. Measured (1024×681 photo, Apple Silicon, criterion 100 samples)
+
+```
+                     baseline  byte-identical+par.  final (all quality work)
+default               ~433ms        ~207ms            ~285ms   (~1.5x)
+max_quality_75        ~382ms        ~188ms            ~268ms   (~1.4x)
+colors/16             ~280ms        ~143ms            ~172ms   (~1.6x)
+colors/64             ~328ms        ~161ms            ~230ms   (~1.4x)
+colors/256            ~435ms        ~208ms            ~306ms   (~1.4x)
+no_dither/256         ~365ms        ~166ms            ~197ms   (~1.9x)
+default_merge_down       —             —              ~418ms   (opt-in: ≈baseline,
+                                                              buys ~8 fewer slots)
+```
+
+The middle column is the byte-identical state (LUTs + fast hashing + fused
+k-means + deterministic parallelism) on the pre-Oklab CIELAB metric — ~2.1x
+with zero output change. The final column carries the quality commits: Oklab
+conversion+recalibrated kernels, importance weighting, split-merge refinement,
+and Ostromoukhov cost real CPU for measurably better output (`repro` −6–32%).
+
+The Oklab u16 (Q16, scale 65535) quantization's worst-case ΔE² (4.29e9
+in-gamut; 3·65535² ≈ 1.29e10 over the stored domain) exceeded i32::MAX and
+temporarily forced f64 lanes on the opaque kernel; rescaling the working space
+to Q14 (16383) restores the i32 kernels unconditionally — `3·16383² =
+805_208_067 < i32::MAX` for ANY two stored triples, compile-time asserted in
+`lab.rs`. Q16→Q14 measured on this machine: default −44%, max_quality_75 −32%,
+colors/256 −33%, no_dither/256 −27%, colors/64 −13%, colors/16 −3.5%. The
+sRGB→linear lookup table stays Q16 — only the stored Oklab components are Q14.
+
+### 10f. x86 verification on real AVX-512 hardware (Cloudflare Sandbox)
+
+A temporary `quant-verify-x86` Sandbox worker (base `cloudflare/sandbox:0.7.0`
++ `gcc`, Rust stable) ran the extracted quantizer probe crate on a real x86_64
+host (`avx512f/bw/dq/vl/vnni`, later resized to `standard-4` / 4 vCPU):
+
+- `cargo test --release`: **100/100 pass**, including `kernel_matches_scalar_*`
+  and `general_matches_scalar_*` for sse41 / avx2 / **avx512** — the x86
+  equivalence gates that cannot execute on aarch64 dev machines.
+- `quant_hash` example: **all 18 output hashes identical to aarch64 NEON**,
+  including `f32::cbrt`-dependent Oklab conversions (glibc and Apple libm
+  agree on this domain; the `dense_sweep_hash_pin` test pins it).
+- Scalar vs detected-kernel wall time over the full 18-config harness:
+  **native (AVX-512) ~23.4s vs scalar ~43.2s — ~1.85x end-to-end** on x86,
+  consistent with the Apple Silicon SIMD contribution.
+
+This also unblocked the AVX-512F kernels (`4f99878`), which the doc previously
+rejected as unverifiable. Runtime detection keeps non-AVX-512 hosts on the
+AVX2/SSE4.1/scalar ladder, so the addition carries no correctness risk.
+
+The same sandbox also ran the suite under `-Zsanitizer=address` (nightly):
+**100/100 clean on x86_64** — every unaligned SIMD load in the SSE4.1/AVX2/
+AVX-512 kernels checked. On aarch64 the binding's own `cargo +nightly test`
+passes 97/97 under ASan on macOS (NEON path). Because ASan-instrumented
+proc-macro dylibs cannot load into the non-instrumented rustc host, the run
+uses cargo's `-Ztarget-applies-to-host` + `host.target-applies-to-host=false`
+split so only target units carry the instrumentation; CI repeats this on
+`ubuntu-latest` (x86_64) and `ubuntu-24.04-arm` (aarch64/NEON) — see the
+`test-rust-binding-asan` matrix job.
+
+### 10g. Post-review fixes and the CodSpeed walltime switch
+
+Review fixes (`e701404`, both confirmed defects introduced by this branch):
+
+- `colors: 1` on a transparent image left no `a == 0` palette slot (the slot
+  was only reserved at `max_colors >= 2`), so transparent pixels remapped to
+  an opaque color. Transparent images now floor the palette at 2 slots.
+- The Ward pair-merge cost `ni*nj/(ni+nj)*d` divided before multiplying —
+  count-1 pairs truncated to 0 and cheapest-pair selection degenerated.
+  Split-merge and merge_down share `ward_merge_cost = ni*nj*d/(ni+nj)`.
+
+CodSpeed moved from `simulation` to `walltime`. Simulation counts
+instructions under Valgrind — it serializes the scoped-thread shards and
+charges spawn overhead, so this branch showed −14% there while real x86
+hardware measured −34% (4 vCPU) / +2.9% (1 CPU, the honest serial cost of
+the quality-model work). CodSpeed's low-noise `codspeed-macro` runners are
+unavailable on personal GitHub accounts, so walltime runs on the hosted
+x86_64 runner — real threads, real AVX2, noisier for sub-5% diffs. The
+baseline re-establishes on merge.

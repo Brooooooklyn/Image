@@ -13,8 +13,9 @@ mod fast_resize;
 pub mod heic;
 #[cfg(feature = "binding")]
 pub mod jpeg;
-// P3: deterministic integer sRGB->CIELAB + CIE76 ΔE, wired into the quantizer's
-// perceptual color ASSIGNMENT metric (`pdist` in `quantize.rs`).
+// P3: deterministic fixed-point sRGB->Oklab + Euclidean Oklab distance, wired
+// into the quantizer's perceptual color ASSIGNMENT metric (`pdist` in
+// `quantize.rs`).
 mod lab;
 #[cfg(feature = "binding")]
 pub mod png;

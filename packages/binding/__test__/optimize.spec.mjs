@@ -71,11 +71,13 @@ test('pngQuantize roundtrip preserves dimensions and shrinks file', async (t) =>
   t.is(out.height, height)
   t.true(dest.length < PNG.length)
   // P2 size-lock: the quantized PNG is losslessly recompressed by the in-repo oxipng
-  // pass. The bare lodepng encode of this fixture is 262053 bytes; recompression brings
-  // it to ~250061. Asserting < 255000 locks the oxipng pass in: drop it and this fails
-  // (262053 > 255000). Loose enough to survive minor quantizer drift, tight enough to
-  // catch the recompression being skipped.
-  t.true(dest.length < 255000, `expected recompressed < 255000, got ${dest.length}`)
+  // pass. Recompression output on this fixture is ~262547 bytes; the bare lodepng
+  // encode of the same index stream is ~278k+. Asserting < 270000 locks the oxipng
+  // pass in: drop it and this fails (~278k > 270000). Loose enough to survive
+  // quantizer drift (the Oklab remap emits a higher-fidelity — and slightly less
+  // DEFLATE-friendly — index stream than the CIELAB pipeline this bound was first
+  // calibrated on), tight enough to catch the recompression being skipped.
+  t.true(dest.length < 270000, `expected recompressed < 270000, got ${dest.length}`)
 })
 
 test('pngQuantize shrinks the file at both low and high quality', async (t) => {
@@ -137,6 +139,50 @@ test('pngQuantize rejects out-of-range options', async (t) => {
   await t.throwsAsync(() => pngQuantize(PNG, { maxQuality: 101 }))
   await t.throwsAsync(() => pngQuantize(PNG, { minQuality: 200 }))
   await t.throwsAsync(() => pngQuantize(PNG, { minQuality: 80, maxQuality: 50 }))
+
+  // `colors` overrides the maxQuality ramp entirely, so an inverted min>max
+  // pair is not a validation error in that case — maxQuality is dead. If the
+  // quality gate rejects anyway it must be a GenericFailure, never InvalidArg.
+  const err = await pngQuantize(PNG, { colors: 16, minQuality: 80, maxQuality: 50 }).then(
+    () => null,
+    (e) => e,
+  )
+  t.not(err?.code, 'InvalidArg')
+})
+
+test('pngQuantize honors an explicit colors contract even when the file grows', async (t) => {
+  if (process.env.NAPI_RS_FORCE_WASI) {
+    t.pass()
+    return
+  }
+  // A 4x4 truecolor PNG is tiny; the indexed re-encode carries PLTE chunk
+  // overhead, so the quantized output can exceed the input. The never-grow
+  // fallback would then return the ORIGINAL verbatim — silently dropping the
+  // explicit `colors: 1` contract. With `colors` set the quantized result is
+  // kept instead. Assert on DECODED pixels, not the container colortype:
+  // oxipng's lossless reductions may collapse a 1-entry palette to truecolor.
+  const px = new Uint8Array(4 * 4 * 4)
+  for (let i = 0; i < 16; i++) {
+    px[i * 4 + 0] = (i * 16) & 0xff
+    px[i * 4 + 1] = (i * 37) & 0xff
+    px[i * 4 + 2] = (i * 73) & 0xff
+    px[i * 4 + 3] = 255
+  }
+  const tiny = Transformer.fromRgbaPixels(px, 4, 4).pngSync()
+  const out = await pngQuantize(tiny, { colors: 1, minQuality: 0 })
+  const tf = new Transformer(out)
+  const { width, height } = tf.metadataSync()
+  const raw = tf.rawPixelsSync()
+  // raw is the decoded channel layout — RGB or RGBA depending on the
+  // (losslessly-reduced) container type; stride derives from the byte count.
+  const ch = raw.length / (width * height)
+  const distinct = new Set()
+  for (let i = 0; i < raw.length; i += ch) {
+    let key = 0
+    for (let c = 0; c < ch; c++) key = (key * 257 + raw[i + c]) >>> 0
+    distinct.add(key)
+  }
+  t.is(distinct.size, 1, 'output decodes to exactly one color — not the 16-color original')
 })
 
 test('pngQuantize rejects a non-PNG (JPEG) input', async (t) => {

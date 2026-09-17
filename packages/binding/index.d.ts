@@ -594,6 +594,37 @@ export interface PngQuantOptions {
    * Useful for generating palettes for VGA, 15-bit textures, or other retro platforms.
    */
   posterization?: number
+  /**
+   * Explicit palette size, 1-256 (1 produces a single-color palette).
+   * When set, it takes precedence over the `maxQuality`-derived color-count
+   * ramp; `minQuality` still applies, and a failing first pass may retry at
+   * up to 256 colors to satisfy it (the size is a floor on effort, not a
+   * hard cap when quality demands more).
+   * Transparency exception: an image containing both transparent and visible
+   * pixels floors the palette at 2 entries (one exact a=0 + one visible) —
+   * `colors: 1` then yields 2 entries rather than mapping transparency onto
+   * a visible color.
+   * default: unset (palette size is derived from `maxQuality`)
+   */
+  colors?: number
+  /**
+   * Use the zopfli deflater for the final oxipng re-encode instead of
+   * libdeflater: much slower, slightly smaller output. Changes the output
+   * bytes vs the default path (still lossless; deterministic for a fixed
+   * zopfli version). Requires the `png_quantize_zopfli` cargo feature —
+   * passing true without it returns an InvalidArg error.
+   * Default: `false`
+   */
+  useZopfli?: boolean
+  /**
+   * Shrink the palette after a quality-passing pass by merging near-duplicate
+   * / dead entries while `quality >= minQuality + 2` (bounded, deterministic).
+   * Meaningful when the image's real content is far below the derived palette
+   * size — trades extra CPU for a smaller palette/file. Ignored when `colors`
+   * is set (an explicit count is a hard size contract).
+   * Default: `false`
+   */
+  mergeDown?: boolean
 }
 
 export declare enum PngRowFilter {

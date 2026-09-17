@@ -1,61 +1,95 @@
-//! Deterministic, floating-point-free sRGB -> CIELAB conversion and squared CIE76 ΔE.
+//! Deterministic sRGB -> Oklab conversion and squared Oklab distance.
 //!
 //! # Why this exists (determinism gate for the clean-room PNG quantizer)
 //!
 //! The quantizer's palette-selection pipeline is integer-only by design so its output is
-//! byte-identical across x86 / arm / wasm. Perceptual palette distance (CIELAB ΔE) must preserve
-//! that property. A naive sRGB->Lab conversion uses `powf`/`cbrt`, whose results are NOT guaranteed
-//! bit-identical across platforms/CPUs/LLVM backends. This module therefore performs the entire
-//! conversion + ΔE in **integer / fixed-point arithmetic only** at runtime. The only floating point
-//! in this file lives in `#[cfg(test)]` (accuracy comparison against a float reference) and in
-//! non-runtime const-generation comments that document how the embedded constants were derived.
+//! byte-identical across x86 / arm / wasm. Perceptual palette distance must preserve that
+//! property. The forward map is pure `f32` linear algebra plus a deterministic
+//! cube root ([`cbrt_deterministic`] — pure IEEE-754 `+`/`*`/`/` Newton iteration,
+//! no libm call, since `f32::cbrt` is not guaranteed correctly rounded on every
+//! target's libm), and the Q14 quantization absorbs any sub-ulp residue — so the
+//! stored components are bit-identical across platforms, and every comparison
+//! derived from them is exact integer math. The published Oklab matrices (B. Ottosson, "A perceptual color space
+//! for image processing", updated 2021-01-25) are applied verbatim in `f32`.
 //!
 //! # Fixed-point scheme
-//! - sRGB -> linear: hardcoded `SRGB_TO_LINEAR: [u32; 256]` in **Q16** (`linear(255) == 65535`).
-//! - linear RGB -> normalized XYZ ratios: D65 matrix coefficients in **Q16**. The matrix rows are
-//!   pre-divided by the white point (Xn, Yn, Zn) so that pure white maps to ratios `(1, 1, 1)` and
-//!   thus `L == 100, a == 0, b == 0` exactly.
-//! - the XYZ->Lab cube-root nonlinearity `f(t) = t^(1/3)` is computed with a **deterministic
-//!   bit-by-bit integer cube root** (no `cbrt`/`powf`), operating on a `u128` so that
-//!   `f(t)` is produced in **Q16**.
-//! - output `Lab` stores L, a, b as `i32` scaled by **100** (i.e. value ×100). So `L == 5358`
-//!   means `53.58`. This scale gives ~0.01-unit resolution, far finer than the ≤0.5 accuracy bar.
-//! - `delta_e76_sq` returns dL² + da² + db² in those (×100) squared units as `i64`.
+//! - sRGB -> linear: the shared `SRGB_TO_LINEAR: [u32; 256]` Q16 table (the same table the
+//!   dither's linear-light path uses — one notion of "linear" everywhere).
+//! - linear sRGB -> Oklab: the published M1 matrix, [`cbrt_deterministic`] on each
+//!   LMS response, then the published M2 matrix — `f32` except the cbrt's `f64` core.
+//! - output `OkLab` quantizes each component to a **Q14** triple (stored as `i32`):
+//!   `Lq = round(L * 16383)`, `aq = round((a + 0.5) * 16383)`, `bq = round((b + 0.5) * 16383)`.
+//!   The `+0.5` bias maps the in-gamut `a`/`b` range (~±0.34) comfortably inside `0..=16383`;
+//!   the bias cancels in every difference.
+//! - `oklab_dist_sq` returns `dL² + da² + db²` in those quantized squared units as `i64`.
+//!
+//! ## Why Q14 and not u16
+//!
+//! The u16 quantization (scale 65535) pushed the worst-case squared distance to
+//! `3·65535² ≈ 1.29e10 > i32::MAX`, which forced the hot nearest-palette SIMD scan
+//! into 2-/4-wide `f64` lanes. At Q14 every stored component is in `0..=16383`, so for
+//! ANY two stored triples `|Δ| ≤ 16383` and `dL² + da² + db² ≤ 3·16383² = 805_208_067 <
+//! i32::MAX` — unconditionally, no gamut-bound argument needed (compile-proven below by
+//! `const _` assert on [`OKLAB_QMAX`]). That restores 4-wide `i32` NEON / 8-wide `i32` AVX2 /
+//! 4-wide SSE4.1 / 4-wide simd128 lanes, ~2× the f64 lane throughput, at a quantization
+//! step still ~1.6× finer on the lightness axis than the CIELAB ×100 grid (0..=10000) this
+//! pipeline started on.
 
-/// A CIELAB color stored in fixed-point integers (each component scaled by [`LAB_SCALE`]).
+use std::sync::OnceLock;
+
+/// An Oklab color quantized to a fixed **Q14** triple (stored as `i32`).
 ///
-/// No floating-point fields, so two `Lab` values produced on different platforms from the same
-/// `(r, g, b)` are bit-identical, and so is every comparison derived from them.
+/// `l` holds `round(L * 16383)` (`L in 0..=1`); `a`/`b` hold
+/// `round((component + 0.5) * 16383)`, so the zero-chroma point sits at
+/// `round(0.5 * 16383) == 8192` and the in-gamut chroma range (~±0.34) stays
+/// well inside `0..=16383`. Two `OkLab` values produced on different platforms
+/// from the same `(r, g, b)` are bit-identical in practice (see the module
+/// docs), and every comparison derived from them is exact integer math.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Lab {
-  /// Lightness L*, ×100 (range ≈ 0..=10000).
+pub(crate) struct OkLab {
+  /// Lightness L, `round(L * 16383)` (range 0..=16383).
   pub l: i32,
-  /// Green–red a*, ×100.
+  /// Green–red a, `round((a + 0.5) * 16383)` (range 0..=16383).
   pub a: i32,
-  /// Blue–yellow b*, ×100.
+  /// Blue–yellow b, `round((b + 0.5) * 16383)` (range 0..=16383).
   pub b: i32,
 }
 
-/// Fixed-point scale applied to every `Lab` component (value ×100).
-pub(crate) const LAB_SCALE: i32 = 100;
+/// Quantization scale of the stored Q14 triple (`round(component * 16383)`).
+pub(crate) const OKLAB_SCALE: f32 = 16383.0;
 
-/// Exact global maximum of [`delta_e76_sq`] over the whole sRGB cube — the squared-ΔE *diameter*
-/// of the gamut. It is reached between pure blue `(0,0,255)` and pure green `(0,255,0)` (verified by
-/// an exhaustive 256³ sweep against the gamut corners; the diameter of this point set is
-/// corner-to-corner). So for ANY two colors at full alpha, the perceptual color term in `pdist_lab`
-/// (`delta_e76_sq · wa/510`, `wa ≤ 510`) is at most this value. The quantizer uses it to size the
-/// anti-vanish penalty (`quantize::VANISH_WEIGHT`) so a fully-opaque pixel cannot be pulled onto a
+/// Integer form of [`OKLAB_SCALE`] for const bounds (the Q14 component max).
+const OKLAB_QMAX: i64 = 16383;
+
+/// Compile-time proof that a squared Q14 Oklab distance ALWAYS fits an `i32` lane:
+/// stored components are clamped to `0..=16383`, so for ANY two stored triples
+/// `|Δ| ≤ 16383` and `de ≤ 3·16383² = 805_208_067 < i32::MAX` — unconditionally, no
+/// gamut-bound argument needed. This is what licenses the `i32` SIMD lanes in
+/// `quantize_simd` (4-wide NEON / 8-wide AVX2 / 4-wide SSE4.1 / 4-wide simd128).
+/// (`oklab_dist_sq` still returns `i64`: the scalar reference keeps the wider type so
+/// callers accumulating `de·wa` products stay far from any edge.)
+const _: () = assert!(
+  3 * OKLAB_QMAX * OKLAB_QMAX <= i32::MAX as i64,
+  "Q14 squared Oklab distance must fit i32 SIMD lanes"
+);
+
+/// Bias folded into the stored `a`/`b` components (`(component + 0.5) * 16383`).
+const CHROMA_BIAS: f32 = 0.5;
+
+/// Exact global maximum of [`oklab_dist_sq`] over the whole sRGB cube — the squared-distance
+/// *diameter* of the gamut. It is reached between pure black `(0,0,0)` and pure white
+/// `(255,255,255)` — the full `L` axis with (in quantized terms) zero chroma gap — verified
+/// against the gamut corners and a farthest-point iteration over the dense cube. So for ANY
+/// two colors at full alpha, the perceptual color term in `pdist_oklab` (`de · wa/510`,
+/// `wa <= 510`) is at most this value. The quantizer uses it to size the anti-vanish
+/// penalty (`quantize::VANISH_WEIGHT`) so a fully-opaque pixel cannot be pulled onto a
 /// clearly-invisible same-hue entry by even the WORST-case hue gap. Pinned by
-/// `max_delta_e76_sq_is_gamut_diameter`; if the integer Lab math ever drifts, that test fails.
-pub(crate) const MAX_DELTA_E76_SQ: i64 = 669_160_034;
-
-/// Number of fractional bits in the Q16 fixed-point used internally for linear light,
-/// the sRGB->XYZ matrix, and the `f(t)` cube-root output.
-const Q: u32 = 16;
-/// `1 << Q`, i.e. the Q16 representation of `1.0` (== 65536).
-const ONE: i64 = 1 << Q;
-/// Rounding bias for a round-to-nearest `>> Q` shift on a non-negative value.
-const HALF: i64 = ONE / 2;
+/// `max_oklab_dist_sq_is_gamut_diameter`; if the Oklab conversion ever drifts, that test fails.
+///
+/// At Q14 this is `16383²` — comfortably INSIDE `i32::MAX`, which is why the
+/// opaque-scan SIMD kernels run in `i32` lanes (see the `const _` assert on
+/// [`OKLAB_QMAX`]).
+pub(crate) const MAX_OKLAB_DIST_SQ: i64 = 268_402_689;
 
 /// sRGB 8-bit -> linear light, **Q16** (so `SRGB_TO_LINEAR[255] == 65535 == 1.0`).
 ///
@@ -85,141 +119,10 @@ pub(crate) const SRGB_TO_LINEAR: [u32; 256] = [
   58737, 59287, 59840, 60396, 60955, 61517, 62082, 62650, 63221, 63795, 64372, 64952, 65535,
 ];
 
-/// White-point-normalized sRGB(linear) -> XYZ-ratio matrix, **Q16**.
-///
-/// Const-gen (NOT runtime; documents provenance):
-/// ```text
-/// M = [[0.412453, 0.357580, 0.180423],
-///      [0.212671, 0.715160, 0.072169],
-///      [0.019334, 0.119193, 0.950227]]   # standard sRGB D65
-/// each row r is divided by sum(r) (== Xn/Yn/Zn) so the row sums to 1.0 and white -> (1,1,1).
-/// MAT = round(M_normalized * 65536)
-/// ```
-/// Each entry multiplies a Q16 linear value; the Q32 product is shifted back to Q16.
-const MAT: [[i64; 3]; 3] = [
-  [28440, 24656, 12441],
-  [13938, 46869, 4730],
-  [1164, 7175, 57198],
-];
-
-/// CIELAB cube-root threshold ε = (6/29)³, in Q16 (`round(0.008856451679 * 65536) == 580`).
-/// For ratios at or below this, the linear branch of `f(t)` is used.
-const EPS_Q16: i64 = 580;
-/// Linear-branch slope `1 / (3·(6/29)²)` in Q16 (`round(7.787037037 * 65536) == 510331`).
-const F_LINEAR_SLOPE_Q16: i64 = 510_331;
-/// Linear-branch intercept `4/29` in Q16 (`round(0.137931034 * 65536) == 9039`).
-const F_LINEAR_INTERCEPT_Q16: i64 = 9039;
-
-/// Deterministic, floating-point-free integer cube root: returns `floor(n^(1/3))`.
-///
-/// Integer Newton's method from an upper-bound seed, followed by an exact floor correction.
-/// Pure integer arithmetic on `u128`, so the result is identical on every platform — and
-/// byte-identical to the previous restoring bit-by-bit implementation (the
-/// `icbrt_is_floor_cube_root` test pins both against a reference `floor(n^(1/3))` over a strided
-/// sweep). Newton converges in ~5-6 iterations versus the bit-by-bit method's 42, which matters
-/// because `f_q16` calls this once per cube-root, three per `rgb_to_lab`, once per dither pixel.
-///
-/// Overflow/range: production input is `f_q16`'s `(t << 32)` with `t <= ~76_000`, so `n <= ~2^48`
-/// and the root `x <= ~2^16`. The seed `1 << ceil(bitlen/3)` is a strict upper bound on the root;
-/// for any `n < 2^126` the root `x <= 2^42`, so `x*x <= 2^84` and `x*x*x <= 2^126` stay inside
-/// `u128` (the correction never overflows). The iteration keeps `x >= 1` (the `n < 8` cases return
-/// directly), so the `n / (x*x)` divisor is never zero.
-#[inline]
-fn icbrt_u128(n: u128) -> u128 {
-  if n < 8 {
-    // floor(0^(1/3)) == 0; floor(k^(1/3)) == 1 for k in 1..=7.
-    return (n > 0) as u128;
-  }
-  let bits = 128 - n.leading_zeros();
-  // `1 << ceil(bits/3)` is a strict upper bound on `floor(n^(1/3))`, so Newton descends to the floor.
-  let mut x = 1u128 << bits.div_ceil(3);
-  loop {
-    let y = (2 * x + n / (x * x)) / 3;
-    if y >= x {
-      break;
-    }
-    x = y;
-  }
-  // Exact floor correction (0-1 steps in practice): guarantees `x^3 <= n < (x+1)^3` regardless of
-  // any Newton off-by-one, so the result is byte-identical to the reference `floor(n^(1/3))`.
-  while x * x * x > n {
-    x -= 1;
-  }
-  while (x + 1) * (x + 1) * (x + 1) <= n {
-    x += 1;
-  }
-  x
-}
-
-/// CIELAB nonlinearity `f(t)`, input and output both **Q16**.
-///
-/// `t` is a white-normalized XYZ ratio in Q16. For `t > ε` returns `t^(1/3)` via the integer cube
-/// root; otherwise returns the linear branch `t / (3·(6/29)²) + 4/29`. Integer-only.
-#[inline]
-fn f_q16(t: i64) -> i64 {
-  if t > EPS_Q16 {
-    // t is Q16. Shift left by 32 so the value represents `t_real * 2^48`; its integer cube
-    // root is `t_real^(1/3) * 2^16`, i.e. the result in Q16.
-    icbrt_u128((t as u128) << 32) as i64
-  } else {
-    ((t * F_LINEAR_SLOPE_Q16 + HALF) >> Q) + F_LINEAR_INTERCEPT_Q16
-  }
-}
-
-/// Round-to-nearest signed division by `2^16` (Q16 -> integer), without floating point.
-#[inline]
-fn rdiv_q16(v: i64) -> i64 {
-  if v >= 0 {
-    (v + HALF) / ONE
-  } else {
-    (v - HALF) / ONE
-  }
-}
-
-/// Round-to-nearest arithmetic shift of a non-negative Q16 value down by `Q` bits.
-#[inline]
-fn rshift_q16(v: i64) -> i64 {
-  (v + HALF) >> Q
-}
-
-/// Convert an 8-bit sRGB color to fixed-point CIELAB (D65, standard sRGB transfer).
-///
-/// Fully deterministic: integer/fixed-point arithmetic only. The returned components are scaled by
-/// [`LAB_SCALE`] (×100).
-pub(crate) fn rgb_to_lab(r: u8, g: u8, b: u8) -> Lab {
-  // sRGB -> linear, Q16. Non-negative, max 65535.
-  let lr = SRGB_TO_LINEAR[r as usize] as i64;
-  let lg = SRGB_TO_LINEAR[g as usize] as i64;
-  let lb = SRGB_TO_LINEAR[b as usize] as i64;
-
-  // linear RGB -> normalized XYZ ratios (Q16). Each product is Q32 (Q16 coeff × Q16 light);
-  // rounded shift back to Q16. Max intermediate ≈ 65535 × 65537 × 3 ≈ 1.3e10, fits i64 easily.
-  let xr = rshift_q16(MAT[0][0] * lr + MAT[0][1] * lg + MAT[0][2] * lb);
-  let yr = rshift_q16(MAT[1][0] * lr + MAT[1][1] * lg + MAT[1][2] * lb);
-  let zr = rshift_q16(MAT[2][0] * lr + MAT[2][1] * lg + MAT[2][2] * lb);
-
-  // CIELAB nonlinearity, Q16.
-  let fx = f_q16(xr);
-  let fy = f_q16(yr);
-  let fz = f_q16(zr);
-
-  // L* = 116·fy − 16 ; a* = 500·(fx − fy) ; b* = 200·(fy − fz)
-  // fx/fy/fz are Q16. Multiply by the CIE coefficient and by LAB_SCALE, then round-divide the
-  // Q16 back out. The `− 16` offset becomes `− 16·LAB_SCALE` in scaled units.
-  let scale = LAB_SCALE as i64;
-  let l = (rdiv_q16(116 * fy * scale) - 16 * scale) as i32;
-  let a = rdiv_q16(500 * (fx - fy) * scale) as i32;
-  let bb = rdiv_q16(200 * (fy - fz) * scale) as i32;
-
-  Lab { l, a, b: bb }
-}
-
 /// sRGB 8-bit -> linear light as `f32` in `[0.0, 1.0]`, read from the SAME
-/// [`SRGB_TO_LINEAR`] Q16 table the CIELAB path uses, so the dither's notion of
-/// "linear light" is bit-consistent with palette selection. Deterministic: a table
-/// lookup and one IEEE-754 `f32` divide — no `powf`. Used by `remap_dither` to
-/// diffuse quantization error in LINEAR light (which preserves average DISPLAYED
-/// brightness), while palette SELECTION stays perceptual (CIELAB).
+/// [`SRGB_TO_LINEAR`] Q16 table the dither path uses, so the Oklab conversion's
+/// notion of "linear light" is bit-consistent with error diffusion. Deterministic:
+/// a table lookup and one IEEE-754 `f32` divide — no `powf`.
 #[inline]
 pub(crate) fn srgb_to_linear_f(c: u8) -> f32 {
   SRGB_TO_LINEAR[c as usize] as f32 / 65535.0
@@ -236,10 +139,45 @@ pub(crate) fn srgb_to_linear_f(c: u8) -> f32 {
 /// == c` for every `c` (pinned by `linear_srgb_roundtrip_is_exact`), so a flat /
 /// zero-error pixel re-encodes to its original code and dither-free regions stay
 /// byte-identical to a plain sRGB remap.
+///
+/// # Lookup table
+///
+/// `q` is closed and tiny (`[0, 65535]`), so the nearest-code search is tabulated in
+/// [`LINEAR_TO_SRGB8_LUT`]: `q` is computed exactly as the pre-LUT body did (same
+/// clamp/multiply/round and the same saturating `as` cast — NaN still maps to `q == 0`,
+/// `±inf` clamps to the endpoints), then one table load returns what the search returned.
+/// `LUT[q] == linear_to_srgb8_lookup(q)` BY CONSTRUCTION (the fill calls the preserved
+/// body, tie-break included), so outputs are byte-identical for every `lin`; the
+/// `OnceLock` init race cannot change the contents. 64 KiB of heap, built once.
 #[inline]
 pub(crate) fn linear_to_srgb8(lin: f32) -> u8 {
-  // Quantize the linear value to the table's Q16 units (0..=65535).
+  // Quantize the linear value to the table's Q16 units (0..=65535) — identical to the
+  // pre-LUT body.
   let q = (lin.clamp(0.0, 1.0) * 65535.0).round() as i64;
+  LINEAR_TO_SRGB8_LUT.get_or_init(build_linear_to_srgb8_lut)[q as usize]
+}
+
+/// Lazily-built exact inverse table for [`linear_to_srgb8`] indexed by the quantized linear
+/// value `q ∈ [0, 65535]` — 64 KiB of heap, built once per process. Filled by the exact
+/// search below, so identical by construction; the `OnceLock` init race cannot change the
+/// contents.
+static LINEAR_TO_SRGB8_LUT: OnceLock<Box<[u8; 65536]>> = OnceLock::new();
+
+/// Fills [`LINEAR_TO_SRGB8_LUT`] by calling the preserved binary-search body for every
+/// reachable `q`. Heap-allocated via `Vec` so the table is never a stack temporary.
+#[cold]
+fn build_linear_to_srgb8_lut() -> Box<[u8; 65536]> {
+  let mut t = vec![0u8; 65536];
+  for (q, e) in t.iter_mut().enumerate() {
+    *e = linear_to_srgb8_lookup(q as i64);
+  }
+  t.into_boxed_slice().try_into().expect("vec len == 65536")
+}
+
+/// The pre-LUT body of [`linear_to_srgb8`], unchanged: nearest-code binary search over
+/// [`SRGB_TO_LINEAR`] for a quantized linear value `q` (table units, 0..=65535). Now used to
+/// FILL [`LINEAR_TO_SRGB8_LUT`] and as the test reference.
+fn linear_to_srgb8_lookup(q: i64) -> u8 {
   // First code whose linear value is >= q (table is strictly increasing).
   let mut lo = 0usize;
   let mut hi = 255usize;
@@ -267,13 +205,163 @@ pub(crate) fn linear_to_srgb8(lin: f32) -> u8 {
   }
 }
 
-/// Squared CIE76 distance `dL² + da² + db²` in (×[`LAB_SCALE`])² units.
+/// Deterministic cube root in pure IEEE-754 `f64` arithmetic — bit-identical on
+/// every platform, unlike `f32::cbrt` which lowers to the target's libm and can
+/// differ by 1 ulp between libm builds (glibc vs Apple libm vs wasi-libc),
+/// breaking the cross-architecture byte-identity contract.
 ///
-/// Squared (no `sqrt`) because the quantizer only ever compares distances. Components differ by at
-/// most ~20000 (×100 units), so each squared term is ≤ ~4e8 and the sum ≤ ~1.2e9, well inside
-/// `i64`. Widening to `i64` before squaring prevents any `i32` overflow.
+/// Construction: a bit-hack seed plus a FIXED count of Newton iterations for
+/// `y³ = x`. Every op is a correctly-rounded IEEE `+`, `*`, or `/` — mandated
+/// identical on every target — and the update is written as `(y + y + t) / 3`
+/// with no `mul + add` pair, so no FMA contraction can alter the result.
+/// Determinism is what matters (not correct rounding): a fixed iteration count
+/// makes even a last-ulp oscillation cycle reproduce identically everywhere.
 #[inline]
-pub(crate) fn delta_e76_sq(p: Lab, q: Lab) -> i64 {
+fn cbrt_deterministic(x: f64) -> f64 {
+  if x == 0.0 {
+    return x; // preserves -0.0
+  }
+  let ax = x.abs();
+  // Bit-hack seed: for a normal f64 x = m·2^E, `bits/3` puts the exponent field
+  // at (1023+E)/3 ≈ 341+E/3; adding (1023-341)<<52 restores the bias so the
+  // seed lands within ~10% of the true root. The f32 input cast to f64 is
+  // always a normal f64 (f32's smallest subnormal ~1.4e-45 far exceeds f64's
+  // normal floor ~2.2e-308), so the hack applies to every reachable input.
+  let mut y = f64::from_bits(ax.to_bits() / 3 + 0x2AA0_0000_0000_0000);
+  // Newton: y ← (2y + x/y²)/3, written without a fusible mul+add pair.
+  for _ in 0..8 {
+    let t = ax / (y * y);
+    y = (y + y + t) / 3.0;
+  }
+  if x < 0.0 {
+    -y
+  } else {
+    y
+  }
+}
+
+/// Convert an 8-bit sRGB color to the quantized Oklab triple.
+///
+/// The forward map is the published Oklab construction (Ottosson, matrices updated
+/// 2021-01-25) in `f32`:
+///
+/// ```text
+/// (lr, lg, lb) = SRGB_TO_LINEAR[..] / 65535          # table-exact linear light
+/// (l, m, s)  = M1 · (lr, lg, lb)                     # approximate cone responses
+/// (l', m', s') = (cbrt(l), cbrt(m), cbrt(s))         # deterministic cbrt, NOT powf/libm
+/// (L, a, b)  = M2 · (l', m', s')
+/// ```
+///
+/// then each component is quantized to the Q14 triple documented on [`OkLab`]
+/// (`round(L·16383)`, `round((a+0.5)·16383)`, `round((b+0.5)·16383)`). The
+/// quantization turns the f32 result into an integer triple once — everything
+/// downstream (distance, argmin, centroid mean) is then exact integer math.
+///
+/// M1 (linear sRGB -> LMS, row-major) and M2 (LMS' -> Oklab):
+/// ```text
+/// M1 = [[0.4122214708, 0.5363325363, 0.0514459929],
+///       [0.2119034982, 0.6806995451, 0.1073969566],
+///       [0.0883024619, 0.2817188376, 0.6299787005]]
+/// M2 = [[0.2104542553, 0.7936177850, -0.0040720468],
+///       [1.9779984951, -2.4285922050, 0.4505937099],
+///       [0.0259040371, 0.7827717662, -0.8086757660]]
+/// ```
+pub(crate) fn rgb_to_oklab(r: u8, g: u8, b: u8) -> OkLab {
+  let lr = srgb_to_linear_f(r);
+  let lg = srgb_to_linear_f(g);
+  let lb = srgb_to_linear_f(b);
+
+  // M1: linear sRGB -> LMS cone responses (published constants, f32).
+  let l = 0.4122214708f32 * lr + 0.5363325363f32 * lg + 0.0514459929f32 * lb;
+  let m = 0.2119034982f32 * lr + 0.6806995451f32 * lg + 0.1073969566f32 * lb;
+  let s = 0.0883024619f32 * lr + 0.2817188376f32 * lg + 0.6299787005f32 * lb;
+
+  // Perceptual nonlinearity: deterministic cube root (never powf, never the
+  // platform libm — see `cbrt_deterministic`).
+  let l_ = cbrt_deterministic(l as f64) as f32;
+  let m_ = cbrt_deterministic(m as f64) as f32;
+  let s_ = cbrt_deterministic(s as f64) as f32;
+
+  // M2: LMS' -> Oklab (published constants, f32).
+  let big_l = 0.2104542553f32 * l_ + 0.7936177850f32 * m_ - 0.0040720468f32 * s_;
+  let a = 1.9779984951f32 * l_ - 2.4285922050f32 * m_ + 0.4505937099f32 * s_;
+  let bb = 0.0259040371f32 * l_ + 0.7827717662f32 * m_ - 0.8086757660f32 * s_;
+
+  // Quantize to the Q14 triple. `round` on an f32 is IEEE-exact; the clamp keeps
+  // last-ulp float residue at the gamut boundary (e.g. white's L landing on
+  // 1.0000001) from escaping the `0..=16383` range.
+  OkLab {
+    l: (big_l * OKLAB_SCALE).round().clamp(0.0, OKLAB_SCALE) as i32,
+    a: ((a + CHROMA_BIAS) * OKLAB_SCALE)
+      .round()
+      .clamp(0.0, OKLAB_SCALE) as i32,
+    b: ((bb + CHROMA_BIAS) * OKLAB_SCALE)
+      .round()
+      .clamp(0.0, OKLAB_SCALE) as i32,
+  }
+}
+
+/// Inverse of [`rgb_to_oklab`]: quantized Oklab triple -> 8-bit sRGB.
+///
+/// Dequantizes the stored Q14 triple (`l/16383`, `a/16383 − 0.5`,
+/// `b/16383 − 0.5`), applies the published inverse map — M2⁻¹ into LMS',
+/// the exact cube `x³`, then M1⁻¹ into linear sRGB — in `f32`, and re-encodes
+/// each channel through [`linear_to_srgb8`] (the exact nearest-code inverse
+/// shared with the dither path):
+///
+/// ```text
+/// l' = L + 0.3963377774·a + 0.2158037573·b
+/// m' = L − 0.1055613458·a − 0.0638541728·b
+/// s' = L − 0.0894841775·a − 1.2914855480·b
+/// (l, m, s) = (l'³, m'³, s'³)
+/// r_lin = +4.0767416621·l − 3.3077115913·m + 0.2309699292·s
+/// g_lin = −1.2684380046·l + 2.6097574011·m − 0.3413193965·s
+/// b_lin = −0.0041960863·l − 0.7034186147·m + 1.7076147010·s
+/// ```
+///
+/// Used by the k-means centroid update, which accumulates cluster means in the
+/// quantized Oklab components (the space the assignment metric minimizes) and
+/// maps them back to sRGB. A centroid mean can land OUTSIDE the sRGB gamut —
+/// the inverse matrix then yields a linear channel below 0 or above 1 and
+/// [`linear_to_srgb8`]'s clamp saturates to the nearest gamut boundary. Accuracy:
+/// the strided-sweep round-trip `oklab_to_rgb8(rgb_to_oklab(c))` reproduces `c`
+/// within a couple LSBs per channel (pinned by `oklab_rgb_roundtrip`); the
+/// residual is f32 matrix/quantization rounding, not bias.
+pub(crate) fn oklab_to_rgb8(lab: OkLab) -> (u8, u8, u8) {
+  // Dequantize: undo the Q14 scale and the +0.5 chroma bias.
+  let big_l = lab.l as f32 / OKLAB_SCALE;
+  let a = lab.a as f32 / OKLAB_SCALE - CHROMA_BIAS;
+  let b = lab.b as f32 / OKLAB_SCALE - CHROMA_BIAS;
+
+  // M2 inverse: Oklab -> LMS' (published constants, f32).
+  let l_ = big_l + 0.3963377774f32 * a + 0.2158037573f32 * b;
+  let m_ = big_l - 0.1055613458f32 * a - 0.0638541728f32 * b;
+  let s_ = big_l - 0.0894841775f32 * a - 1.2914855480f32 * b;
+
+  // Inverse nonlinearity: exact cubes (x*x*x), no pow.
+  let l = l_ * l_ * l_;
+  let m = m_ * m_ * m_;
+  let s = s_ * s_ * s_;
+
+  // M1 inverse: LMS -> linear sRGB (published constants, f32). Out-of-gamut
+  // centroids produce out-of-[0,1] channels; linear_to_srgb8 clamps them.
+  let r = 4.0767416621f32 * l - 3.3077115913f32 * m + 0.2309699292f32 * s;
+  let g = -1.2684380046f32 * l + 2.6097574011f32 * m - 0.3413193965f32 * s;
+  let bb = -0.0041960863f32 * l - 0.7034186147f32 * m + 1.7076147010f32 * s;
+
+  (linear_to_srgb8(r), linear_to_srgb8(g), linear_to_srgb8(bb))
+}
+
+/// Squared Oklab distance `dL² + da² + db²` in the quantized Q14² units.
+///
+/// Squared (no `sqrt`) because the quantizer only ever compares distances.
+/// Stored components are `0..=16383`, so each squared term is `≤ 16383²` and the
+/// sum is `≤ 3·16383² = 805_208_067` — INSIDE `i32::MAX` (the `const _` proof on
+/// [`OKLAB_QMAX`]), which is what the `i32` SIMD lanes rely on. The accumulator
+/// here stays `i64` anyway — scalar safety margin for callers that multiply `de`
+/// further (`de·wa` in `pdist`), at zero cost off the SIMD path.
+#[inline]
+pub(crate) fn oklab_dist_sq(p: OkLab, q: OkLab) -> i64 {
   let dl = (p.l - q.l) as i64;
   let da = (p.a - q.a) as i64;
   let db = (p.b - q.b) as i64;
@@ -284,29 +372,27 @@ pub(crate) fn delta_e76_sq(p: Lab, q: Lab) -> i64 {
 mod tests {
   use super::*;
 
-  /// An (r, g, b) input paired with its reference Lab in real units.
+  /// An (r, g, b) input paired with its reference Oklab in real units.
   type RefRow = ((u8, u8, u8), (f64, f64, f64));
-  /// An (r, g, b) input paired with its golden integer Lab output.
+  /// An (r, g, b) input paired with its golden integer Oklab output.
   type GoldenRow = ((u8, u8, u8), (i32, i32, i32));
 
-  /// Reference table (skimage.color.rgb2lab, D65) embedded from the P3 phase-1 brief.
-  /// Values are real Lab units.
+  /// Reference Oklab values (computed with the published matrices in f64, matching
+  /// the widely-published reference outputs — e.g. colour-science's Oklab).
+  /// Values are real Oklab units (L in 0..=1, a/b centered on 0).
   const REFERENCE: &[RefRow] = &[
-    ((0, 0, 0), (0.0000, 0.0000, 0.0000)),
-    ((255, 255, 255), (100.0000, -0.0025, 0.0047)),
-    ((128, 128, 128), (53.5850, -0.0015, 0.0028)),
-    ((255, 0, 0), (53.2406, 80.0923, 67.2028)),
-    ((0, 255, 0), (87.7351, -86.1830, 83.1797)),
-    ((0, 0, 255), (32.2957, 79.1856, -107.8573)),
-    ((255, 255, 0), (97.1395, -21.5547, 94.4781)),
-    ((0, 255, 255), (91.1133, -48.0906, -14.1263)),
-    ((255, 0, 255), (60.3235, 98.2331, -60.8210)),
-    ((64, 128, 192), (52.2105, 0.0953, -39.4843)),
-    ((200, 30, 90), (44.1609, 65.8066, 10.6150)),
-    ((18, 52, 86), (21.0416, 1.0523, -24.0992)),
-    ((245, 222, 179), (89.3517, 1.5098, 24.0113)),
-    ((1, 1, 1), (0.2742, -0.0000, 0.0000)),
-    ((254, 254, 254), (99.6549, -0.0024, 0.0046)),
+    ((0, 0, 0), (0.000000, 0.000000, 0.000000)),
+    ((255, 255, 255), (1.000000, 0.000000, 0.000000)),
+    ((128, 128, 128), (0.599871, 0.000000, 0.000000)),
+    ((255, 0, 0), (0.627955, 0.224863, 0.125846)),
+    ((0, 255, 0), (0.866440, -0.233888, 0.179498)),
+    ((0, 0, 255), (0.452014, -0.032457, -0.311528)),
+    ((255, 255, 0), (0.967983, -0.071369, 0.198570)),
+    ((0, 255, 255), (0.905399, -0.149444, -0.039398)),
+    ((255, 0, 255), (0.701674, 0.274566, -0.169156)),
+    ((64, 128, 192), (0.587209, -0.039537, -0.111861)),
+    ((200, 30, 90), (0.544872, 0.200615, 0.027067)),
+    ((1, 1, 1), (0.067205, 0.000000, 0.000000)),
   ];
 
   /// The linear-light dither helpers are an exact LEFT INVERSE at the table points,
@@ -346,79 +432,67 @@ mod tests {
     }
   }
 
-  /// GOLDEN cross-platform canary: exact integer outputs. If any platform's integer math diverged
-  /// these byte-exact triples would change. Includes the all-zero and all-255 corners.
+  /// GOLDEN canary: exact integer outputs of the quantized Oklab conversion. If the
+  /// f32 pipeline (matrices, cbrt, quantization) ever drifts these triples change.
+  /// Includes the all-zero and all-255 corners.
   #[test]
   fn golden_exact_integer_outputs() {
     let cases: &[GoldenRow] = &[
-      ((0, 0, 0), (0, 0, 0)),
-      ((255, 255, 255), (10000, 0, 0)),
-      ((128, 128, 128), (5358, 0, 0)),
-      ((255, 0, 0), (5324, 8009, 6720)),
-      ((0, 255, 0), (8773, -8618, 8318)),
-      ((0, 0, 255), (3230, 7919, -10786)),
-      ((1, 1, 1), (28, 0, 0)),
-      ((254, 254, 254), (9965, 0, 0)),
+      ((0, 0, 0), (0, 8192, 8192)),
+      ((255, 255, 255), (16383, 8192, 8192)),
+      ((255, 0, 0), (10288, 11875, 10253)),
+      ((0, 255, 0), (14195, 4360, 11132)),
+      ((0, 0, 255), (7405, 7660, 3088)),
+      ((255, 255, 0), (15858, 7022, 11445)),
+      ((0, 255, 255), (14833, 5743, 7546)),
+      ((255, 0, 255), (11496, 12690, 5420)),
     ];
     for &((r, g, b), (l, a, bb)) in cases {
-      let got = rgb_to_lab(r, g, b);
+      let got = rgb_to_oklab(r, g, b);
       assert_eq!(
         (got.l, got.a, got.b),
         (l, a, bb),
-        "golden mismatch for ({r},{g},{b}) — integer math diverged?"
+        "golden mismatch for ({r},{g},{b}) — Oklab pipeline drifted?"
       );
     }
   }
 
-  /// Accuracy vs the skimage reference table: max abs error must be ≤ 1.0 Lab unit per channel
-  /// (target ≤ 0.5). Float is allowed here — this is the test path, not runtime.
+  /// Accuracy vs the f64 reference table: the quantized conversion must track the
+  /// published Oklab coordinates closely — the Q14 quantization alone is ≤ ~3.1e-5
+  /// per component, so a 1e-3 bound leaves room only for real pipeline error.
   #[test]
   fn accuracy_vs_reference_table() {
     let (mut max_l, mut max_a, mut max_b) = (0.0f64, 0.0f64, 0.0f64);
     for &((r, g, b), (rl, ra, rb)) in REFERENCE {
-      let lab = rgb_to_lab(r, g, b);
+      let lab = rgb_to_oklab(r, g, b);
       let (l, a, bb) = (
-        lab.l as f64 / LAB_SCALE as f64,
-        lab.a as f64 / LAB_SCALE as f64,
-        lab.b as f64 / LAB_SCALE as f64,
+        lab.l as f64 / OKLAB_SCALE as f64,
+        lab.a as f64 / OKLAB_SCALE as f64 - 0.5,
+        lab.b as f64 / OKLAB_SCALE as f64 - 0.5,
       );
       max_l = max_l.max((l - rl).abs());
       max_a = max_a.max((a - ra).abs());
       max_b = max_b.max((bb - rb).abs());
     }
     assert!(
-      max_l <= 1.0 && max_a <= 1.0 && max_b <= 1.0,
-      "accuracy bar exceeded: max err L={max_l:.4} a={max_a:.4} b={max_b:.4}"
-    );
-    // Tighter target check (informational; should hold comfortably).
-    assert!(
-      max_l <= 0.5 && max_a <= 0.5 && max_b <= 0.5,
-      "did not meet ≤0.5 target: L={max_l:.4} a={max_a:.4} b={max_b:.4}"
+      max_l <= 1e-3 && max_a <= 1e-3 && max_b <= 1e-3,
+      "accuracy bar exceeded: max err L={max_l:.6} a={max_a:.6} b={max_b:.6}"
     );
   }
 
-  /// Overflow / panic safety across the full domain: all 256 grays + a strided sweep of the 256³
-  /// cube (step 17 ≈ 4k colors). Asserts no panic and in-range finite outputs.
+  /// Overflow / panic safety across the full domain: all 256 grays + a strided sweep of
+  /// the 256³ cube (step 17 ≈ 4k colors). Asserts no panic and in-range outputs.
   #[test]
   fn panic_overflow_sweep() {
-    let check = |lab: Lab| {
-      // L roughly 0..100·scale (allow small rounding margin); a/b within ±128·scale + margin.
-      assert!((-50..=10050).contains(&lab.l), "L out of range: {}", lab.l);
-      assert!(
-        (-13000..=13000).contains(&lab.a),
-        "a out of range: {}",
-        lab.a
-      );
-      assert!(
-        (-13000..=13000).contains(&lab.b),
-        "b out of range: {}",
-        lab.b
-      );
+    let check = |lab: OkLab| {
+      assert!((0..=16383).contains(&lab.l), "L out of range: {}", lab.l);
+      assert!((0..=16383).contains(&lab.a), "a out of range: {}", lab.a);
+      assert!((0..=16383).contains(&lab.b), "b out of range: {}", lab.b);
     };
     // All grays.
     for i in 0..=255u16 {
       let i = i as u8;
-      check(rgb_to_lab(i, i, i));
+      check(rgb_to_oklab(i, i, i));
     }
     // Strided cube sweep.
     let mut r = 0u16;
@@ -427,7 +501,7 @@ mod tests {
       while g <= 255 {
         let mut b = 0u16;
         while b <= 255 {
-          check(rgb_to_lab(r as u8, g as u8, b as u8));
+          check(rgb_to_oklab(r as u8, g as u8, b as u8));
           b += 17;
         }
         g += 17;
@@ -436,55 +510,128 @@ mod tests {
     }
   }
 
+  /// Cross-platform determinism pin: hash the quantized triples of a dense sRGB
+  /// sweep — every color at multiples of 5 (52³ ≈ 140k colors), FNV-1a over the
+  /// (l,a,b) i32 triples — so any drift in the forward map (matrices, the
+  /// deterministic cbrt, Q14 rounding) fails loudly instead of silently changing
+  /// output bytes. If this fails after a *source* change, recompute the constant
+  /// and audit the diff.
+  #[test]
+  fn dense_sweep_hash_pin() {
+    let mut h = 0xcbf29ce484222325u64;
+    let mut r = 0u16;
+    while r <= 255 {
+      let mut g = 0u16;
+      while g <= 255 {
+        let mut b = 0u16;
+        while b <= 255 {
+          let lab = rgb_to_oklab(r as u8, g as u8, b as u8);
+          for v in [lab.l, lab.a, lab.b] {
+            h ^= v as u64;
+            h = h.wrapping_mul(0x100000001b3);
+          }
+          b += 5;
+        }
+        g += 5;
+      }
+      r += 5;
+    }
+    assert_eq!(
+      h, 5501793295779600387u64,
+      "Oklab forward-map drifted on this platform"
+    );
+  }
+
+  /// Pin `cbrt_deterministic`'s exact bit pattern: these outputs must never
+  /// change, on any platform — the whole point is that no libm is involved.
+  /// Values were produced by the pure-IEEE Newton path itself; if a refactor
+  /// alters even the last bit here, cross-platform byte identity is gone.
+  #[test]
+  fn cbrt_deterministic_bit_pin() {
+    for (x, want_bits) in [
+      (0.0f64, 0.0f64.to_bits()),
+      (1.0, 1.0f64.to_bits()),
+      (0.5, 0x3fe9_65fe_a53d_6e3c),
+      (1e-45, 0x3cd2_03af_9ee7_5615),
+      (1e-20, 0x3e8c_ea94_cb5c_6ff0),
+      (1.1, 0x3ff0_8438_2783_23a4),
+    ] {
+      assert_eq!(
+        cbrt_deterministic(x).to_bits(),
+        want_bits,
+        "cbrt_deterministic({x:e}) drifted"
+      );
+    }
+    // Negation symmetry and convergence across the LMS domain.
+    for k in 0..=1000u64 {
+      let x = k as f64 / 1000.0;
+      assert_eq!(
+        cbrt_deterministic(-x).to_bits(),
+        (-cbrt_deterministic(x)).to_bits()
+      );
+      let y = cbrt_deterministic(x);
+      assert!(
+        (y * y * y - x).abs() <= 1e-15 * x.max(1e-300),
+        "cbrt({x}) = {y} not converged"
+      );
+    }
+  }
+
   /// Sign / monotonicity sanity matching the reference table.
   #[test]
   fn sign_and_monotonicity_sanity() {
-    // black -> L ≈ 0, white -> L ≈ 100·scale.
-    assert_eq!(rgb_to_lab(0, 0, 0).l, 0);
-    assert_eq!(rgb_to_lab(255, 255, 255).l, 100 * LAB_SCALE);
+    // black -> L == 0, white -> L == 16383 (L == 1).
+    assert_eq!(rgb_to_oklab(0, 0, 0).l, 0);
+    assert_eq!(rgb_to_oklab(255, 255, 255).l, 16383);
 
-    // Gray ramp: L monotonically non-decreasing.
+    // Gray ramp: L monotonically non-decreasing, chroma pinned at the bias point.
     let mut prev = i32::MIN;
     for i in 0..=255u16 {
-      let l = rgb_to_lab(i as u8, i as u8, i as u8).l;
-      assert!(l >= prev, "L not monotonic at gray {i}: {l} < {prev}");
-      prev = l;
+      let lab = rgb_to_oklab(i as u8, i as u8, i as u8);
+      assert!(
+        lab.l >= prev,
+        "L not monotonic at gray {i}: {} < {prev}",
+        lab.l
+      );
+      prev = lab.l;
     }
 
-    // pure red: a>0 and b>0.
-    let red = rgb_to_lab(255, 0, 0);
-    assert!(red.a > 0 && red.b > 0, "red: {red:?}");
+    // pure red: a>0 and b>0 (above the 0.5 bias).
+    let red = rgb_to_oklab(255, 0, 0);
+    assert!(red.a > 8192 && red.b > 8192, "red: {red:?}");
     // pure green: a<0.
-    assert!(rgb_to_lab(0, 255, 0).a < 0, "green a should be < 0");
+    assert!(rgb_to_oklab(0, 255, 0).a < 8192, "green a should be < 0");
     // pure blue: b<0.
-    assert!(rgb_to_lab(0, 0, 255).b < 0, "blue b should be < 0");
+    assert!(rgb_to_oklab(0, 0, 255).b < 8192, "blue b should be < 0");
   }
 
-  /// `delta_e76_sq` is a non-negative squared distance: zero iff equal, symmetric, and equals the
-  /// hand-computed sum of squared component deltas.
+  /// `oklab_dist_sq` is a non-negative squared distance: zero iff equal, symmetric, and
+  /// equals the hand-computed sum of squared component deltas.
   #[test]
-  fn delta_e76_sq_basic() {
-    let p = rgb_to_lab(255, 0, 0);
-    let q = rgb_to_lab(0, 255, 0);
-    assert_eq!(delta_e76_sq(p, p), 0);
-    assert_eq!(delta_e76_sq(p, q), delta_e76_sq(q, p));
-    assert!(delta_e76_sq(p, q) > 0);
+  fn oklab_dist_sq_basic() {
+    let p = rgb_to_oklab(255, 0, 0);
+    let q = rgb_to_oklab(0, 255, 0);
+    assert_eq!(oklab_dist_sq(p, p), 0);
+    assert_eq!(oklab_dist_sq(p, q), oklab_dist_sq(q, p));
+    assert!(oklab_dist_sq(p, q) > 0);
 
     let dl = (p.l - q.l) as i64;
     let da = (p.a - q.a) as i64;
     let db = (p.b - q.b) as i64;
-    assert_eq!(delta_e76_sq(p, q), dl * dl + da * da + db * db);
+    assert_eq!(oklab_dist_sq(p, q), dl * dl + da * da + db * db);
   }
 
-  /// Pins [`MAX_DELTA_E76_SQ`]: it equals the blue↔green squared distance and is the maximum over
-  /// every pair of the gamut corners (black/white + the six R/G/B/C/M/Y primaries). The full 256³
-  /// global maximum was confirmed once by an exhaustive sweep to be this same corner-to-corner
-  /// diameter; this test re-pins the value cheaply so any drift in the integer Lab math is caught.
+  /// Pins [`MAX_OKLAB_DIST_SQ`]: it equals the black↔white squared distance and is the
+  /// maximum over every pair of the gamut corners (black/white + the six R/G/B/C/M/Y
+  /// primaries). The full-cube maximum was confirmed by a farthest-point iteration to be
+  /// this same axis diameter; this test re-pins the value cheaply so any drift in the
+  /// conversion is caught. The constant also documents the i32-lane inclusion: at Q14
+  /// even the UNCONDITIONAL domain bound `3·16383²` fits `i32`.
   #[test]
-  fn max_delta_e76_sq_is_gamut_diameter() {
-    let blue = rgb_to_lab(0, 0, 255);
-    let green = rgb_to_lab(0, 255, 0);
-    assert_eq!(delta_e76_sq(blue, green), MAX_DELTA_E76_SQ);
+  fn max_oklab_dist_sq_is_gamut_diameter() {
+    let black = rgb_to_oklab(0, 0, 0);
+    let white = rgb_to_oklab(255, 255, 255);
+    assert_eq!(oklab_dist_sq(black, white), MAX_OKLAB_DIST_SQ);
 
     let corners = [
       (0u8, 0u8, 0u8),
@@ -496,59 +643,135 @@ mod tests {
       (255, 0, 255),
       (255, 255, 255),
     ];
-    let labs: Vec<Lab> = corners
+    let labs: Vec<OkLab> = corners
       .iter()
-      .map(|&(r, g, b)| rgb_to_lab(r, g, b))
+      .map(|&(r, g, b)| rgb_to_oklab(r, g, b))
       .collect();
     let mut max = 0i64;
     for (i, &p) in labs.iter().enumerate() {
       for &q in &labs[i + 1..] {
-        max = max.max(delta_e76_sq(p, q));
+        max = max.max(oklab_dist_sq(p, q));
       }
     }
-    assert_eq!(max, MAX_DELTA_E76_SQ, "corner-pair maximum drifted");
+    assert_eq!(max, MAX_OKLAB_DIST_SQ, "corner-pair maximum drifted");
+    // And the whole reason this matters: at Q14 the squared distance — over the
+    // WHOLE `0..=16383` component domain, not just the gamut — fits i32, which is
+    // what the `i32`-lane opaque-scan SIMD kernels rely on.
+    assert!(3 * 16383i64 * 16383 <= i32::MAX as i64);
+    assert!(MAX_OKLAB_DIST_SQ <= i32::MAX as i64);
   }
 
-  /// Direct unit test of the deterministic integer cube root against a checked reference.
+  /// Round-trip accuracy of [`oklab_to_rgb8`]: `oklab_to_rgb8(rgb_to_oklab(c))` must
+  /// reproduce `c` within a couple LSBs per channel (the k-means centroid update
+  /// relies on it). The residual is f32 matrix + Q14 quantization rounding, not
+  /// bias. Crucially the function must be TOTAL: no panic on any OkLab, including
+  /// out-of-gamut centroids — pinned below.
   #[test]
-  fn icbrt_is_floor_cube_root() {
-    let floor_cbrt = |n: u128| -> u128 {
-      if n == 0 {
-        return 0;
-      }
-      // Float seed then integer-correct (test-only; runtime never uses float).
-      let mut x = (n as f64).cbrt().round() as u128;
-      while x.saturating_mul(x).saturating_mul(x) > n {
-        x -= 1;
-      }
-      while (x + 1).saturating_mul(x + 1).saturating_mul(x + 1) <= n {
-        x += 1;
-      }
-      x
+  fn oklab_rgb_roundtrip() {
+    let mut max_err = 0i32;
+    let mut check = |r: u8, g: u8, b: u8| {
+      let (rr, gg, bb) = oklab_to_rgb8(rgb_to_oklab(r, g, b));
+      max_err = max_err
+        .max((rr as i32 - r as i32).abs())
+        .max((gg as i32 - g as i32).abs())
+        .max((bb as i32 - b as i32).abs());
     };
-    for n in [
-      0u128,
-      1,
-      7,
-      8,
-      9,
-      26,
-      27,
-      28,
-      1000,
-      65535,
-      65536,
-      (76_000u128) << 32,
-      ((76_000u128) << 32) + 12_345,
-      1u128 << 48,
-    ] {
-      assert_eq!(icbrt_u128(n), floor_cbrt(n), "icbrt mismatch at {n}");
+    // All grays + the gamut corners.
+    for i in 0..=255u16 {
+      check(i as u8, i as u8, i as u8);
     }
-    // Strided larger sweep.
-    let mut n = 0u128;
-    while n < (1u128 << 40) {
-      assert_eq!(icbrt_u128(n), floor_cbrt(n), "icbrt mismatch at {n}");
-      n += 999_983; // prime stride
+    for &(r, g, b) in &[
+      (255u8, 0u8, 0u8),
+      (0, 255, 0),
+      (0, 0, 255),
+      (255, 255, 0),
+      (0, 255, 255),
+      (255, 0, 255),
+      (0, 0, 0),
+      (255, 255, 255),
+    ] {
+      check(r, g, b);
+    }
+    // Strided cube sweep (step 17 -> ~4k colors covering the gamut).
+    let mut r = 0u16;
+    while r <= 255 {
+      let mut g = 0u16;
+      while g <= 255 {
+        let mut b = 0u16;
+        while b <= 255 {
+          check(r as u8, g as u8, b as u8);
+          b += 17;
+        }
+        g += 17;
+      }
+      r += 17;
+    }
+    assert!(
+      max_err <= 2,
+      "round-trip max per-channel error {max_err} > 2 LSB"
+    );
+    // Hand-checked endpoints: exact on black/white.
+    assert_eq!(oklab_to_rgb8(rgb_to_oklab(0, 0, 0)), (0, 0, 0));
+    assert_eq!(oklab_to_rgb8(rgb_to_oklab(255, 255, 255)), (255, 255, 255));
+    // Totality: extreme/out-of-gamut triples clamp instead of panicking.
+    let _ = oklab_to_rgb8(OkLab {
+      l: 0,
+      a: 0,
+      b: 16383,
+    });
+    let _ = oklab_to_rgb8(OkLab {
+      l: 16383,
+      a: 16383,
+      b: 0,
+    });
+    assert_eq!(
+      oklab_to_rgb8(OkLab {
+        l: 0,
+        a: 8192,
+        b: 8192
+      })
+      .0,
+      0
+    );
+  }
+
+  /// Byte-identity guard for the `linear_to_srgb8` LUT: the table must equal the preserved
+  /// binary-search body at EVERY reachable `q` (all 65536 of them), plus a dense float sweep
+  /// and edge values so the q-quantization + indexing path is covered end to end.
+  #[test]
+  fn linear_to_srgb8_lut_matches_lookup() {
+    // Reference: the same q-quantization as `linear_to_srgb8`, routed to the preserved
+    // pre-LUT search body instead of the table.
+    let reference = |lin: f32| -> u8 {
+      let q = (lin.clamp(0.0, 1.0) * 65535.0).round() as i64;
+      linear_to_srgb8_lookup(q)
+    };
+    // Every reachable q: `lin = q/65535` re-quantizes to exactly `q` (f32 relative error
+    // ~1e-7 « 0.5/65535), so this indexes LUT[q] and compares it to the search.
+    for q in 0..=65535i64 {
+      assert_eq!(
+        linear_to_srgb8(q as f32 / 65535.0),
+        linear_to_srgb8_lookup(q),
+        "LUT mismatch at q={q}"
+      );
+    }
+    // Dense sweep including sub-step values between grid points and out-of-range inputs
+    // that exercise the clamp.
+    for i in 0..=200_000i64 {
+      let lin = i as f32 / 200_000.0 * 1.5 - 0.25;
+      assert_eq!(
+        linear_to_srgb8(lin),
+        reference(lin),
+        "sweep mismatch at {lin}"
+      );
+    }
+    // Edge values: NaN and the infinities take the same saturating-cast path as before.
+    for lin in [f32::NAN, f32::NEG_INFINITY, f32::INFINITY, -0.0] {
+      assert_eq!(
+        linear_to_srgb8(lin),
+        reference(lin),
+        "edge mismatch at {lin}"
+      );
     }
   }
 }

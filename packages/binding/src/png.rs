@@ -221,6 +221,29 @@ pub struct PngQuantOptions {
   /// Number of least significant bits to ignore.
   /// Useful for generating palettes for VGA, 15-bit textures, or other retro platforms.
   pub posterization: Option<u32>,
+  /// Explicit palette size, 1-256 (1 produces a single-color palette).
+  /// When set, it takes precedence over the `maxQuality`-derived color-count
+  /// ramp; `minQuality` still applies.
+  /// Transparency exception: an image containing both transparent and visible
+  /// pixels floors the palette at 2 entries (one exact a=0 + one visible).
+  /// default: unset (palette size is derived from `maxQuality`)
+  pub colors: Option<u32>,
+  /// Use the zopfli deflater for the final oxipng re-encode instead of
+  /// libdeflater: much slower, slightly smaller output. Changes the output
+  /// bytes vs the default path (still lossless; deterministic for a fixed
+  /// zopfli version). Requires the `png_quantize_zopfli` cargo feature —
+  /// passing true without it returns an InvalidArg error.
+  /// Default: `false`
+  pub use_zopfli: Option<bool>,
+  /// Shrink the palette after a quality-passing pass by merging near-duplicate
+  /// / dead entries while `quality >= minQuality + 2` (bounded, deterministic).
+  /// Meaningful on images whose real content is far below the ramp-derived
+  /// palette size — e.g. a 20-color graphic quantized at 251 — where it trades
+  /// extra CPU for a smaller palette (and usually a smaller file). Costs extra
+  /// remap+score passes, so it is OFF by default and ignored when `colors` is
+  /// set (an explicit count is a hard size contract).
+  /// Default: `false`
+  pub merge_down: Option<bool>,
 }
 
 #[napi]
@@ -241,13 +264,13 @@ pub fn png_quantize_sync(input: &[u8], options: Option<PngQuantOptions>) -> Resu
 /// Returns the raw RGBA byte buffer (reinterpret with `as_rgba()`) plus width/height.
 ///
 /// COLOR TRANSFER — deliberately sRGB: the quantizer scores color distance in
-/// CIELAB derived from a FIXED sRGB transfer (`lab::SRGB_TO_LINEAR`), and this
+/// Oklab derived from a FIXED sRGB transfer (`lab::SRGB_TO_LINEAR`), and this
 /// decode intentionally does NOT honor a `gAMA`/`sRGB`/`iCCP` chunk. This matches
 /// the PNG spec's precedence (gAMA is the lowest-priority color chunk, overridden
 /// by sRGB/iCCP) and how the web stack treats PNGs (browsers, libvips/sharp,
 /// ImageMagick's default all normalize untagged/gAMA PNGs to sRGB). For the
 /// overwhelmingly common sRGB-ish tag (`gAMA == 45455 ≈ 1/2.2`) the difference
-/// from the sRGB piecewise curve is ≤ ~3 ΔE and shadow-only — below the
+/// from the sRGB piecewise curve is ~3 ΔE76 and shadow-only — below the
 /// quantization step. A genuinely non-sRGB `gAMA` (e.g. linear `100000`) is the
 /// rare, least-portable tail and is intentionally not special-cased here. NOTE:
 /// the prior imagequant path DID pass a per-image gamma into `new_image` (it was
@@ -287,10 +310,34 @@ fn validate_png_quant_options(o: &PngQuantOptions) -> Result<()> {
       format!("maxQuality must be between 0 and 100, got {max}"),
     ));
   }
-  if min > max {
+  // `colors` is an explicit palette size: 1 is legal (a single-color palette).
+  // When set it overrides the `maxQuality`→color-count ramp in
+  // `QuantizeConfig::from_options`, making `maxQuality` dead — so the
+  // `minQuality > maxQuality` ordering check below is skipped in that case.
+  // `minQuality` still applies as the acceptance gate.
+  if let Some(colors) = o.colors
+    && !(1..=256).contains(&colors)
+  {
+    return Err(Error::new(
+      Status::InvalidArg,
+      format!("colors must be between 1 and 256, got {colors}"),
+    ));
+  }
+  if o.colors.is_none() && min > max {
     return Err(Error::new(
       Status::InvalidArg,
       format!("minQuality ({min}) must not exceed maxQuality ({max})"),
+    ));
+  }
+  // `useZopfli` needs `Deflater::Zopfli`, which only exists when `oxipng/zopfli`
+  // is compiled in (via `png_quantize_zopfli` or `oxipng_libdeflater`). Fail
+  // loudly at validation time — before the decode/quantize work — rather than
+  // silently falling back to libdeflater.
+  #[cfg(not(any(feature = "png_quantize_zopfli", feature = "oxipng_libdeflater")))]
+  if o.use_zopfli == Some(true) {
+    return Err(Error::new(
+      Status::InvalidArg,
+      "useZopfli requires the `png_quantize_zopfli` cargo feature (enables oxipng/zopfli)",
     ));
   }
   Ok(())
@@ -316,6 +363,25 @@ fn png_quantize_inner(input: &[u8], options: &PngQuantOptions) -> Result<Vec<u8>
   let palette = out.palette;
   let pixels = out.indices;
   let mut encoder = lodepng::Encoder::new();
+  // Cheapen this encode: its bytes are almost always thrown away — the oxipng
+  // pass below re-encodes from decoded pixels, and the lodepng output is only
+  // kept when oxipng errors or fails to produce a smaller file. So emit the
+  // cheapest VALID PNG lodepng can make:
+  //  - `set_auto_convert(false)` skips `auto_choose_color`, a full-image
+  //    histogram analysis that picks a minimal colortype/bitdepth. We keep the
+  //    8-bit palette we set explicitly; oxipng's own reductions pick a smaller
+  //    representation in the re-encode anyway.
+  //  - `set_level(1)` replaces the default zlib level 7 with flate2's fastest
+  //    still-compressing level (lodepng 3.x maps `set_level` onto flate2; the
+  //    other legacy CompressSettings knobs are deprecated no-ops, and palette
+  //    images already take the zero-filter path via `filter_palette_zero`).
+  // CAVEAT: on the oxipng-error / not-smaller fallback path the returned bytes
+  // may differ from before (weaker intermediate compression, always 8-bit
+  // palette) — still a valid, lossless PNG. On the happy path (oxipng succeeds
+  // and shrinks) the output is byte-identical to before, because oxipng decodes
+  // pixels rather than reusing the compressed IDAT bytes.
+  encoder.set_auto_convert(false);
+  encoder.settings_mut().set_level(1);
   encoder.set_palette(palette.as_slice()).map_err(|err| {
     Error::new(
       Status::GenericFailure,
@@ -365,7 +431,15 @@ fn png_quantize_inner(input: &[u8], options: &PngQuantOptions) -> Result<Vec<u8>
     grayscale_reduction: true,
     idat_recoding: true,
     strip: oxipng::StripChunks::Safe,
-    deflater: oxipng::Deflater::Libdeflater { compression: 12 },
+    // `useZopfli` (validated above) selects the zopfli deflater — much slower,
+    // slightly smaller; deterministic for a fixed zopfli version but changes
+    // output bytes vs libdeflater. When no zopfli-enabling feature is compiled
+    // in the arm is cfg'd out and validation already rejected `useZopfli: true`.
+    deflater: match options.use_zopfli {
+      #[cfg(any(feature = "png_quantize_zopfli", feature = "oxipng_libdeflater"))]
+      Some(true) => oxipng::Deflater::Zopfli(oxipng::ZopfliOptions::default()),
+      _ => oxipng::Deflater::Libdeflater { compression: 12 },
+    },
     ..Default::default()
   };
   let final_png = match oxipng::optimize_from_memory(&output, &opts) {
@@ -376,13 +450,18 @@ fn png_quantize_inner(input: &[u8], options: &PngQuantOptions) -> Result<Vec<u8>
   // pngQuantize is a size optimizer, so it must NEVER hand back a file at least as
   // large as the caller gave us. For an already-optimized / already-indexed input
   // (classically a smooth truecolor gradient whose PAETH-filtered DEFLATE stream is
-  // tiny), re-quantizing to an indexed palette + Floyd-Steinberg dither injects
+  // tiny), re-quantizing to an indexed palette + error-diffusion dither injects
   // incompressible noise that can exceed the original. In that case the original
   // bytes are both smaller AND higher-fidelity, so return them verbatim. The caller
   // then receives the un-quantized original rather than a larger palette PNG — a
   // deliberate trade-off (Codex P2): pngQuantize never grows a file. `>=` (not `>`)
   // also keeps the lossless original when the sizes merely tie.
-  if final_png.len() >= input.len() {
+  //
+  // EXCEPTION: an explicit `colors` request is an output contract — `colors: 1`
+  // promises a single-color palette, and handing back the (larger-content)
+  // original would silently violate it. With `colors` set we keep the quantized
+  // result even when it grows the file.
+  if options.colors.is_none() && final_png.len() >= input.len() {
     return Ok(input.to_vec());
   }
   Ok(final_png)
@@ -448,6 +527,10 @@ mod tests {
     let cfg = quantize::QuantizeConfig::from_options(options);
     let out = quantize::quantize_rgba(rgba_bytes.as_rgba(), width as usize, height as usize, &cfg);
     let mut encoder = lodepng::Encoder::new();
+    // Mirror the cheapened encode settings in `png_quantize_inner` so this stays
+    // a faithful replica of the intermediate lodepng step.
+    encoder.set_auto_convert(false);
+    encoder.settings_mut().set_level(1);
     encoder
       .set_palette(out.palette.as_slice())
       .expect("palette");
@@ -762,7 +845,7 @@ mod tests {
     // Codex P2: pngQuantize is a size optimizer, so it must NEVER return a file at
     // least as large as the input. The adversarial case is an ALREADY-OPTIMIZED PNG:
     // a smooth gradient stored as truecolor with PAETH filtering compresses to a few
-    // hundred bytes, but re-quantizing it to an indexed palette + Floyd-Steinberg
+    // hundred bytes, but re-quantizing it to an indexed palette + error-diffusion
     // dither injects incompressible noise that is many times larger. The guard in
     // png_quantize_inner returns the original bytes whenever the quantized result is
     // not strictly smaller.

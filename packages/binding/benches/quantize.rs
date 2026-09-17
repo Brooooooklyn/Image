@@ -6,11 +6,10 @@
 //! localizes to the quantizer itself rather than the surrounding I/O.
 //!
 //! Built and run by CodSpeed in CI via `cargo codspeed build --no-default-features`
-//! / `cargo codspeed run`. `--no-default-features` drops the crate's `binding`
-//! feature so the bench links ONLY the pure quantizer core -- no `napi_*` symbols
-//! (the CodSpeed runner executes under Valgrind, which binds eagerly and cannot
-//! resolve the addon's Node-supplied symbols). The same flag makes a plain local
-//! run work on every platform with no linker tricks:
+//! / `cargo codspeed run` in walltime mode on a `codspeed-macro` ARM64 runner.
+//! `--no-default-features` drops the crate's `binding` feature so the bench links
+//! ONLY the pure quantizer core -- no `napi_*` symbols to resolve. The same flag
+//! makes a plain local run work on every platform with no linker tricks:
 //!   `cargo bench -p napi_rs_image --bench quantize --no-default-features`
 //! `codspeed-criterion-compat` (imported as `criterion`) falls back to stock
 //! criterion outside the CodSpeed runner.
@@ -48,6 +47,7 @@ fn single_pass(max_colors: u16, dither: bool) -> QuantizeConfig {
     kmeans_iters: 5,
     dither,
     posterization: 0,
+    merge_down: false, // explicit colors sweep: never shrink the measured size
   }
 }
 
@@ -66,9 +66,17 @@ fn bench_quantize(c: &mut Criterion) {
     kmeans_iters: 5,
     dither: true,
     posterization: 0,
+    merge_down: false, // mirrors the public default (mergeDown is opt-in)
   };
   group.bench_function("default", |b| {
     b.iter(|| black_box(quantize_rgba(black_box(px), w, h, &default_cfg)))
+  });
+  let mergedown_cfg = QuantizeConfig {
+    merge_down: true,
+    ..default_cfg
+  };
+  group.bench_function("default_merge_down", |b| {
+    b.iter(|| black_box(quantize_rgba(black_box(px), w, h, &mergedown_cfg)))
   });
 
   let q75_cfg = QuantizeConfig {
@@ -77,6 +85,7 @@ fn bench_quantize(c: &mut Criterion) {
     kmeans_iters: 5,
     dither: true,
     posterization: 0,
+    merge_down: false, // mirrors the public default (mergeDown is opt-in)
   };
   group.bench_function("max_quality_75", |b| {
     b.iter(|| black_box(quantize_rgba(black_box(px), w, h, &q75_cfg)))
