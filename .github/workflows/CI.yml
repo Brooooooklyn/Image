@@ -698,15 +698,21 @@ jobs:
 
   benchmark:
     name: Benchmark pngQuantize (CodSpeed)
-    runs-on: ubuntu-latest
+    # CodSpeed's managed bare-metal runner (ARM64). Wall-clock mode needs it:
+    # simulation (Valgrind) serializes threads, so a benchmark whose speedup is
+    # multithreading + SIMD can never show it — the quantizer shards work across
+    # scoped threads. `codspeed-macro` measures real wall time on the NEON path.
+    runs-on: codspeed-macro
     permissions:
       contents: read
       id-token: write # OIDC auth for the CodSpeed upload (no token secret needed)
     steps:
       - uses: actions/checkout@v7
-      # nasm is still needed: `--no-default-features` drops the `#[napi]` modules but
-      # the C-dep crates (aom/mozjpeg/webp) remain non-optional and still compile.
+      # nasm is still needed on x86: `--no-default-features` drops the `#[napi]`
+      # modules but the C-dep crates (aom/mozjpeg/webp) remain non-optional and
+      # still compile. Not needed (and unavailable) on the ARM64 macro runner.
       - name: Setup nasm
+        if: runner.arch == 'X64'
         uses: ilammy/setup-nasm@v1
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -720,7 +726,9 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: codspeed-cargo-cache
+          # Macro runners are ARM64 — arch in the key keeps the cache disjoint
+          # from any x86 entries.
+          key: codspeed-cargo-cache-${{ runner.arch }}
       - name: Install cargo-codspeed
         uses: taiki-e/install-action@v2
         env:
@@ -728,9 +736,10 @@ jobs:
         with:
           tool: cargo-codspeed
       # `--no-default-features` drops the `binding` feature, so the bench links only the
-      # pure quantizer core -- no `napi_*` symbols (the CodSpeed runner is Valgrind, which
-      # binds eagerly and cannot resolve them). No RUSTFLAGS override here, so the repo's
-      # `.cargo/config.toml` `[target.x86_64-unknown-linux-gnu]` `+avx2` applies as usual.
+      # pure quantizer core -- no `napi_*` symbols. The runner is aarch64-linux:
+      # the repo's `.cargo/config.toml` `+avx2` target flag is x86_64-only and
+      # simply does not apply; NEON is baseline here and `quantize_simd::detect`
+      # selects it.
       - name: Build benchmarks
         run: cargo codspeed build -p napi_rs_image --bench quantize --no-default-features
       - name: Run benchmarks
@@ -738,7 +747,7 @@ jobs:
         # recommended method, so no long-lived `CODSPEED_TOKEN` secret is needed.
         uses: CodSpeedHQ/action@v5
         with:
-          mode: simulation
+          mode: walltime
           run: cargo codspeed run -p napi_rs_image
 
   publish:

@@ -546,3 +546,23 @@ uses cargo's `-Ztarget-applies-to-host` + `host.target-applies-to-host=false`
 split so only target units carry the instrumentation; CI repeats this on
 `ubuntu-latest` (x86_64) and `ubuntu-24.04-arm` (aarch64/NEON) — see the
 `test-rust-binding-asan` matrix job.
+
+### 10g. Post-review fixes and the CodSpeed walltime switch
+
+Review fixes (`e701404`, both confirmed defects introduced by this branch):
+
+- `colors: 1` on a transparent image left no `a == 0` palette slot (the slot
+  was only reserved at `max_colors >= 2`), so transparent pixels remapped to
+  an opaque color. Transparent images now floor the palette at 2 slots.
+- The Ward pair-merge cost `ni*nj/(ni+nj)*d` divided before multiplying —
+  count-1 pairs truncated to 0 and cheapest-pair selection degenerated.
+  Split-merge and merge_down share `ward_merge_cost = ni*nj*d/(ni+nj)`.
+
+CodSpeed moved from `simulation` to `walltime` on the `codspeed-macro`
+ARM64 runner. Simulation counts instructions under Valgrind — it serializes
+the scoped-thread shards and charges spawn overhead, so this branch showed
+−14% there while real x86 hardware measured −34% (4 vCPU) / +2.9% (1 CPU,
+the honest serial cost of the quality-model work). Wall-clock on the macro
+runner measures the NEON path with real threads. Caveat: the metric baseline
+re-establishes post-merge, and ARM64 wall time is noisier than instruction
+counts for sub-5% diffs.
