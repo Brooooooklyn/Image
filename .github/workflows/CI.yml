@@ -768,6 +768,8 @@ jobs:
       - test-linux-arm-gnueabihf-binding
       - test-wasi-on-nodejs
       - test-rust-binding
+      - test-rust-binding-x86
+      - test-rust-binding-asan
     steps:
       - uses: actions/checkout@v7
       - name: Setup node

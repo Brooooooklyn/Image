@@ -40,6 +40,25 @@ fn fnv(data: &[u8]) -> u64 {
   h
 }
 
+/// Canonicalize a source pixel exactly as `quantize_rgba` does before
+/// clustering (quantize.rs `canonical_key`): fully-transparent collapses to
+/// exact transparent; visible pixels drop `posterization` low bits per RGB
+/// channel (alpha untouched). The metrics below compare against the
+/// POSTERIZED source so `posterization: N` cases don't fold the explicitly
+/// requested quantization loss into `cover`/`repro`.
+fn canonical(p: RGBA8, bits: u8) -> RGBA8 {
+  if p.a == 0 {
+    RGBA8 { r: 0, g: 0, b: 0, a: 0 }
+  } else {
+    RGBA8 {
+      r: (p.r >> bits) << bits,
+      g: (p.g >> bits) << bits,
+      b: (p.b >> bits) << bits,
+      a: p.a,
+    }
+  }
+}
+
 /// Fixed comparison metric: plain RGBA squared distance with alpha ×3.
 fn d2(p: RGBA8, q: RGBA8) -> i64 {
   let dr = p.r as i64 - q.r as i64;
@@ -58,11 +77,12 @@ fn run(name: &str, px: &[RGBA8], w: usize, h: usize, cfg: &QuantizeConfig) {
   buf.extend_from_slice(&out.indices);
   buf.push(out.quality);
 
-  // Distinct-color histogram of the source (visible only) for the metrics.
+  // Distinct-color histogram of the POSTERIZED source (visible only) — the
+  // same canonical key space `quantize_rgba` clusters in.
   let mut hist: HashMap<RGBA8, u64> = HashMap::new();
   for &p in px {
     if p.a > 0 {
-      *hist.entry(p).or_insert(0) += 1;
+      *hist.entry(canonical(p, cfg.posterization)).or_insert(0) += 1;
     }
   }
   // Iterate a sorted snapshot: HashMap order varies per process (RandomState),
@@ -81,10 +101,10 @@ fn run(name: &str, px: &[RGBA8], w: usize, h: usize, cfg: &QuantizeConfig) {
     cover_num += cnt as f64 * best as f64;
     n += cnt as f64;
   }
-  // repro: per-pixel distance to the chosen entry.
+  // repro: per-pixel distance of the POSTERIZED source to the chosen entry.
   for (i, &p) in px.iter().enumerate() {
     if p.a > 0 {
-      repro_num += d2(p, out.palette[out.indices[i] as usize]) as f64;
+      repro_num += d2(canonical(p, cfg.posterization), out.palette[out.indices[i] as usize]) as f64;
     }
   }
   println!(
@@ -113,6 +133,8 @@ fn main() {
   }
 
   let cases: &[(&str, QuantizeConfig)] = &[
+    // Mirrors the shipped public default: `PngQuantOptions.mergeDown` defaults
+    // to false, so this case must too — it is what callers get.
     (
       "default_251_dither",
       QuantizeConfig {
@@ -121,11 +143,12 @@ fn main() {
         kmeans_iters: 5,
         dither: true,
         posterization: 0,
-        merge_down: true,
+        merge_down: false,
       },
     ),
+    // Opt-in merge-down coverage, kept as a separately named case.
     (
-      "q75_145_dither",
+      "q75_145_dither_merged",
       QuantizeConfig {
         max_colors: 145,
         min_quality: 70,
