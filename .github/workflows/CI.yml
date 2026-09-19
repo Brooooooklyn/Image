@@ -742,9 +742,10 @@ jobs:
         with:
           tool: cargo-codspeed
       # `--no-default-features` drops the `binding` feature, so the bench links only the
-      # pure quantizer core -- no `napi_*` symbols to resolve. The repo's
-      # `.cargo/config.toml` `[target.x86_64-unknown-linux-gnu]` `+avx2` applies, so
-      # the AVX2 kernels' instructions are the ones Valgrind counts.
+      # pure quantizer core -- no `napi_*` symbols to resolve. Kernel dispatch stays
+      # machine-independent under Valgrind: its synthesized CPUID never advertises
+      # AVX-512 (unemulatable), so `detect_native` picks the AVX2 kernel on every
+      # GitHub x86_64 runner and baseline-vs-PR counts stay comparable.
       - name: Build benchmarks
         run: cargo codspeed build -m simulation -p napi_rs_image --bench quantize --no-default-features
       - name: Run benchmarks
