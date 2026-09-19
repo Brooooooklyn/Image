@@ -6,7 +6,7 @@
 //! localizes to the quantizer itself rather than the surrounding I/O.
 //!
 //! Built and run by CodSpeed in CI via `cargo codspeed build --no-default-features`
-//! / `cargo codspeed run` in walltime mode on a `codspeed-macro` ARM64 runner.
+//! / `cargo codspeed run` in CPU-simulation mode on the GitHub x86_64 runner.
 //! `--no-default-features` drops the crate's `binding` feature so the bench links
 //! ONLY the pure quantizer core -- no `napi_*` symbols to resolve. The same flag
 //! makes a plain local run work on every platform with no linker tricks:
