@@ -701,13 +701,17 @@ jobs:
 
   benchmark:
     name: Benchmark pngQuantize (CodSpeed)
-    # Wall-clock mode: `simulation` (Valgrind instruction counting) serializes
-    # the quantizer's scoped-thread shards and charges spawn overhead, so a
-    # benchmark whose speedup IS multithreading + SIMD reads as a regression
-    # there (−14% reported vs −34% measured natively). `codspeed-macro` runners
-    # — CodSpeed's low-noise bare-metal option for walltime — are unavailable on
-    # personal accounts, so this runs on the GitHub x86_64 runner: noisier for
-    # sub-5% diffs, but it measures real threads and the real AVX2 path.
+    # CPU-simulation mode: Valgrind counts instructions/cache misses, so the
+    # measurement is identical on any machine and the CodSpeed check is a real
+    # regression gate. `walltime` was tried first but is unusable here: on
+    # shared GitHub runners the baseline and the PR land on different machines,
+    # so CodSpeed reported fake ~15% regressions on every PR ("Different runtime
+    # environments detected"). Accurate walltime needs `codspeed-macro`
+    # bare-metal runners, which require a GitHub organization — this repo lives
+    # on a personal account. Trade-off: instruction counting sums work across
+    # the quantizer's scoped-thread shards (spawn overhead included), so
+    # thread-scaling speedups don't register as improvements; regressions in
+    # actual work done still do.
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -730,8 +734,6 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          # Macro runners are ARM64 — arch in the key keeps the cache disjoint
-          # from any x86 entries.
           key: codspeed-cargo-cache-${{ runner.arch }}
       - name: Install cargo-codspeed
         uses: taiki-e/install-action@v2
@@ -740,17 +742,18 @@ jobs:
         with:
           tool: cargo-codspeed
       # `--no-default-features` drops the `binding` feature, so the bench links only the
-      # pure quantizer core -- no `napi_*` symbols to resolve. The repo's
-      # `.cargo/config.toml` `[target.x86_64-unknown-linux-gnu]` `+avx2` applies, and
-      # under walltime mode the AVX2 kernels genuinely execute (not just counted).
+      # pure quantizer core -- no `napi_*` symbols to resolve. Kernel dispatch stays
+      # machine-independent under Valgrind: its synthesized CPUID never advertises
+      # AVX-512 (unemulatable), so `detect_native` picks the AVX2 kernel on every
+      # GitHub x86_64 runner and baseline-vs-PR counts stay comparable.
       - name: Build benchmarks
-        run: cargo codspeed build -m walltime -p napi_rs_image --bench quantize --no-default-features
+        run: cargo codspeed build -m simulation -p napi_rs_image --bench quantize --no-default-features
       - name: Run benchmarks
         # Auth via OIDC (the job's `id-token: write` permission) -- CodSpeed's
         # recommended method, so no long-lived `CODSPEED_TOKEN` secret is needed.
         uses: CodSpeedHQ/action@v5
         with:
-          mode: walltime
+          mode: simulation
           run: cargo codspeed run -p napi_rs_image
 
   publish:

@@ -292,7 +292,9 @@ why integer SIMD reaches the same argmin as scalar.
               (baseline)    if avx2       else if       if cfg
                                           sse4.1        simd128
 
- x86 order:  avx2 → sse4.1 → scalar     (widest first; is_x86_feature_detected!)
+ x86 order:  avx512 → avx2 → sse4.1 → scalar  (widest first; is_x86_feature_detected!
+             — avx512 unreachable under CodSpeed's Valgrind: CPUID is faked and
+             AVX-512 is unemulatable, so simulation-mode benches uniformly get AVX2)
  aarch64:    NEON unconditionally       (ARMv8 baseline — no host can lack it)
  wasm:       compile-time cfg only      (no runtime probe)
 ```
@@ -566,3 +568,9 @@ the quality-model work). CodSpeed's low-noise `codspeed-macro` runners are
 unavailable on personal GitHub accounts, so walltime runs on the hosted
 x86_64 runner — real threads, real AVX2, noisier for sub-5% diffs. The
 baseline re-establishes on merge.
+
+That trade proved unusable: hosted runners gave ~±15% machine-to-machine
+variance, so every PR read as a regression ("Different runtime environments
+detected"). CI switched back to `simulation` — Valgrind's synthesized CPUID
+makes kernel dispatch machine-independent, and instruction counts stay
+comparable baseline-vs-PR.
