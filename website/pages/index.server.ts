@@ -17,7 +17,7 @@ export type Props = InferProps<typeof loader>
 
 const SITE_URL = 'https://image.napi.rs'
 const DESCRIPTION =
-  'Encode, compress, resize and convert JPEG/PNG/WebP/AVIF with a native Node addon faster than sharp.'
+  'Resize, convert and optimize JPEG, PNG, WebP and AVIF with Rust-powered Node.js addons and browser WebAssembly.'
 
 export const head = defineHead<Props>(() => ({
   title: 'Fast image processing in Rust',

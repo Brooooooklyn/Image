@@ -13,12 +13,34 @@ Photos from phones store rotation in EXIF, not pixels. Call `rotate()` first so 
 import { Transformer, ResizeFilterType } from '@napi-rs/image'
 
 const thumb = await new Transformer(photo)
-  .rotate()                              // bake in EXIF orientation
+  .rotate() // bake in EXIF orientation
   .resize(320, null, ResizeFilterType.Lanczos3) // width 320, keep aspect
   .webp(80)
 ```
 
 Passing no argument to `rotate()` uses the embedded EXIF value; pass an [`Orientation`](/docs/api#orientation) to override it.
+
+## Moving a thumbnail pipeline from sharp
+
+For an existing sharp pipeline that reads bytes, applies EXIF orientation, resizes by width and encodes WebP:
+
+```ts
+import sharp from 'sharp'
+
+const webp = await sharp(input).rotate().resize(320).webp({ quality: 80 }).toBuffer()
+```
+
+The corresponding `@napi-rs/image` API is:
+
+```ts
+import { Transformer, ResizeFilterType } from '@napi-rs/image'
+
+const webp = await new Transformer(input).rotate().resize(320, null, ResizeFilterType.Lanczos3).webp(80)
+```
+
+Read `input` with `readFile` and write the returned `Buffer` with `writeFile`. The encoder is the final async call; there is no `.toBuffer()` step. This example maps the operation, not byte-for-byte or visual equivalence. Verify output dimensions, orientation, metadata, alpha and quality on representative images before migrating. Equal quality numbers do not imply equal visual quality. Aspect-ratio rounding can also differ: for this repository’s EXIF sample, width 320 produces 320×427 with sharp 0.35.2 and 320×426 with `@napi-rs/image` 1.15.0.
+
+When supplying both width and height, choose a [`ResizeFit`](/docs/api#resizefit) explicitly. `rotate()` takes an EXIF `Orientation`, not an arbitrary angle in degrees. `composite()` takes one overlay's bytes plus options per call, rather than an array of layers; separable blend modes with translucent inputs can differ from sharp.
 
 ## Rasterize an SVG
 
@@ -94,14 +116,15 @@ try {
 ## Performance tuning
 
 - **Prefer the async methods** on servers. They run on libuv's thread pool and keep the event loop free.
-- **Raise the thread pool** for throughput. The default libuv pool is 4 threads; encoders are CPU-bound, so more threads = more parallel encodes:
+- **Measure thread-pool changes** under your workload. The default libuv pool is 4 threads. A larger pool allows more concurrent async work but can increase CPU and memory pressure:
 
   ```bash
   UV_THREADPOOL_SIZE=10 node server.js
   ```
 
-  In benchmarks, lifting the pool from 4 → 10 roughly doubled WebP throughput.
+  In the repository’s historical single-JPEG benchmark on an M1 Max, changing the pool from 4 to 10 increased WebP pipeline throughput from 202 to 431 ops/s. This is not a prediction for other images, versions or machines. See the [benchmark context](https://github.com/Brooooooklyn/Image#performance).
+
 - **Use `*Sync` in CLIs and build scripts** where blocking is fine and the per-call overhead of dispatching to the pool isn't worth it.
-- **AVIF `speed`** is the biggest single knob for encode time — raise it while iterating, lower it for final output.
+- **Set AVIF `speed` explicitly** and compare encode time, size and visual quality. Coordinate codec threads with batch concurrency to avoid oversubscribing the machine.
 
 See the [API Reference](/docs/api) for full signatures and the [Format Guides](/docs/formats) for quality/size trade-offs.

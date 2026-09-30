@@ -25,7 +25,11 @@ export default function FormatMatrix() {
         <SectionHeader
           index="03"
           label="FORMATS"
-          title={<>Every format you <span className="text-(--color-accent)">need</span></>}
+          title={
+            <>
+              Supported <span className="text-(--color-accent)">formats</span>
+            </>
+          }
           subhead={matrixCaption}
         />
         <Reveal className="mt-12">
@@ -64,16 +68,22 @@ export default function FormatMatrix() {
                     <td className="pr-6 py-3 text-center">
                       <SupportCell s={row.encode} />
                     </td>
-                    <td className="py-3 text-sm text-(--color-muted)">
-                      {row.note ?? null}
-                    </td>
+                    <td className="py-3 text-sm text-(--color-muted)">{row.note ?? null}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
           <p className="mt-4 font-mono text-xs text-(--color-faint) tabular-nums">
-            {formatRows.length} formats total · {formatRows.filter(r => r.decode === 'yes' && r.encode === 'yes').length} bidirectional · {formatRows.filter(r => r.encode === 'no').length} decode-only
+            {formatRows.length} formats and raw pixel I/O ·{' '}
+            {formatRows.filter((r) => r.decode === 'yes' && r.encode === 'yes').length} bidirectional ·{' '}
+            {formatRows.filter((r) => r.encode === 'no').length} decode-only
+          </p>
+          <p className="mt-2 text-sm text-(--color-muted)">
+            <a className="underline" href="/docs#supported-formats">
+              Read the format and platform limitations
+            </a>{' '}
+            before choosing a pipeline.
           </p>
         </Reveal>
       </div>

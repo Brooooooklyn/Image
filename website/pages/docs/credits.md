@@ -7,17 +7,17 @@ description: 'The Rust crates and projects that @napi-rs/image is built on.'
 
 `@napi-rs/image` is a thin, ergonomic binding layer. Nearly all the real work — decoding, encoding, resampling, optimization — is done by these excellent Rust crates and the C/C++ libraries behind them. Please consider starring and supporting them.
 
-| Project | Role here |
-| ------- | --------- |
-| [image (image-rs)](https://github.com/image-rs/image) | Core decoding & encoding (PNG, JPEG, WebP, BMP, ICO, TIFF, PNM, TGA, Farbfeld) and the geometric/color transforms (`resize`, `crop`, `blur`, `grayscale`, …). |
-| [oxipng](https://github.com/shssoichiro/oxipng) | Lossless PNG optimization — `losslessCompressPng`. |
-| pngQuantize (built-in) | Lossy PNG palette quantization — `pngQuantize`. In-house MIT implementation (median-cut + k-means + Floyd-Steinberg). |
-| [mozjpeg (mozjpeg-sys)](https://github.com/mozilla/mozjpeg) | JPEG encoding and re-compression — `compressJpeg`. |
-| [libwebp (libwebp-sys)](https://chromium.googlesource.com/webm/libwebp) | WebP encode & decode — `webp`, `webpLossless`. |
-| [libavif](https://github.com/AOMediaCodec/libavif) + [aom](https://aomedia.googlesource.com/aom/) | AVIF encode & decode — `avif`. |
-| [resvg](https://github.com/RazrFalcon/resvg) | SVG rasterization — `Transformer.fromSvg`. |
-| [fast_image_resize](https://github.com/Cykooz/fast_image_resize) | SIMD-accelerated resizing — `fastResize`. |
-| [rexif](https://github.com/rafalh/rust-rexif) | EXIF metadata parsing — `metadata`, EXIF-aware `rotate`. |
+| Project                                                                                           | Role here                                                                                                                                                                                          |
+| ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [image (image-rs)](https://github.com/image-rs/image)                                             | Core decoding & encoding (PNG, JPEG, WebP, BMP, ICO, TIFF, PNM, TGA; see [format support](/docs#supported-formats)) and the geometric/color transforms (`resize`, `crop`, `blur`, `grayscale`, …). |
+| [oxipng](https://github.com/shssoichiro/oxipng)                                                   | Lossless PNG optimization — `losslessCompressPng`.                                                                                                                                                 |
+| pngQuantize (built-in)                                                                            | Lossy PNG palette quantization — `pngQuantize`. In-house MIT implementation (median-cut + k-means + Floyd-Steinberg).                                                                              |
+| [mozjpeg (mozjpeg-sys)](https://github.com/mozilla/mozjpeg)                                       | Lossless JPEG coefficient optimization — `compressJpeg` with default quality 100.                                                                                                                  |
+| [libwebp (libwebp-sys)](https://chromium.googlesource.com/webm/libwebp)                           | WebP encoding — `webp`, `webpLossless` (decoding uses image-rs).                                                                                                                                   |
+| [libavif](https://github.com/AOMediaCodec/libavif) + [aom](https://aomedia.googlesource.com/aom/) | AVIF encode & decode — `avif`.                                                                                                                                                                     |
+| [resvg](https://github.com/RazrFalcon/resvg)                                                      | SVG rasterization — `Transformer.fromSvg`.                                                                                                                                                         |
+| [fast_image_resize](https://github.com/Cykooz/fast_image_resize)                                  | SIMD-accelerated resizing — `fastResize`.                                                                                                                                                          |
+| [rexif](https://github.com/rafalh/rust-rexif)                                                     | EXIF metadata parsing — `metadata`, EXIF-aware `rotate`.                                                                                                                                           |
 
 ## napi-rs
 

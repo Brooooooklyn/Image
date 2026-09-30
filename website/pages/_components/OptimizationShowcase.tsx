@@ -19,7 +19,7 @@ export default function OptimizationShowcase() {
               See the <span className="text-(--color-accent)">bytes</span> disappear
             </>
           }
-          subhead="Drag to compare original and optimized — same image, a fraction of the size."
+          subhead="Compare these sample outputs. Sizes and visible differences depend on the source image and encoder settings."
         />
 
         {/* Featured row */}
@@ -59,17 +59,10 @@ export default function OptimizationShowcase() {
                 key={row.label}
                 className="rounded-xl border border-(--color-border) bg-(--color-surface-1) p-5 transition-colors hover:border-(--color-border-strong)"
               >
-                <BeforeAfter
-                  before={row.before}
-                  after={row.after}
-                  beforeLabel="original"
-                  afterLabel={row.label}
-                />
+                <BeforeAfter before={row.before} after={row.after} beforeLabel="original" afterLabel={row.label} />
                 <div className="mt-4 flex flex-wrap items-start justify-between gap-3">
                   <div className="flex min-w-0 flex-col items-start gap-2">
-                    <code className="block max-w-full truncate font-mono text-xs text-(--color-fg)">
-                      {row.label}
-                    </code>
+                    <code className="block max-w-full truncate font-mono text-xs text-(--color-fg)">{row.label}</code>
                     <Chip tone={row.kind === 'Lossless' ? 'accent' : 'muted'}>{row.kind}</Chip>
                   </div>
                   <div className="flex flex-col items-end gap-1 font-mono text-xs tabular-nums">

@@ -1,11 +1,11 @@
 ---
 title: 'API Reference'
-description: 'Every class, method, function and option in @napi-rs/image.'
+description: 'Core methods and options for @napi-rs/image, with complete TypeScript declarations.'
 ---
 
 # API Reference
 
-Everything is exported from the package root:
+This guide covers the main API in 1.15.0. The package ships complete [TypeScript declarations](https://github.com/Brooooooklyn/Image/blob/main/packages/binding/index.d.ts), including advanced quantization and compositing options. Everything is exported from the package root:
 
 ```ts
 import {
@@ -46,14 +46,14 @@ metadataSync(withExif?: boolean | null): Metadata
 
 `Metadata`:
 
-| Field         | Type                     | Notes                                         |
-| ------------- | ------------------------ | --------------------------------------------- |
-| `width`       | `number`                 |                                               |
-| `height`      | `number`                 |                                               |
-| `format`      | `string`                 | e.g. `'jpeg'`, `'png'`, `'webp'`, `'avif'`    |
-| `colorType`   | `JsColorType`            | see enum below                                |
-| `orientation` | `number?`                | EXIF orientation tag (1–8), if present        |
-| `exif`        | `Record<string,string>?` | only when `withExif` is `true`                |
+| Field         | Type                     | Notes                                      |
+| ------------- | ------------------------ | ------------------------------------------ |
+| `width`       | `number`                 |                                            |
+| `height`      | `number`                 |                                            |
+| `format`      | `string`                 | e.g. `'jpeg'`, `'png'`, `'webp'`, `'avif'` |
+| `colorType`   | `JsColorType`            | see enum below                             |
+| `orientation` | `number?`                | EXIF orientation tag (1–8), if present     |
+| `exif`        | `Record<string,string>?` | only when `withExif` is `true`             |
 
 ### Encoders
 
@@ -68,13 +68,16 @@ webpLosslessSync(): Buffer
 avif(options?: AvifConfig | null): Promise<Buffer>
 avifSync(options?: AvifConfig | null): Buffer
 
+heic(options?: HeicConfig | null): Promise<Buffer>     // macOS / Windows with an OS codec
+heicSync(options?: HeicConfig | null): Buffer
+
 png(options?: PngEncodeOptions | null): Promise<Buffer>
 pngSync(options?: PngEncodeOptions | null): Buffer
 
 jpeg(quality?: number | null): Promise<Buffer>         // default 90
 jpegSync(quality?: number | null): Buffer
 
-// also: bmp, ico, tiff, pnm, tga, farbfeld — each with a *Sync variant, no options
+// also: bmp, ico, tiff, pnm, tga — each with a *Sync variant, no options
 ```
 
 ```ts
@@ -83,26 +86,29 @@ rawPixels(): Promise<Buffer>
 rawPixelsSync(): Buffer
 ```
 
+The declared `farbfeld()` / `farbfeldSync()` methods reject in the published build because that codec is not enabled. See [format support](/docs#supported-formats) and [HEIC restrictions](/docs/formats#heic-and-heif).
+
 ### Transforms
 
-Every transform mutates the pipeline and returns `this`, so they chain. They are applied in call order, then the encoder runs.
+Transforms configure the pipeline and return `this`. Work is applied when reading pixels, metadata or encoded output. The pipeline has a defined transform order; chaining is not a general-purpose sequence of arbitrary operations. Use a fresh `Transformer` for independent outputs.
 
-| Method                                              | Effect                                                                                   |
-| --------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `rotate(orientation?: Orientation \| null)`         | Apply EXIF orientation. Passing an `Orientation` overrides the embedded EXIF value.      |
-| `resize(widthOrOptions, height?, filter?, fit?)`    | High-quality resize. See [`ResizeFilterType`](#resizefiltertype) / [`ResizeFit`](#resizefit). |
-| `fastResize(options: FastResizeOptions)`            | Faster SIMD resize with a different filter set ([`FastResizeFilter`](#fastresizefilter)). |
-| `crop(x, y, width, height)`                         | Cut out the bounding rectangle.                                                          |
-| `overlay(onTop: Uint8Array, x, y)`                  | Composite another encoded image at `(x, y)`.                                             |
-| `blur(sigma)`                                       | Gaussian blur; `sigma` controls the amount.                                              |
-| `unsharpen(sigma, threshold)`                       | Unsharp mask sharpening.                                                                 |
-| `filter3x3(kernel: number[])`                       | Convolve with a 3×3 kernel (9 values).                                                   |
-| `grayscale()`                                       | Convert to grayscale.                                                                    |
-| `invert()`                                          | Invert all colors.                                                                       |
-| `adjustContrast(contrast)`                          | + increases contrast, − decreases.                                                       |
-| `brighten(brightness)`                              | + brightens, − darkens.                                                                  |
-| `huerotate(hue)`                                    | Rotate hue by degrees (0/360 are no-ops), like CSS `hue-rotate()`.                       |
-| `opacity(factor)`                                   | Multiply the alpha channel by `factor` (0–1), like CSS `opacity`. Keeps the bit depth.   |
+| Method                                                     | Effect                                                                                        |
+| ---------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `rotate(orientation?: Orientation \| null)`                | Apply EXIF orientation. Passing an `Orientation` overrides the embedded EXIF value.           |
+| `resize(widthOrOptions, height?, filter?, fit?)`           | High-quality resize. See [`ResizeFilterType`](#resizefiltertype) / [`ResizeFit`](#resizefit). |
+| `fastResize(options: FastResizeOptions)`                   | Faster SIMD resize with a different filter set ([`FastResizeFilter`](#fastresizefilter)).     |
+| `crop(x, y, width, height)`                                | Cut out the bounding rectangle.                                                               |
+| `overlay(onTop: Uint8Array, x, y)`                         | Composite another encoded image at `(x, y)`.                                                  |
+| `composite(onTop: Uint8Array, options?: CompositeOptions)` | Place one overlay with blend, gravity, tiling and opacity options.                            |
+| `blur(sigma)`                                              | Gaussian blur; `sigma` controls the amount.                                                   |
+| `unsharpen(sigma, threshold)`                              | Unsharp mask sharpening.                                                                      |
+| `filter3x3(kernel: number[])`                              | Convolve with a 3×3 kernel (9 values).                                                        |
+| `grayscale()`                                              | Convert to grayscale.                                                                         |
+| `invert()`                                                 | Invert all colors.                                                                            |
+| `adjustContrast(contrast)`                                 | + increases contrast, − decreases.                                                            |
+| `brighten(brightness)`                                     | + brightens, − darkens.                                                                       |
+| `huerotate(hue)`                                           | Rotate hue by degrees (0/360 are no-ops), like CSS `hue-rotate()`.                            |
+| `opacity(factor)`                                          | Multiply the alpha channel by `factor` (0–1), like CSS `opacity`. Keeps the bit depth.        |
 
 `resize` signature:
 
@@ -117,7 +123,7 @@ resize(
 
 ## Standalone optimizers
 
-Compress encoded bytes and get smaller encoded bytes of the **same** format. Async variants take any `Uint8Array`; some sync variants are typed for `Buffer`.
+Optimize encoded bytes and return new bytes of the **same** format. Output size depends on the image and options. Async variants take any `Uint8Array`; some sync variants are typed for `Buffer`.
 
 ```ts
 losslessCompressPng(input: Uint8Array, options?: PNGLosslessOptions | null): Promise<Buffer>
@@ -134,56 +140,77 @@ compressJpegSync(input: Uint8Array, options?: JpegCompressOptions | null): Buffe
 
 ### `AvifConfig`
 
-| Field               | Type                | Default   | Notes                                            |
-| ------------------- | ------------------- | --------- | ------------------------------------------------ |
-| `quality`           | `number`            | —         | 0–100, 100 = lossless                            |
-| `alphaQuality`      | `number`            | —         | 0–100                                            |
-| `speed`             | `number`            | `4`       | 1 (slow, best) … 10 (fast, worst)                |
-| `threads`           | `number`            | core count| `0` = match CPU cores                            |
-| `chromaSubsampling` | `ChromaSubsampling` | `Yuv444`  | `Yuv420` (`'4:2:0'`) for much smaller files      |
+| Field               | Type                | Default   | Notes                                                                      |
+| ------------------- | ------------------- | --------- | -------------------------------------------------------------------------- |
+| `quality`           | `number`            | `80`      | 0–100; see the [color-conversion and precision limits](/docs/formats#avif) |
+| `alphaQuality`      | `number`            | `90`      | 0–100, independent of color quality                                        |
+| `speed`             | `number`            | `5`       | 1–10; higher favors speed over compression efficiency                      |
+| `threads`           | `number`            | CPU count | `0` asks the codec to select automatically                                 |
+| `chromaSubsampling` | `ChromaSubsampling` | `Yuv444`  | `Yuv420` reduces chroma resolution; compare output quality                 |
 
-### `JpegCompressOptions` (for `compressJpeg`)
+The implementation uses `speed: 5` in 1.15.0; older declaration comments say 4. Set the value explicitly when comparing outputs.
 
-| Field           | Type      | Default | Notes                                                |
-| --------------- | --------- | ------- | ---------------------------------------------------- |
+### `HeicConfig`
+
+| Field      | Type     | Default                               | Notes                                          |
+| ---------- | -------- | ------------------------------------- | ---------------------------------------------- |
+| `quality`  | `number` | `80`                                  | 0–100; macOS clamps 90–100 to the same ceiling |
+| `bitDepth` | `number` | Follows source on macOS; 8 on Windows | 8 or 10; Windows rejects 10                    |
+
+Requires macOS or Windows with the OS codec. See the [HEIC guide](/docs/formats#heic-and-heif) for alpha, color and precision restrictions.
+
+### `JpegCompressOptions`
+
+| Field           | Type      | Default | Notes                                                                                    |
+| --------------- | --------- | ------- | ---------------------------------------------------------------------------------------- |
 | `quality`       | `number`  | `100`   | 100 = lossless re-compress (note: differs from `Transformer.jpeg`, which defaults to 90) |
-| `optimizeScans` | `boolean` | `true`  | MozJPEG scan optimization → smaller progressive files |
+| `optimizeScans` | `boolean` | `true`  | MozJPEG scan optimization on the quality-100 path                                        |
 
-### `PngEncodeOptions` (for `Transformer.png`)
+### `PngEncodeOptions`
 
-| Field             | Type              | Default          |
-| ----------------- | ----------------- | ---------------- |
-| `compressionType` | `CompressionType` | `Default`        |
-| `filterType`      | `FilterType`      | `NoFilter`       |
+| Field             | Type              | Default    |
+| ----------------- | ----------------- | ---------- |
+| `compressionType` | `CompressionType` | `Default`  |
+| `filterType`      | `FilterType`      | `NoFilter` |
 
-### `PNGLosslessOptions` (for `losslessCompressPng`)
+### `PNGLosslessOptions`
 
-| Field                 | Type               | Default | Notes                                          |
-| --------------------- | ------------------ | ------- | ---------------------------------------------- |
-| `fixErrors`           | `boolean`          | `false` | Try to repair a malformed input instead of erroring |
-| `force`               | `boolean`          | `false` | Write output even with no size improvement     |
-| `filter`              | `PngRowFilter[]`   | —       | Which row filters to try                       |
-| `bitDepthReduction`   | `boolean`          | `true`  |                                                |
-| `colorTypeReduction`  | `boolean`          | `true`  |                                                |
-| `paletteReduction`    | `boolean`          | `true`  |                                                |
-| `grayscaleReduction`  | `boolean`          | `true`  |                                                |
-| `idatRecoding`        | `boolean`          | `true`  | Forced on if any reduction runs                |
-| `strip`               | `boolean`          | `false` | Remove all non-critical chunks                 |
+| Field                | Type             | Default | Notes                                               |
+| -------------------- | ---------------- | ------- | --------------------------------------------------- |
+| `fixErrors`          | `boolean`        | `false` | Try to repair a malformed input instead of erroring |
+| `force`              | `boolean`        | `false` | Write output even with no size improvement          |
+| `filter`             | `PngRowFilter[]` | —       | Which row filters to try                            |
+| `bitDepthReduction`  | `boolean`        | `true`  |                                                     |
+| `colorTypeReduction` | `boolean`        | `true`  |                                                     |
+| `paletteReduction`   | `boolean`        | `true`  |                                                     |
+| `grayscaleReduction` | `boolean`        | `true`  |                                                     |
+| `idatRecoding`       | `boolean`        | `true`  | Forced on if any reduction runs                     |
+| `strip`              | `boolean`        | `false` | Remove all non-critical chunks                      |
 
-### `PngQuantOptions` (for `pngQuantize`)
+### `PngQuantOptions`
 
-| Field           | Type     | Default | Notes                                          |
-| --------------- | -------- | ------- | ---------------------------------------------- |
-| `minQuality`    | `number` | `70`    | 0–100                                          |
-| `maxQuality`    | `number` | `99`    | 0–100                                          |
-| `speed`         | `number` | `5`     | 1–10, higher = faster but lower quality        |
+| Field           | Type     | Default | Notes                                           |
+| --------------- | -------- | ------- | ----------------------------------------------- |
+| `minQuality`    | `number` | `70`    | 0–100                                           |
+| `maxQuality`    | `number` | `99`    | 0–100                                           |
+| `speed`         | `number` | `5`     | 1–10, higher = faster but lower quality         |
 | `posterization` | `number` | —       | Least-significant bits to drop (retro palettes) |
 
 ### `ResizeOptions` / `FastResizeOptions`
 
 ```ts
-interface ResizeOptions     { width: number; height?: number; filter?: ResizeFilterType; fit?: ResizeFit }
-interface FastResizeOptions { width: number; height?: number; filter?: FastResizeFilter; fit?: ResizeFit }
+interface ResizeOptions {
+  width: number
+  height?: number
+  filter?: ResizeFilterType
+  fit?: ResizeFit
+}
+interface FastResizeOptions {
+  width: number
+  height?: number
+  filter?: FastResizeFilter
+  fit?: ResizeFit
+}
 ```
 
 ## Enums
@@ -194,7 +221,7 @@ interface FastResizeOptions { width: number; height?: number; filter?: FastResiz
 
 ### `ResizeFilterType`
 
-`Nearest` (0) · `Triangle` (1) · `CatmullRom` (2) · `Gaussian` (3) · `Lanczos3` (4, highest quality).
+`Nearest` (0) · `Triangle` (1) · `CatmullRom` (2) · `Gaussian` (3) · `Lanczos3` (4).
 
 ### `FastResizeFilter`
 
@@ -212,11 +239,11 @@ EXIF orientation values 1–8: `Horizontal` (1) · `MirrorHorizontal` (2) · `Ro
 
 `Default` (0) · `Fast` (1) · `Best` (2).
 
-### `FilterType` (PNG encode)
+### `FilterType`
 
 `NoFilter` (0) · `Sub` (1) · `Up` (2) · `Avg` (3) · `Paeth` (4) · `Adaptive` (5).
 
-### `PngRowFilter` (oxipng)
+### `PngRowFilter`
 
 `None` (0) · `Sub` (1) · `Up` (2) · `Average` (3) · `Paeth` (4).
 

@@ -9,11 +9,10 @@ export default function CtaBand() {
         <Reveal>
           <p className="eyebrow">PLAYGROUND</p>
           <h2 className="font-display text-display-lg mt-4 text-(--color-fg)">
-            Try it in your{' '}
-            <span className="text-(--color-accent)">browser</span>
+            Try it in your <span className="text-(--color-accent)">browser</span>
           </h2>
           <p className="mt-5 text-base text-(--color-muted) max-w-md mx-auto">
-            The WASM build runs entirely client-side — no install, no upload.
+            Try the WASM build in a supported browser — images stay on your device.
           </p>
           <div className="mt-10 flex flex-wrap items-center justify-center gap-4">
             <Button variant="primary" href="/playground">

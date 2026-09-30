@@ -1,5 +1,10 @@
-export const heroSample = `import { Transformer, ChromaSubsampling } from '@napi-rs/image'
+export const heroSample = `import { readFile, writeFile } from 'node:fs/promises'
+import {
+  Transformer,
+  ChromaSubsampling,
+} from '@napi-rs/image'
 
+const input = await readFile('./input.jpg')
 const webp = await new Transformer(input)
   .rotate()
   .resize(225)
@@ -11,7 +16,10 @@ const avif = await new Transformer(input)
   .avif({
     quality: 70,
     chromaSubsampling: ChromaSubsampling.Yuv420,
-  })`
+  })
+
+await writeFile('./output.webp', webp)
+await writeFile('./output.avif', avif)`
 
 export const fullSample = `import { readFileSync, writeFileSync } from 'node:fs'
 import {
