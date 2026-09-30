@@ -7,4 +7,5 @@ export const benchThreadpool: Bench[] = [
   { suite: 'WebP', napi: 431, sharp: 238 },
   { suite: 'AVIF', napi: 36, sharp: 32 },
 ]
-export const benchCaption = 'Apple M1 Max · macOS 12.3.1 · node bench/bench.mjs. Pipeline: rotate → resize(225) → encode.'
+export const benchCaption =
+  'Historical single-JPEG results · Apple M1 Max · macOS 12.3.1. Pipeline: EXIF rotate → resize(225) → WebP or AVIF. Node.js and package versions were not recorded.'

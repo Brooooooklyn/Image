@@ -2,7 +2,7 @@ import manifest from '../../public/showcase-manifest.json'
 
 export type ShowcaseRow = {
   label: string
-  kind: 'Lossless' | 'Lossy'
+  kind: 'Lossless' | 'Lossy' | 'Quality 100'
   before: string
   after: string
   beforeBytes: number
@@ -11,15 +11,24 @@ export type ShowcaseRow = {
 
 const m = manifest as Record<string, number>
 const row = (label: string, kind: ShowcaseRow['kind'], before: string, after: string): ShowcaseRow => ({
-  label, kind, before: `/${before}`, after: `/${after}`,
-  beforeBytes: m[before], afterBytes: m[after],
+  label,
+  kind,
+  before: `/${before}`,
+  after: `/${after}`,
+  beforeBytes: m[before],
+  afterBytes: m[after],
 })
 
 export const showcaseRows: ShowcaseRow[] = [
   row('new Transformer(PNG).webp(75)', 'Lossy', 'img/un-optimized.png', 'img/optimized-lossy-png.webp'),
   row('new Transformer(PNG).avif({ quality: 75 })', 'Lossy', 'img/un-optimized.png', 'img/optimized-lossy-png.avif'),
   row('pngQuantize({ maxQuality: 75 })', 'Lossy', 'img/un-optimized.png', 'img/optimized-lossy.png'),
-  row('new Transformer(PNG).avif({ quality: 100 })', 'Lossless', 'img/un-optimized.png', 'img/optimized-lossless-png.avif'),
+  row(
+    'new Transformer(PNG).avif({ quality: 100 })',
+    'Quality 100',
+    'img/un-optimized.png',
+    'img/optimized-lossless-png.avif',
+  ),
   row('new Transformer(PNG).webpLossless()', 'Lossless', 'img/un-optimized.png', 'img/optimized-lossless.webp'),
   row('losslessCompressPng()', 'Lossless', 'img/un-optimized.png', 'img/optimized-lossless.png'),
   row('compressJpeg(JPEG, { quality: 75 })', 'Lossy', 'img/un-optimized.jpg', 'img/optimized-lossy.jpg'),

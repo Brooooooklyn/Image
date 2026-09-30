@@ -74,7 +74,7 @@
   <text x="64" y="190" fill="#F4F1EC" font-family="'Space Grotesk', Inter, Arial, sans-serif" font-size="58" font-weight="600" letter-spacing="-1.6">Image processing</text>
   <text x="64" y="250" fill="#F4F1EC" font-family="'Space Grotesk', Inter, Arial, sans-serif" font-size="58" font-weight="600" letter-spacing="-1.6">for Node.js</text>
   <text x="64" y="310" fill="url(#accentWarmH)" font-family="'Space Grotesk', Inter, Arial, sans-serif" font-size="58" font-weight="600" letter-spacing="-1.6">&amp; the browser</text>
-  <text x="66" y="360" fill="#A8A298" font-family="Inter, Arial, sans-serif" font-size="23" font-weight="430" letter-spacing="-0.2">One Rust pipeline · WebAssembly · no install</text>
+  <text x="66" y="360" fill="#A8A298" font-family="Inter, Arial, sans-serif" font-size="23" font-weight="430" letter-spacing="-0.2">Rust-powered · Native addons · WebAssembly</text>
 
   <!-- format chips -->
   <g transform="translate(64 398)" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="15" font-weight="600">
@@ -107,7 +107,7 @@
     <path d="M209 24L227 24M221 18L228 24L221 30" fill="none" stroke="#1a1208" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
   </g>
 
-  <text x="66" y="566" fill="#8c867c" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="13" font-weight="600" letter-spacing="1.9">ONE PIPELINE · ANY RUNTIME</text>
+  <text x="66" y="566" fill="#8c867c" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="13" font-weight="600" letter-spacing="1.9">NODE.JS · BROWSER WORKERS</text>
 
   <!-- flow panel -->
   <g filter="url(#shadow)">
@@ -182,5 +182,5 @@
   <!-- subtle panel footer -->
   <line x1="690" y1="464" x2="1108" y2="464" stroke="#FFFAF5" stroke-opacity="0.08"/>
   <circle cx="704" cy="490" r="4" fill="#6FEFC0"/>
-  <text x="717" y="495" fill="#A8A298" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="500">Native speed, WebAssembly portable</text>
+  <text x="717" y="495" fill="#A8A298" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="500">Native addons and browser WebAssembly</text>
 </svg>

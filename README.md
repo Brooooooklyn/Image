@@ -1,212 +1,143 @@
-# `Image`
+# `@napi-rs/image`
 
-Image processing library.
+Rust-powered image processing for Node.js: resize, convert and optimize JPEG, PNG, WebP, AVIF and more. Prebuilt native addons handle server and build-script workloads; a WebAssembly build powers browser applications with a Worker and cross-origin isolation.
 
-This library support encode/decode these formats:
+**[Documentation](https://image.napi.rs/docs)** · **[Browser playground](https://image.napi.rs/playground)** · **[API reference](https://image.napi.rs/docs/api)** · **[Releases](https://github.com/Brooooooklyn/Image/releases)**
 
-| Format    | Input                                     | Output                                  |
-| --------- | ----------------------------------------- | --------------------------------------- |
-| RawPixels | RGBA 8 bits pixels                        |                                         |
-| JPEG      | Baseline and progressive                  | Baseline JPEG                           |
-| PNG       | All supported color types                 | Same as decoding                        |
-| BMP       | ✅                                        | Rgb8, Rgba8, Gray8, GrayA8              |
-| ICO       | ✅                                        | ✅                                      |
-| TIFF      | Baseline(no fax support) + LZW + PackBits | Rgb8, Rgba8, Gray8                      |
-| WebP      | No                                        | ✅                                      |
-| AVIF      | No                                        | ✅                                      |
-| HEIC      | ✅ (macOS & Windows)                      | ✅ (macOS & Windows)                    |
-| PNM       | PBM, PGM, PPM, standard PAM               | ✅                                      |
-| DDS       | DXT1, DXT3, DXT5                          | No                                      |
-| TGA       | ✅                                        | Rgb8, Rgba8, Bgr8, Bgra8, Gray8, GrayA8 |
-| OpenEXR   | Rgb32F, Rgba32F (no dwa compression)      | Rgb32F, Rgba32F (no dwa compression)    |
-| farbfeld  | ✅                                        | ✅                                      |
-| SVG       | ✅                                        |                                         |
+[![npm version](https://img.shields.io/npm/v/@napi-rs/image)](https://www.npmjs.com/package/@napi-rs/image)
+[![Downloads](https://img.shields.io/npm/dm/@napi-rs/image.svg)](https://www.npmjs.com/package/@napi-rs/image)
+[![CI](https://github.com/Brooooooklyn/Image/actions/workflows/CI.yml/badge.svg)](https://github.com/Brooooooklyn/Image/actions/workflows/CI.yml)
 
-See [index.d.ts](./packages/binding/index.d.ts) for API reference.
+## Install and run
 
-![CI](https://github.com/Brooooooklyn/image/workflows/CI/badge.svg)
+```sh
+npm install @napi-rs/image
+```
 
-## HEIC support (macOS & Windows)
-
-HEIC decode **and** encode work on **macOS and Windows**. Both delegate to the operating system's
-HEVC codec — **ImageIO** on macOS, the **Windows Imaging Component (WIC)** on Windows — which holds
-the HEVC patent license. This means the package **ships no HEVC/HEIC codec** and incurs no codec
-licensing. On other platforms, HEIC decode and `.heic()` / `.heicSync()` reject with a clear error.
-
-> **Windows codec:** WIC's HEVC support comes from the OS _HEVC Video Extensions_ / _HEIF Image
-> Extension_ Store packages. They are absent on stock Windows Server / CI runners; on such a host
-> HEIC decode and encode reject with a clear "codec not installed" error.
-
-- **Decode:** reads `.heic` / `.heif` (HEVC-in-HEIF, e.g. iPhone photos). Image orientation (HEIF's
-  container `irot`/`imir` transform) is honored — macOS returns it as a tag the pipeline applies, while
-  Windows WIC bakes it into the decoded pixels. Wide-gamut input is color-matched to **sRGB** (v1
-  normalizes everything to sRGB and carries no ICC profile).
-  - macOS: 8-bit sources decode to RGBA8; 10-bit sources decode to RGBA16 (precision preserved).
-  - Windows: WIC normalizes all HEIF to 8-bit, so decode always yields RGBA8 (including 10-bit input).
-- **Encode:** `new Transformer(input).heic({ quality, bitDepth })` / `.heicSync(...)`. `quality` is
-  `0-100` (default `80`).
-  - macOS (ImageIO): no truly-lossless mode; compression is clamped to `0.9`, so `quality` `90`–`100`
-    all map to that ceiling (a ~1-3/255 residual, visually indistinguishable from `1.0`). `bitDepth`
-    is `8`/`10` (default follows the source — 16-bit images write 10-bit HEVC Main10).
-  - Windows (WIC): `quality` maps linearly to `0.0`–`1.0` with **no clamp** (`100` encodes fine). The
-    WIC HEVC encoder emits **8-bit only** and **opaque only** — alpha is flattened, and `bitDepth: 10`
-    is **rejected** with a clear error rather than silently downgraded.
-- **Out of scope (v1):** Apple/ISO HDR **gain-map** reconstruction. The base image is decoded at full
-  bit depth, but the auxiliary gain map (the iPhone "HDR look") is not composited.
+Use a current Node.js LTS release. Save this as `transform.mjs`, put a JPEG at `input.jpg`, and run `node transform.mjs`:
 
 ```js
-import { Transformer } from '@napi-rs/image'
+import { readFile, writeFile } from 'node:fs/promises'
+import { Transformer, ResizeFilterType } from '@napi-rs/image'
 
-// decode HEIC -> JPEG (macOS & Windows)
-const jpeg = await new Transformer(heicBuffer).jpeg(80)
+const input = await readFile('./input.jpg')
+const output = await new Transformer(input)
+  .rotate() // apply EXIF orientation
+  .resize(800, null, ResizeFilterType.Lanczos3)
+  .webp(80)
 
-// encode -> HEIC (macOS & Windows)
-const heic = await new Transformer(pngBuffer).heic({ quality: 80 })
+await writeFile('./output.webp', output)
 ```
+
+`Transformer` accepts encoded bytes, chains transforms, and returns a `Buffer` from an encoder. Read and write files with Node.js APIs. Async encoders run on a background thread pool; `*Sync` variants block the calling thread.
+
+## Optimize without changing formats
+
+Use the standalone optimizers for PNG or JPEG input. They return new bytes; they do not modify your source file. Output size depends on the image and settings.
+
+```js
+import { readFile, writeFile } from 'node:fs/promises'
+import { compressJpeg, losslessCompressPng, pngQuantize } from '@napi-rs/image'
+
+const png = await readFile('./input.png')
+const jpeg = await readFile('./input.jpg')
+
+await writeFile('./optimized.png', await losslessCompressPng(png))
+await writeFile('./palette.png', await pngQuantize(png, { maxQuality: 75 })) // lossy
+await writeFile('./optimized.jpg', await compressJpeg(jpeg)) // lossless coefficient optimization
+await writeFile('./smaller.jpg', await compressJpeg(jpeg, { quality: 75 })) // lossy re-encode
+```
+
+For SVG rasterization, AVIF settings, compositing and batch processing, see the [recipes](https://image.napi.rs/docs/recipes), [format guides](https://image.napi.rs/docs/formats) and [repository example](https://github.com/Brooooooklyn/Image/blob/main/example.mjs). Complete TypeScript signatures ship with the package in [index.d.ts](https://github.com/Brooooooklyn/Image/blob/main/packages/binding/index.d.ts).
+
+## Format support
+
+The following describes the published 1.15.0 API. It processes still images; it does not expose an animation pipeline. Color-type support varies by encoder.
+
+| Format         | Input                          | Output          | Notes                                                               |
+| -------------- | ------------------------------ | --------------- | ------------------------------------------------------------------- |
+| JPEG           | Yes                            | Yes             | Baseline/progressive input; baseline output                         |
+| PNG            | Yes                            | Yes             | Includes alpha and 16-bit input                                     |
+| WebP           | Yes                            | Yes             | Lossy or lossless output                                            |
+| AVIF           | Yes                            | Yes             | Decoded to 8-bit pixels                                             |
+| HEIC / HEIF    | macOS / Windows                | macOS / Windows | HEVC-in-HEIF; requires an OS codec                                  |
+| TIFF           | Yes                            | Yes             | Baseline, LZW and PackBits input; no fax support                    |
+| BMP            | Yes                            | Yes             |                                                                     |
+| ICO            | Yes                            | Yes             |                                                                     |
+| PNM            | Yes                            | Yes             | PBM, PGM, PPM and PAM input                                         |
+| TGA            | No                             | Yes             | Input cannot be auto-detected by `Transformer`                      |
+| DDS            | Yes                            | No              | DXT1, DXT3 and DXT5 input                                           |
+| HDR (Radiance) | Yes                            | No              |                                                                     |
+| SVG            | `Transformer.fromSvg()`        | No              | Rasterized before further transforms                                |
+| Raw pixels     | `Transformer.fromRgbaPixels()` | `rawPixels()`   | Input: RGBA8; output: native-endian bytes in the image's color type |
+
+GIF, OpenEXR and farbfeld codecs are not enabled in the published build. Although `farbfeld()` / `farbfeldSync()` appear in the API, they currently reject with an unsupported-format error.
+
+## Platforms
+
+Prebuilt native packages are published for:
+
+| Platform     | Architectures                 |
+| ------------ | ----------------------------- |
+| macOS        | x64, arm64                    |
+| Windows      | x64, arm64, ia32 (MSVC)       |
+| Linux, glibc | x64, arm64, armv7 (gnueabihf) |
+| Linux, musl  | x64, arm64                    |
+| Android      | arm64                         |
+| FreeBSD      | x64                           |
+
+Keep npm optional dependencies enabled so the matching native package can be installed. Browser applications need the separate `@napi-rs/image-wasm32-wasi` package and the setup below; installing the native package alone does not make every runtime supported.
+
+### HEIC on macOS and Windows
+
+HEIC decoding and encoding use ImageIO on macOS and Windows Imaging Component (WIC) on Windows. The package does not bundle a HEVC codec. HEIC is unavailable on Linux, Android, FreeBSD and in the browser/WASM build.
+
+- **Windows:** the HEIF Image Extensions and HEVC Video Extensions must be available to WIC. Do not assume they are installed on Windows Server or CI hosts; operations fail when the codec is missing. Decoding produces RGBA8, including for 10-bit sources. Encoding produces opaque 8-bit images; alpha is flattened and `bitDepth: 10` is rejected.
+- **macOS:** 8-bit sources decode to RGBA8 and 10-bit sources to RGBA16. Encoding supports 8 or 10 bits; by default, 16-bit input selects 10-bit output. Quality 90–100 shares the same encoder ceiling; HEIC encoding has no lossless mode.
+- HEIC input is normalized to sRGB without preserving an ICC profile. HDR gain maps are not reconstructed. Use `.rotate()` to apply orientation tags where the OS decoder has not already applied them.
+
+```js
+// macOS or Windows with the required codec; input is encoded image bytes.
+const jpeg = await new Transformer(heicBytes).rotate().jpeg(80)
+const heic = await new Transformer(pngBytes).heic({ quality: 80 })
+```
+
+### Browser WebAssembly
+
+The [playground](https://image.napi.rs/playground) processes images locally in a dedicated Worker. Its setup requires:
+
+- `@napi-rs/image-wasm32-wasi`, module Workers and a bundler that emits the nested WASI worker and `.wasm` asset.
+- A `Buffer` polyfill initialized before importing the WASM module, and async image methods so the worker can service thread requests.
+- A secure context (HTTPS or localhost), `SharedArrayBuffer`, and cross-origin isolation: `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` on the document, with compatible policies on workers and assets.
+
+Follow the [browser setup guide](https://image.napi.rs/docs#browser-webassembly) and the working [Vite configuration](https://github.com/Brooooooklyn/Image/blob/main/website/vite.config.ts), [Worker](https://github.com/Brooooooklyn/Image/blob/main/website/pages/playground/worker.ts) and [response headers](https://github.com/Brooooooklyn/Image/blob/main/website/void.json). HEIC is not available in WASM.
 
 ## Performance
 
-System info
+These are historical results already recorded in this repository, not a new benchmark of 1.15.0. The [benchmark script](https://github.com/Brooooooklyn/Image/blob/main/bench/bench.mjs) uses one EXIF JPEG (`with-exif.jpg`), applies orientation, resizes to width 225, and encodes WebP (quality 75) or AVIF (quality 70, 4:2:0). Work is submitted concurrently up to the CPU count.
 
-```
-OS: macOS 12.3.1 21E258 arm64
-Host: MacBookPro18,2
-Kernel: 21.4.0
-Shell: zsh 5.8
-CPU: Apple M1 Max
-GPU: Apple M1 Max
-Memory: 9539MiB / 65536MiB
-```
+Recorded hardware: **Apple M1 Max**, macOS **12.3.1**, arm64. Node.js and package versions were not recorded with the results.
 
-```
+| Thread pool             | Output | `@napi-rs/image` |   `sharp` |
+| ----------------------- | ------ | ---------------: | --------: |
+| Default                 | WebP   |        202 ops/s | 169 ops/s |
+| Default                 | AVIF   |         26 ops/s |  24 ops/s |
+| `UV_THREADPOOL_SIZE=10` | WebP   |        431 ops/s | 238 ops/s |
+| `UV_THREADPOOL_SIZE=10` | AVIF   |         36 ops/s |  32 ops/s |
+
+The 1.8× ratio applies only to the recorded WebP pipeline with a thread pool of 10. Equal numeric quality settings do not establish equal visual quality across encoders. Measure your own images, output sizes, quality targets and deployment hardware before choosing a library or concurrency setting.
+
+To repeat the workload from a development checkout with dependencies and a native binding installed:
+
+```sh
 node bench/bench.mjs
-
-@napi-rs/image 202 ops/s
-sharp 169 ops/s
-In webp suite, fastest is @napi-rs/image
-@napi-rs/image 26 ops/s
-sharp 24 ops/s
-In avif suite, fastest is @napi-rs/image
-```
-
-```
 UV_THREADPOOL_SIZE=10 node bench/bench.mjs
-
-@napi-rs/image 431 ops/s
-sharp 238 ops/s
-In webp suite, fastest is @napi-rs/image
-@napi-rs/image 36 ops/s
-sharp 32 ops/s
-In avif suite, fastest is @napi-rs/image
 ```
 
-## `@napi-rs/image`
+## Moving from sharp
 
-See [Full documentation for `@napi-rs/image`](./packages/binding/README.md)
+Both libraries can express a resize-and-encode pipeline, but their APIs and defaults differ. In `@napi-rs/image`, `new Transformer(bytes)` takes the input, `.webp(80)` returns the output directly, and `.rotate()` applies EXIF orientation. There is no trailing `.toBuffer()` call. See the [migration recipe](https://image.napi.rs/docs/recipes#moving-a-thumbnail-pipeline-from-sharp) for a small example and behavior differences to check.
 
-### Example
+## License and credits
 
-You can clone this repo and run the following command to taste the example below:
-
-- `yarn install`
-- `node example.mjs`
-
-| Optimization                                                                                            | Raw                                          | Raw Size | Optimized Size |
-| ------------------------------------------------------------------------------------------------------- | -------------------------------------------- | -------- | -------------- |
-| `losslessCompressPng()` <br/>**Lossless**                                                               | <img src="./un-optimized.png" width="400" /> | `1.2M`   | `876K`         |
-| `pngQuantize({ maxQuality: 75 })` <br/>**Lossy**                                                        | <img src="./un-optimized.png" width="400" /> | `1.2M`   | `244K`         |
-| `compressJpeg()` <br/>**Lossless**                                                                      | <img src="./un-optimized.jpg" width="400" /> | `192K`   | `184K`         |
-| `compressJpeg(75)` <br/>**Lossy**                                                                       | <img src="./un-optimized.jpg" width="400" /> | `192K`   | `104K`         |
-| `new Transformer(PNG).webpLossless()`<br/>**Lossless**                                                  | <img src="./un-optimized.png" width="400" /> | `1.2M`   | `676K`         |
-| `new Transformer(PNG).webp(75)`<br/>**Lossy**                                                           | <img src="./un-optimized.png" width="400" /> | `1.2M`   | `84K`          |
-| `Transformer(PNG).avif({ quality: 100 })`<br/>**Lossless**                                              | <img src="./un-optimized.png" width="400" /> | `1.2M`   | `584K`         |
-| `new Transformer(PNG).avif({ quality: 75, chromaSubsampling: ChromaSubsampling.Yuv420 })`<br/>**Lossy** | <img src="./un-optimized.png" width="400" /> | `1.2M`   | `112K`         |
-
-```js
-import { readFileSync, writeFileSync } from 'fs'
-
-import {
-  losslessCompressPng,
-  compressJpeg,
-  pngQuantize,
-  Transformer,
-  ResizeFilterType,
-  ChromaSubsampling,
-  BlendMode,
-  Gravity,
-} from '@napi-rs/image'
-import chalk from 'chalk'
-
-const PNG = readFileSync('./un-optimized.png')
-const JPEG = readFileSync('./un-optimized.jpg')
-// https://github.com/ianare/exif-samples/blob/master/jpg/orientation/portrait_5.jpg
-const WITH_EXIF = readFileSync('./with-exif.jpg')
-const SVG = readFileSync('./input-debian.svg')
-
-writeFileSync('optimized-lossless.png', await losslessCompressPng(PNG))
-
-console.info(chalk.green('Lossless compression png done'))
-
-writeFileSync(
-  'optimized-lossy.png',
-  await pngQuantize(PNG, {
-    maxQuality: 75,
-  }),
-)
-
-console.info(chalk.green('Lossy compression png done'))
-
-writeFileSync('optimized-lossless.jpg', await compressJpeg(readFileSync('./un-optimized.jpg')))
-
-console.info(chalk.green('Lossless compression jpeg done'))
-
-writeFileSync('optimized-lossy.jpg', await compressJpeg(readFileSync('./un-optimized.jpg'), { quality: 75 }))
-
-console.info(chalk.green('Lossy compression jpeg done'))
-
-writeFileSync('optimized-lossless.webp', await new Transformer(PNG).webpLossless())
-
-console.info(chalk.green('Lossless encoding webp from PNG done'))
-
-writeFileSync('optimized-lossy-png.webp', await new Transformer(PNG).webp(75))
-
-console.info(chalk.green('Encoding webp from PNG done'))
-
-writeFileSync('optimized-lossless-png.avif', await new Transformer(PNG).avif({ quality: 100 }))
-
-console.info(chalk.green('Lossless encoding avif from PNG done'))
-
-writeFileSync(
-  'optimized-lossy-png.avif',
-  await new Transformer(PNG).avif({ quality: 75, chromaSubsampling: ChromaSubsampling.Yuv420 }),
-)
-
-console.info(chalk.green('Lossy encoding avif from PNG done'))
-
-writeFileSync(
-  'output-exif.webp',
-  await new Transformer(WITH_EXIF)
-    .rotate()
-    .resize(450 / 2, null, ResizeFilterType.Lanczos3)
-    .webp(75),
-)
-
-console.info(chalk.green('Encoding webp from JPEG with EXIF done'))
-
-writeFileSync('output-overlay-png.png', await new Transformer(PNG).overlay(PNG, 200, 200).png())
-
-console.info(chalk.green('Overlay an image done'))
-
-writeFileSync(
-  'output-composite-png.png',
-  await new Transformer(PNG).composite(PNG, { gravity: Gravity.SouthEast, blend: BlendMode.Multiply }).png(),
-)
-
-console.info(chalk.green('Composite an image done'))
-
-writeFileSync('output-debian.jpeg', await Transformer.fromSvg(SVG, 'rgba(238, 235, 230, .9)').jpeg())
-
-console.info(chalk.green('Encoding jpeg from SVG done'))
-```
-
-`composite()` uses W3C/CSS blend semantics (the same model as CSS `mix-blend-mode`, SVG, and Canvas) and matches sharp for opaque inputs and the default `Over` mode, differing only for translucent inputs combined with a separable blend mode (Multiply, Screen, HardLight, etc.).
+MIT. See [LICENSE](https://github.com/Brooooooklyn/Image/blob/main/LICENSE) and [codec credits](https://image.napi.rs/docs/credits).

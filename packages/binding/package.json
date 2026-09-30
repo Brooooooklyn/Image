@@ -4,7 +4,7 @@
   "main": "index.js",
   "browser": "browser.js",
   "types": "index.d.ts",
-  "description": "Image processing library",
+  "description": "Rust-powered image resizing, conversion and PNG/JPEG optimization for Node.js and WebAssembly",
   "author": {
     "email": "github@lyn.one",
     "name": "LongYinan",
@@ -12,12 +12,19 @@
   },
   "keywords": [
     "image",
-    "lossless",
+    "image-processing",
+    "resize",
     "compression",
+    "lossless",
     "jpeg",
     "jpg",
     "png",
-    "svg"
+    "webp",
+    "avif",
+    "heic",
+    "svg",
+    "node-api",
+    "wasm"
   ],
   "files": [
     "index.js",
@@ -77,5 +84,6 @@
     "@napi-rs/cli": "3.10.5",
     "@napi-rs/wasm-runtime": "1.2.4",
     "emnapi": "2.0.0-alpha.5"
-  }
+  },
+  "homepage": "https://image.napi.rs"
 }

@@ -23,7 +23,13 @@ type BarTarget = { width: string; key: string }
 
 // Client sub-component: bars render at full target width for SSR / no-JS,
 // then grow from 0 once scrolled into view (unless reduced-motion).
-function BarTrack({ targets, children }: { targets: BarTarget[]; children: (widths: Record<string, string>) => ReactNode }) {
+function BarTrack({
+  targets,
+  children,
+}: {
+  targets: BarTarget[]
+  children: (widths: Record<string, string>) => ReactNode
+}) {
   const finalWidths = Object.fromEntries(targets.map((t) => [t.key, t.width]))
   const [widths, setWidths] = useState<Record<string, string>>(finalWidths)
   const ref = useRef<HTMLDivElement>(null)
@@ -72,9 +78,7 @@ function Bar({
     <div className="space-y-2.5">
       <div className="flex items-baseline justify-between">
         <span className="font-mono text-xs uppercase tracking-wider text-(--color-faint)">{suite}</span>
-        <span className="font-mono text-xs tabular-nums text-(--color-accent)">
-          {(napi / sharp).toFixed(2)}× sharp
-        </span>
+        <span className="font-mono text-xs tabular-nums text-(--color-accent)">{(napi / sharp).toFixed(2)}× sharp</span>
       </div>
 
       <div className="flex items-center gap-3">
@@ -85,7 +89,9 @@ function Bar({
             style={{ width: widths[`${suite}-napi`] }}
           />
         </div>
-        <span className="w-20 shrink-0 text-right font-mono text-xs tabular-nums text-(--color-accent)">{napi} ops/s</span>
+        <span className="w-20 shrink-0 text-right font-mono text-xs tabular-nums text-(--color-accent)">
+          {napi} ops/s
+        </span>
       </div>
 
       <div className="flex items-center gap-3">
@@ -96,7 +102,9 @@ function Bar({
             style={{ width: widths[`${suite}-sharp`] }}
           />
         </div>
-        <span className="w-20 shrink-0 text-right font-mono text-xs tabular-nums text-(--color-muted)">{sharp} ops/s</span>
+        <span className="w-20 shrink-0 text-right font-mono text-xs tabular-nums text-(--color-muted)">
+          {sharp} ops/s
+        </span>
       </div>
     </div>
   )
@@ -112,7 +120,7 @@ function BenchColumn({ label, accent, rows }: { label: string; accent?: boolean;
     <div className="rounded-xl border border-(--color-border) bg-(--color-surface-1) p-6 transition-colors hover:border-(--color-border-strong) md:p-7">
       <div className="mb-6 flex items-center justify-between">
         <span className="font-mono text-xs uppercase tracking-wider text-(--color-muted)">{label}</span>
-        {accent ? <Chip tone="accent">fastest</Chip> : <Chip tone="muted">baseline</Chip>}
+        {accent ? <Chip tone="accent">10 threads</Chip> : <Chip tone="muted">baseline</Chip>}
       </div>
       <BarTrack targets={targets}>
         {(widths) => (
@@ -136,7 +144,7 @@ export default function Benchmarks() {
           label="BENCHMARK"
           title={
             <>
-              Faster than <span className="text-(--color-accent)">sharp</span>
+              A measured <span className="text-(--color-accent)">workload</span>
             </>
           }
           subhead={benchCaption}
@@ -146,14 +154,13 @@ export default function Benchmarks() {
           <div className="grid gap-10 lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)] lg:items-center lg:gap-12">
             <div className="relative">
               <div className="accent-glow" aria-hidden />
-              <p className="eyebrow">peak speedup</p>
+              <p className="eyebrow">recorded WebP throughput ratio</p>
               <p className="mt-3 font-display text-display-lg leading-none text-(--color-fg)">
                 <CountUp to={webpRatio} decimals={1} suffix="×" />
               </p>
               <p className="mt-4 max-w-xs text-sm text-(--color-muted)">
-                faster WebP encode with{' '}
-                <span className="font-mono text-(--color-fg)">UV_THREADPOOL_SIZE=10</span>. AVIF lands at
-                near-parity — WebP is where the gap opens up.
+                WebP pipeline throughput relative to sharp with{' '}
+                <span className="font-mono text-(--color-fg)">UV_THREADPOOL_SIZE=10</span> in this recorded run.
               </p>
             </div>
 
@@ -163,7 +170,15 @@ export default function Benchmarks() {
             </div>
           </div>
 
-          <p className="mt-8 font-mono text-xs leading-relaxed text-(--color-faint)">{benchCaption}</p>
+          <p className="mt-8 text-sm leading-relaxed text-(--color-faint)">
+            The script uses one EXIF JPEG, WebP quality 75, and AVIF quality 70 with 4:2:0 chroma. Equal quality numbers
+            do not establish equal visual quality across encoders. These historical results are not a current-release
+            comparison or a prediction for other workloads.{' '}
+            <a className="underline" href="https://github.com/Brooooooklyn/Image/blob/main/bench/bench.mjs">
+              Inspect the benchmark
+            </a>{' '}
+            and measure your own images, quality targets and hardware.
+          </p>
         </Reveal>
       </div>
     </section>

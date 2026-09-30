@@ -13,11 +13,9 @@ export default function Footer() {
       <div className="container-page py-12">
         <div className="flex flex-col gap-8 md:flex-row md:items-start md:justify-between">
           <div className="flex flex-col gap-3">
-            <span className="font-mono text-sm font-medium text-(--color-fg) tracking-tight">
-              @napi-rs/image
-            </span>
+            <span className="font-mono text-sm font-medium text-(--color-fg) tracking-tight">@napi-rs/image</span>
             <p className="text-sm text-(--color-muted) max-w-xs">
-              High-performance image processing for Node.js — native speed, WebAssembly portable.
+              Rust-powered image processing for Node.js and browser Workers.
             </p>
           </div>
 
@@ -35,9 +33,7 @@ export default function Footer() {
         </div>
 
         <div className="mt-10 pt-6 border-t border-(--color-border)">
-          <p className="font-mono text-xs text-(--color-faint) tabular-nums">
-            Built with @napi-rs · MIT licensed
-          </p>
+          <p className="font-mono text-xs text-(--color-faint) tabular-nums">Built with @napi-rs · MIT licensed</p>
         </div>
       </div>
     </footer>

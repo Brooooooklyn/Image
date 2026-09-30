@@ -15,9 +15,9 @@ const formats = formatRows.length
 const savings = Math.max(...showcaseRows.filter((r) => r.kind === 'Lossless').map(pct))
 
 const stats = [
-  { node: <CountUp to={speed} decimals={1} suffix="×" />, label: 'faster WebP encode vs sharp' },
-  { node: <CountUp to={formats} />, label: 'image formats' },
-  { node: <CountUp to={savings} prefix="−" suffix="%" />, label: 'smaller, lossless' },
+  { node: <CountUp to={speed} decimals={1} suffix="×" />, label: 'recorded WebP pipeline vs sharp' },
+  { node: <CountUp to={formats} />, label: 'formats & raw pixels' },
+  { node: <CountUp to={savings} prefix="−" suffix="%" />, label: 'best lossless sample saving' },
 ]
 
 export default function Hero({ codeHtml }: { codeHtml: string }) {
@@ -33,12 +33,19 @@ export default function Hero({ codeHtml }: { codeHtml: string }) {
             <span className="text-(--color-accent)">in Rust.</span>
           </h1>
           <p className="mt-6 max-w-xl text-lg text-(--color-muted)">
-            Encode, compress, resize and convert images — JPEG, PNG, WebP, AVIF and more — with a native Node addon that beats sharp.
+            Resize, convert and optimize JPEG, PNG, WebP, AVIF and more. Rust-powered native addons for Node.js, with
+            WebAssembly for browser Workers.
           </p>
           <div className="mt-8 flex flex-wrap items-center gap-3">
-            <Button variant="primary" href="/playground">Open the playground</Button>
-            <Button variant="secondary" href="/docs">Read the docs</Button>
-            <Button variant="ghost" href="https://github.com/Brooooooklyn/Image">GitHub</Button>
+            <Button variant="primary" href="/playground">
+              Open the playground
+            </Button>
+            <Button variant="secondary" href="/docs">
+              Read the docs
+            </Button>
+            <Button variant="ghost" href="https://github.com/Brooooooklyn/Image">
+              GitHub
+            </Button>
           </div>
           <div className="mt-8">
             <InstallSwitcher />
@@ -60,6 +67,10 @@ export default function Hero({ codeHtml }: { codeHtml: string }) {
               </div>
             ))}
           </div>
+          <p className="text-xs leading-relaxed text-(--color-faint)">
+            The speed ratio is from the recorded M1 Max benchmark with a thread pool of 10; savings are from the sample
+            images below. Results depend on your workload.
+          </p>
         </Reveal>
       </div>
     </section>

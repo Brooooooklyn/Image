@@ -10,16 +10,15 @@ export default function CodeSample({ html }: { html: string }) {
         <SectionHeader
           index="05"
           label="PIPELINE"
-          title={<>One <span className="text-(--color-accent)">pipeline</span></>}
-          subhead="From raw bytes to every format — a few lines, all native."
+          title={
+            <>
+              One <span className="text-(--color-accent)">pipeline</span>
+            </>
+          }
+          subhead="Read image bytes, optimize PNG, or resize and convert to WebP and AVIF."
         />
         <Reveal className="mt-12">
-          <CodeBlock
-            html={html}
-            copyText={fullSample}
-            filename="optimize.ts"
-            className="mx-auto max-w-3xl"
-          />
+          <CodeBlock html={html} copyText={fullSample} filename="optimize.ts" className="mx-auto max-w-3xl" />
         </Reveal>
       </div>
     </section>
