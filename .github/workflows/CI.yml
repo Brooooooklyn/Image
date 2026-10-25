@@ -202,6 +202,18 @@ jobs:
         if: ${{ matrix.settings.target == 'armv7-unknown-linux-gnueabihf' }}
         with:
           version: '20'
+      - name: Select macOS SDK
+        if: endsWith(matrix.settings.target, '-apple-darwin')
+        shell: bash
+        run: |
+          # Homebrew Clang's default CLT SDK can be newer than the selected Xcode linker.
+          # SDKROOT configures CMake and rustc; explicit flags override Clang's config file.
+          SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
+          {
+            echo "SDKROOT=$SDKROOT"
+            echo "CFLAGS=-isysroot $SDKROOT"
+            echo "CXXFLAGS=-isysroot $SDKROOT"
+          } >> "$GITHUB_ENV"
       - name: Install dependencies
         run: yarn install --immutable --mode=skip-build
       - name: Build in docker
