@@ -5342,17 +5342,17 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@void/react@npm:0.28.0":
-  version: 0.28.0
-  resolution: "@void/react@npm:0.28.0"
+"@void/react@npm:1.2.1":
+  version: 1.2.1
+  resolution: "@void/react@npm:1.2.1"
   dependencies:
     "@vitejs/plugin-react": "npm:^6.1.2"
   peerDependencies:
     react: ^19.0.0
     react-dom: ^19.0.0
     vite: ^8.0.0
-    void: 0.28.0
-  checksum: 10c0/e54771a3edcc0b3936d77bff050523c6d1b2f64724a681d82f5a1fea1f8810336bea3f297504d68ce7a9c758cff6c912563bd3936421009fa203d672e9767b01
+    void: 1.2.1
+  checksum: 10c0/fbfa1f5c49cf9630c8a71b98623d5db4e23582f9d93e4eca17d8e3e94af88214506a2f650aa801529286e638bd67edc6862e26bd6f4fdb88cae20ee625fffb2d
   languageName: node
   linkType: hard
 
@@ -12398,7 +12398,7 @@ __metadata:
     "@types/react": "npm:^19.0.0"
     "@types/react-dom": "npm:^19.0.0"
     "@void/md": "npm:0.28.0"
-    "@void/react": "npm:0.28.0"
+    "@void/react": "npm:1.2.1"
     buffer: "npm:^6.0.0"
     chalk: "npm:^6.0.0"
     react: "npm:^19.2.1"
