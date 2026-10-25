@@ -22,7 +22,7 @@
     "buffer": "^6.0.0",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
-    "void": "0.28.0"
+    "void": "1.2.1"
   },
   "devDependencies": {
     "@napi-rs/canvas": "^1.0.0",
