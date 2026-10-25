@@ -17,7 +17,7 @@
     "@fontsource-variable/space-grotesk": "^5.2.10",
     "@napi-rs/image": "1.12.1",
     "@napi-rs/image-wasm32-wasi": "1.15.0",
-    "@void/md": "0.28.0",
+    "@void/md": "1.2.1",
     "@void/react": "0.28.0",
     "buffer": "^6.0.0",
     "react": "^19.2.1",

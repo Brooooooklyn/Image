@@ -5310,9 +5310,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@void/md@npm:0.28.0":
-  version: 0.28.0
-  resolution: "@void/md@npm:0.28.0"
+"@void/md@npm:1.2.1":
+  version: 1.2.1
+  resolution: "@void/md@npm:1.2.1"
   dependencies:
     "@shikijs/engine-javascript": "npm:^4.5.0"
     "@shikijs/transformers": "npm:^4.5.0"
@@ -5328,8 +5328,8 @@ __metadata:
     tinyglobby: "npm:^0.2.17"
   peerDependencies:
     vite: ^8.0.0
-    void: 0.28.0
-  checksum: 10c0/2adb4df2d7d5f19e4409d8473c17130577b9656e40298723bb8aa15338868450cecfb046ce15b354a6ff0314dd1b5efbbe1ab741e22ef0055d2ed21951d7406c
+    void: 1.2.1
+  checksum: 10c0/1ebce899d2e1494daaf43053c9b681e62ddc996f52b7375ba851a2e58f1da4383eba0e34fdd5993bde81d9b51d9bedef3e83b11ec01b6b3ab2b1f7658d2ee237
   languageName: node
   linkType: hard
 
@@ -12397,7 +12397,7 @@ __metadata:
     "@types/node": "npm:^24.10.1"
     "@types/react": "npm:^19.0.0"
     "@types/react-dom": "npm:^19.0.0"
-    "@void/md": "npm:0.28.0"
+    "@void/md": "npm:1.2.1"
     "@void/react": "npm:0.28.0"
     buffer: "npm:^6.0.0"
     chalk: "npm:^6.0.0"
