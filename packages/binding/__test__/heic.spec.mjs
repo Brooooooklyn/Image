@@ -39,14 +39,19 @@ const codecInstalled = await (async () => {
   }
 })()
 
-const onMac = isMac ? test : test.skip                                          // macOS-only behaviors (10-bit, alpha-survives)
+// CI runs the x86_64 macOS binding under Rosetta on Apple Silicon runners, where ImageIO HEIC work is
+// slow and can hang until the ava timeout. Skip the codec tests there; the API-surface guard still runs.
+const isX64Mac = isMac && os.arch() === 'x64'
+
+const onMacApi = isMac ? test : test.skip                                       // macOS API-surface (codec-independent)
+const onMac = isMac && !isX64Mac ? test : test.skip                             // macOS-only behaviors (10-bit, alpha-survives)
 const onWinCodec = isWindows && codecInstalled ? test : test.skip              // Windows-only behaviors (alpha flattened, 10-bit rejected)
-const onCodec = codecInstalled ? test : test.skip                              // shared real round-trips (mac OR win-with-codec)
+const onCodec = codecInstalled && !isX64Mac ? test : test.skip                 // shared real round-trips (mac OR win-with-codec)
 const onWinNoCodec = isWindows && hasHeic && !codecInstalled ? test : test.skip // CI Windows: codec-missing rejection
 const offHeic = !isMac && !isWindows && hasHeic ? test : test.skip             // linux/wasm stub: platform rejection
 const onWindows = isWindows ? test : test.skip                                 // Windows API-surface (codec-independent)
 
-onMac('native macOS exposes the HEIC API surface', (t) => {
+onMacApi('native macOS exposes the HEIC API surface', (t) => {
   // A native-API regression that drops the `.heic`/`.heicSync` registration must FAIL here (not skip).
   t.is(typeof Transformer.prototype.heic, 'function')
   t.is(typeof Transformer.prototype.heicSync, 'function')
