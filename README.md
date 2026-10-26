@@ -61,6 +61,7 @@ The following describes the published 1.15.0 API. It processes still images; it 
 | WebP           | Yes                            | Yes             | Lossy or lossless output                                            |
 | AVIF           | Yes                            | Yes             | Decoded to 8-bit pixels                                             |
 | HEIC / HEIF    | macOS / Windows                | macOS / Windows | HEVC-in-HEIF; requires an OS codec                                  |
+| JPEG XL        | Yes                            | No              | Decode only; first frame, upright, converted to sRGB                |
 | TIFF           | Yes                            | Yes             | Baseline, LZW and PackBits input; no fax support                    |
 | BMP            | Yes                            | Yes             |                                                                     |
 | ICO            | Yes                            | Yes             |                                                                     |
@@ -71,7 +72,7 @@ The following describes the published 1.15.0 API. It processes still images; it 
 | SVG            | `Transformer.fromSvg()`        | No              | Rasterized before further transforms                                |
 | Raw pixels     | `Transformer.fromRgbaPixels()` | `rawPixels()`   | Input: RGBA8; output: native-endian bytes in the image's color type |
 
-GIF, OpenEXR and farbfeld codecs are not enabled in the published build. Although `farbfeld()` / `farbfeldSync()` appear in the API, they currently reject with an unsupported-format error.
+GIF, OpenEXR and farbfeld codecs are not enabled in the published build. Although `farbfeld()` / `farbfeldSync()` appear in the API, they currently reject with an unsupported-format error. JPEG XL is decoded by the bundled pure-Rust [jxl-rs](https://github.com/libjxl/jxl-rs) decoder on every platform, including WebAssembly; it has no encoder, so there is no `.jxl()` output. See the [JPEG XL guide](https://image.napi.rs/docs/formats#jpeg-xl).
 
 ## Platforms
 

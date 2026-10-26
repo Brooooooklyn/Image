@@ -262,21 +262,23 @@ impl From<ResizeFilterType> for FilterType {
 }
 
 /// A decoded image's format. Wraps the `image` crate's `#[non_exhaustive]` `ImageFormat`
-/// (which has no HEIC variant) so HEIC can be represented alongside the standard formats.
+/// (which has no HEIC or JPEG XL variant) so those can sit alongside the standard formats.
 #[derive(Clone, Copy)]
 pub enum DetectedFormat {
   Standard(image::ImageFormat),
   Heic,
+  Jxl,
   Svg,
 }
 
 impl DetectedFormat {
-  /// The underlying `image` crate format, if any. `None` for HEIC (decoded outside the
-  /// `image` crate, and not parseable by `rexif`).
+  /// The underlying `image` crate format, if any. `None` for HEIC and JPEG XL (decoded outside
+  /// the `image` crate, and not parseable by `rexif`).
   pub(crate) fn image_format(&self) -> Option<image::ImageFormat> {
     match self {
       DetectedFormat::Standard(f) => Some(*f),
       DetectedFormat::Heic => None,
+      DetectedFormat::Jxl => None,
       DetectedFormat::Svg => None,
     }
   }
@@ -287,6 +289,7 @@ impl DetectedFormat {
     match self {
       DetectedFormat::Standard(f) => format!("{f:?}").to_lowercase(),
       DetectedFormat::Heic => "heic".to_owned(),
+      DetectedFormat::Jxl => "jxl".to_owned(),
       DetectedFormat::Svg => "svg".to_owned(),
     }
   }
@@ -338,6 +341,14 @@ impl ThreadsafeDynamicImage {
         {
           let (img, orient) = crate::heic::decode_heic(input_buf)?;
           (img, DetectedFormat::Heic, orient)
+        } else if crate::jxl::is_jxl(input_buf) {
+          // JPEG XL: `image` has no JXL decoder. The decoder bakes the header orientation into
+          // the pixels, so no orientation is stored and `.rotate()` cannot rotate twice.
+          (
+            crate::jxl::decode_jxl(input_buf)?,
+            DetectedFormat::Jxl,
+            None,
+          )
         } else {
           let image_format = image::guess_format(input_buf).map_err(|err| {
             Error::new(
@@ -2669,6 +2680,17 @@ mod tests {
   #[test]
   fn heic_image_format_is_none() {
     assert_eq!(DetectedFormat::Heic.image_format(), None);
+  }
+
+  #[test]
+  fn jxl_as_str_is_jxl() {
+    assert_eq!(DetectedFormat::Jxl.as_str(), "jxl");
+  }
+
+  #[test]
+  fn jxl_image_format_is_none() {
+    // `None` keeps rexif (and its EXIF orientation) off for JPEG XL input.
+    assert_eq!(DetectedFormat::Jxl.image_format(), None);
   }
 
   use super::{

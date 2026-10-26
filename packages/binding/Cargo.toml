@@ -27,7 +27,13 @@ default            = ["binding", "oxipng/parallel"]
 # Gates the `#[napi]` addon modules. On by default so the shipped addon is unchanged;
 # the CodSpeed bench builds with `--no-default-features` to link only the pure
 # quantizer core (no `napi_*` symbols, which Valgrind cannot resolve).
-binding            = []
+# `binding` also pulls the JPEG XL input path, which the bench never needs:
+# - `jxl`: pure-Rust libjxl/jxl-rs decoder (BSD-3-Clause). Decode only, jxl-rs has no encoder.
+#   Default features keep runtime SIMD dispatch (`all-simd`); `brotli` stays off (no EXIF read).
+# - `moxcms`: converts non-sRGB JPEG XL output to sRGB (same 0.8.1 `image` already locks).
+#   `extended_range` keeps float samples outside [0, 1] through the conversion.
+# - `bytemuck`: views the aligned `Vec<u16>`/`Vec<f32>` decode buffer as bytes (already in the tree).
+binding            = ["dep:bytemuck", "dep:jxl", "dep:moxcms"]
 logo               = []
 oxipng_libdeflater = ["oxipng/zopfli", "oxipng/parallel"]
 # Opt-in: lets `PngQuantOptions::use_zopfli` select oxipng's zopfli deflater for
@@ -39,12 +45,15 @@ png_quantize_zopfli = ["oxipng/zopfli"]
 with_simd          = ["mozjpeg-sys/nasm_simd_parallel_build"]
 
 [dependencies]
+bytemuck          = { version = "1", optional = true }
 fast_image_resize = { version = "6", features = ["image"] }
 image             = { version = "0.25", default-features = false, features = ["jpeg", "ico", "png", "pnm", "tga", "tiff", "bmp", "webp", "hdr", "dds"] }
 jpeg-decoder      = "0.3"
+jxl               = { version = "0.8.0", optional = true }
 libavif           = { version = "0.14", default-features = false, features = ["codec-aom"] }
 libc              = "0.2"
 lodepng           = "3"
+moxcms            = { version = "0.8.1", optional = true, features = ["extended_range"] }
 napi              = { version = "3.0.0", default-features = false, features = ["napi3"] }
 napi-derive       = { version = "3.0.0", default-features = false, features = ["type-def"] }
 num-complex       = "0.4"

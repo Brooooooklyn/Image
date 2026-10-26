@@ -21,6 +21,8 @@
     "png",
     "webp",
     "avif",
+    "jxl",
+    "jpeg-xl",
     "heic",
     "svg",
     "node-api",

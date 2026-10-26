@@ -11,10 +11,11 @@ export const formatRows: FormatRow[] = [
   { format: 'TGA', decode: 'no', encode: 'yes', note: 'input is not auto-detected' },
   { format: 'PNM', decode: 'yes', encode: 'yes' },
   { format: 'HEIC / HEIF', decode: 'yes', encode: 'yes', note: 'macOS / Windows with OS codec only' },
+  { format: 'JPEG XL', decode: 'yes', encode: 'no', note: 'decode only; first frame' },
   { format: 'Raw pixels', decode: 'yes', encode: 'yes', note: 'RGBA8 input; native-endian output' },
   { format: 'SVG', decode: 'yes', encode: 'no', note: 'rasterize with fromSvg()' },
   { format: 'DDS (DXT1/3/5)', decode: 'yes', encode: 'no', note: 'decode only' },
   { format: 'HDR (Radiance)', decode: 'yes', encode: 'no', note: 'decode only' },
 ]
 export const matrixCaption =
-  'WebP and AVIF decode and encode. HEIC requires macOS or Windows with an OS codec; it is unavailable in the browser. GIF, OpenEXR and farbfeld are not enabled in the published build.'
+  'WebP and AVIF decode and encode. JPEG XL is decode only. HEIC requires macOS or Windows with an OS codec; it is unavailable in the browser. GIF, OpenEXR and farbfeld are not enabled in the published build.'

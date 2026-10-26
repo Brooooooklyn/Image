@@ -13,6 +13,9 @@ mod fast_resize;
 pub mod heic;
 #[cfg(feature = "binding")]
 pub mod jpeg;
+// JPEG XL input (decode only) via the pure-Rust `jxl` crate; see `jxl.rs`.
+#[cfg(feature = "binding")]
+mod jxl;
 // P3: deterministic fixed-point sRGB->Oklab + Euclidean Oklab distance, wired
 // into the quantizer's perceptual color ASSIGNMENT metric (`pdist` in
 // `quantize.rs`).
