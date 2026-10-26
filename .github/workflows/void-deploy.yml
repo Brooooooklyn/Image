@@ -41,10 +41,14 @@ jobs:
       # Install at the repo ROOT — this is a yarn workspaces monorepo, so the
       # lockfile and workspace graph live at the root, not in website/.
       - run: yarn install --immutable
-      # Single step: `void deploy` (>= 0.10.2) detects GitHub Actions, mints the
-      # OIDC token itself, exchanges it for a deploy token, and deploys — no
-      # curl/jq, no VOID_TOKEN secret.
+      # `void deploy` (>= 0.10.2) detects GitHub Actions, mints the OIDC token
+      # itself, exchanges it for a deploy token, and deploys — no curl/jq, no
+      # VOID_TOKEN secret. Since void 0.28 it first resolves VOID_API_URL against
+      # a saved platform connection, which a fresh runner doesn't have ("No
+      # connection to https://api.void.cloud"), so register one without login.
       - name: Deploy
         # The Void app is the website/ workspace, not the repo root.
         working-directory: website
-        run: yarn void deploy --project "$VOID_PROJECT"
+        run: |
+          yarn void connect "$VOID_API_URL" --no-login
+          yarn void deploy --project "$VOID_PROJECT"
