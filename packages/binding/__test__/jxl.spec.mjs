@@ -58,6 +58,23 @@ const JXL_DIR = join(__DIRNAME, 'jxl')
 //                       `-P 0` because cjxl fails on negative floats without it)
 //   rgbaf32-rec2100-linear-lossless  cjxl px.exr -d 0 -P 0 -e 7 --premultiply=0 (same 12 pixels plus
 //                       straight alpha 0.1..1, EXR chromaticities = Rec.2020 primaries, linear)
+//   rgbf32-hlg-out-of-range-lossless  cjxl hlg-oor.pfm -d 0 -P 0 -e 7 -x color_space=RGB_D65_202_Rel_HLG
+//                       --intensity_target=1000  (12x1 float HLG codes, some outside [0, 1]:
+//                       [1,.6,.3], [1.1,.6,.3], [1.2,.6,.3], [1.05]x3, [1.3]x3, [-0.1,.5,.5],
+//                       [.5,-.05,.2], [.5]x3, [.75]x3, [1]x3, [0]x3, [.2,.9,.1]; djxl gives them back exactly)
+//   rgbf32-pq10k-out-of-range-lossless  cjxl pq-oor.pfm -d 0 -P 0 -e 7 -x color_space=RGB_D65_202_Rel_PeQ
+//                       --intensity_target=10000  (12x1 float PQ codes: [.75,.5,.3], [.9,.5,.3], [1,.5,.3],
+//                       [1.05,.5,.3], [1.05]x3, [-0.05,.5,.5], [.6,-.02,.4], [.58]x3, [.75]x3, [1]x3,
+//                       [0]x3, [.3,.7,.2])
+//   gray-ramp-hlg250-xyb / gray-ramp-hlg600-xyb  cjxl ramp.ppm -d 1 -e 7 -x color_space=RGB_D65_202_Rel_HLG
+//                       --intensity_target=250 (600)  (the 256x1 16-bit neutral ramp, lossy XYB)
+//   pq-blue-y0-lossless 128x16 16-bit lossless PQ, D65, primaries (0.7347, 0.2653), (0.1596, 0.8404),
+//                       (0.0366, 0), intensity target 10000; 8 flat 16x16 patches with PQ codes
+//                       (.5,.5,.5), (.6,.2,.2), (.2,.6,.2), (.2,.2,.6), (.4,.4,.1), (.7,.7,.7), (.3,.3,.3),
+//                       (.58,.45,.30) (x 65535, rounded). cjxl rejects a 0 in a primary, so: cjxl p.ppm
+//                       -d 0 --container=0 -x 'color_space=RGB_D65_0.7347;0.2653;0.1596;0.8404;0.0366;0.000001_Rel_PeQ',
+//                       then clear bit 565 of the file (the stored blue y goes from 1e-6 to 0; jxlinfo shows
+//                       "blue(x=0.036600,y=0.000000)"). jxl-rs and djxl both accept the file.
 // `ref/*.png` are `djxl X.jxl ref/X.png` decodes (libjxl's reference decoder);
 // `ref/dci-p3-lossless.png` is `djxl --color_space=RGB_D65_SRG_Rel_SRG` (converted to sRGB by libjxl);
 // `ref/rgb(a)f32-rec2100-linear-lossless.png` add `--bits_per_sample=16`.
@@ -65,6 +82,7 @@ const JXL_DIR = join(__DIRNAME, 'jxl')
 // --color_space=RGB_D65_SRG_Rel_SRG --bits_per_sample=16`; `ref/hlg-colors-xyb.png` is the same with
 // `--display_nits=80`. These are XYB files because djxl's `--display_nits` is wrong for lossless
 // (non-XYB) PQ/HLG files: it linearizes with the output transfer function (202 nits -> 64976).
+// `ref/gray-ramp-hlg250-xyb.png` and `ref/gray-ramp-hlg600-xyb.png` are made like `ref/hlg-colors-xyb.png`.
 const fixture = (name) => fs.readFile(join(JXL_DIR, name))
 
 const decode = async (input) => {
@@ -452,7 +470,11 @@ test('PQ/HLG input with alpha keeps its alpha and tone maps the colour like with
   t.is(rgba.colorType, JsColorType.Rgba8)
   for (let x = 0; x < 256; x++) {
     t.is(rgba.raw[x * 4 + 3], (x * 37 + 11) % 256, `alpha at column ${x}`)
-    t.deepEqual([...rgba.raw.subarray(x * 4, x * 4 + 3)], [...rgb.raw.subarray(x * 3, x * 3 + 3)], `colour at column ${x}`)
+    t.deepEqual(
+      [...rgba.raw.subarray(x * 4, x * 4 + 3)],
+      [...rgb.raw.subarray(x * 3, x * 3 + 3)],
+      `colour at column ${x}`,
+    )
   }
   // graya16-ramp-hlg-lossless: 16-bit gray HLG ramp x * 257 plus alpha (x * 4099) % 65536.
   const graya = await decode(await fixture('graya16-ramp-hlg-lossless.jxl'))
@@ -478,16 +500,111 @@ test('gray PQ input stays gray and is tone mapped like RGB', async (t) => {
   t.true(max <= 2, `max diff vs the RGB ramp ${max}`)
 })
 
+test('float PQ/HLG samples outside [0, 1] are tone mapped before any clipping, like libjxl', async (t) => {
+  // libjxl linearizes, tone maps and gamut maps the signed, unclipped values and clips only when it
+  // writes integers. Clipping the codes first made [1, .6, .3], [1.1, .6, .3] and [1.2, .6, .3] the
+  // same colour. Expected: the float64 port of libjxl's tone mapping on the unclipped codes.
+  const cases = [
+    [
+      'rgbf32-hlg-out-of-range-lossless.jxl',
+      [
+        [65535, 33550, 32941],
+        [65535, 42612, 43263],
+        [65535, 52123, 52718],
+        [65535, 65535, 65535],
+        [65535, 65535, 65535],
+        [0, 25845, 25100],
+        [31544, 0, 13065],
+        [26046, 26046, 26046],
+        [40369, 40369, 40369],
+        [65535, 65535, 65535],
+        [0, 0, 0],
+        [0, 53841, 29742],
+      ],
+    ],
+    [
+      'rgbf32-pq10k-out-of-range-lossless.jxl',
+      [
+        [65535, 43630, 43670],
+        [65535, 51755, 52496],
+        [65535, 54010, 54720],
+        [65535, 54432, 55138],
+        [65535, 65535, 65535],
+        [0, 39574, 38483],
+        [65535, 11863, 29261],
+        [48710, 48710, 48710],
+        [61635, 61635, 61635],
+        [65535, 65535, 65535],
+        [0, 0, 0],
+        [0, 64162, 35944],
+      ],
+    ],
+  ]
+  for (const [name, expected] of cases) {
+    const { colorType, raw } = await decode(await fixture(name))
+    t.is(colorType, JsColorType.Rgb16)
+    const samples = samples16(raw)
+    expected.forEach((pixel, x) => {
+      const actual = [...samples.subarray(x * 3, x * 3 + 3)]
+      t.true(
+        actual.every((v, c) => Math.abs(v - pixel[c]) <= 3),
+        `${name} pixel ${x}: got ${actual}, expected ${pixel}`,
+      )
+    })
+  }
+})
+
+test('XYB HLG at 250 and 600 nits matches djxl (jxl-rs skips its inverse OOTF there)', async (t) => {
+  // For XYB output jxl-rs skips the inverse HLG OOTF when |exponent| < 0.1 (libjxl: 0.01), i.e. for
+  // targets in about [161, 282] and [321, 602] nits. Applying the forward OOTF anyway made mid-gray
+  // 26856 (250 nits) and 23528 (600 nits) where djxl has 26151 and 26173.
+  for (const it of [250, 600]) {
+    const jxl = await decode(await fixture(`gray-ramp-hlg${it}-xyb.jxl`))
+    const ref = await decode(await fixture(`ref/gray-ramp-hlg${it}-xyb.png`))
+    t.is(jxl.colorType, JsColorType.Rgb16)
+    const max = maxDiff(jxl.raw, ref.raw, true)
+    t.true(max <= 3, `${it} nits: max diff vs djxl ${max}`)
+  }
+})
+
+test('custom primaries with y = 0 are tone mapped, not black', async (t) => {
+  // A primary may have y = 0 (only the white point's y must be above 0). Dividing by it made every
+  // pixel NaN, which came out black. Expected: the float64 port of libjxl (`PrimariesToXYZ`).
+  const { colorType, width, raw } = await decode(await fixture('pq-blue-y0-lossless.jxl'))
+  t.is(colorType, JsColorType.Rgb16)
+  t.is(width, 128)
+  const samples = samples16(raw)
+  const expected = [
+    [39307, 39307, 39307],
+    [65535, 15222, 26130],
+    [0, 54164, 30319],
+    [0, 6486, 13942],
+    [29904, 25869, 0],
+    [58921, 58921, 58921],
+    [14506, 14506, 14506],
+    [65535, 26804, 21521],
+  ]
+  expected.forEach((pixel, patch) => {
+    const offset = (8 * 128 + patch * 16 + 8) * 3
+    const actual = [...samples.subarray(offset, offset + 3)]
+    t.true(
+      actual.every((v, c) => Math.abs(v - pixel[c]) <= 2),
+      `patch ${patch}: got ${actual}, expected ${pixel}`,
+    )
+  })
+})
+
 for (const [name, maxMean, maxMax] of [
   ['pq-colors-xyb', 64, 6000],
-  ['hlg-colors-xyb', 96, 10000],
+  ['hlg-colors-xyb', 32, 6000],
 ]) {
   test(`${name}: saturated HDR colours are close to djxl`, async (t) => {
     // 13 colours (Rec.2020 primaries and secondaries, sRGB primaries, ...) from black to peak. Out of
     // sRGB colours are desaturated towards gray in linear sRGB, as djxl does with sRGB output for an
-    // XYB file; djxl works on the float XYB output and we on 16-bit codes, so the two differ most on
-    // the brightest saturated pixels.
-    // Measured: PQ mean 45 / max 5272, HLG mean 70 / max 8911.
+    // XYB file; djxl works on the float XYB output and we round codes in [0, 1] to 16 bits, so the
+    // two differ most on the brightest saturated pixels. jxl-rs writes HLG codes outside [0, 1] here
+    // (-0.074 to 1.003); clipping them before the tone mapping gave HLG mean 70 / max 8911.
+    // Measured: PQ mean 45 / max 5272, HLG mean 15 / max 4060.
     const jxl = await decode(await fixture(`${name}.jxl`))
     const ref = await decode(await fixture(`ref/${name}.png`))
     t.is(jxl.colorType, JsColorType.Rgb16)

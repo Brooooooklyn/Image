@@ -9,8 +9,11 @@
 //! pulls in coloured nodes, so a grey PQ ramp came out tinted (up to 2950/65535) and not monotonic
 //! (21 drops). For gray PQ/HLG (and custom primaries) jxl-rs cannot build a usable ICC at all.
 //!
-//! Per pixel, on 16-bit code values, in place:
-//! 1. PQ or HLG code -> linear light (65537-entry table).
+//! Per pixel, on 16-bit code values in place ([`HdrToSrgb::apply_u16`]), or on f32 code values
+//! into 16-bit output ([`HdrToSrgb::apply_f32`], for float and XYB files, whose codes can be outside
+//! [0, 1]):
+//! 1. PQ or HLG code -> linear light (65537-entry table). An f32 code outside [0, 1] is decoded with
+//!    the exact curve instead, keeping its sign (`DisplayFromEncoded` does not clip either).
 //! 2. PQ: Rec. 2408 tone mapping from the intensity target down to 250 nits (only when the target
 //!    is above 250 nits; otherwise 1.0 = intensity target). HLG: the OOTF for the intensity target,
 //!    then the OOTF from there down to 80 nits. Both scale the pixel by a gain that depends only on
@@ -29,6 +32,7 @@
 //!   `GamutMapScalar` (:132-178)
 //! - `lib/jxl/cms/tone_mapping-inl.h`: `HlgOOTF::FromSceneLight` (:106-111)
 //! - `lib/jxl/cms/transfer_functions.h`: `TF_PQ_Base` (:90-127), `TF_HLG_Base::InvOETF` (:54-64)
+//! - `lib/jxl/cms/jxl_cms_internal.h`: `PrimariesToXYZ` (:43-68)
 //! - `lib/jxl/render_pipeline/stage_tone_mapping.cc` (:36-108): when each step applies
 
 use std::sync::OnceLock;
@@ -64,6 +68,10 @@ const PRESERVE_SATURATION: f32 = 0.1;
 const SRGB_LUMINANCE: [f32; 3] = [0.2126, 0.7152, 0.0722];
 /// `Rec2408ToneMapperBase::ToneMap`: at or below this many nits a pixel becomes neutral grey.
 const MIN_LUMINANCE: f32 = 1e-6;
+/// Largest linear value (1.0 = 10000 nits for PQ, HLG scene white for HLG) an f32 code outside
+/// [0, 1] decodes to. Only a guard to keep the maths finite: PQ has a pole at code 1.99 and HLG
+/// overflows f32 above code 16; this cap is PQ code 1.98 or HLG code 2.65, far above every peak.
+const MAX_LINEAR: f64 = 1e4;
 
 /// The gain table holds `1 << GAIN_STEP_BITS` entries per octave of luminance, from
 /// `2^GAIN_MIN_OCTAVE` to `2^GAIN_MAX_OCTAVE`. A luminance is looked up through its f32 bit pattern
@@ -71,7 +79,8 @@ const MIN_LUMINANCE: f32 = 1e-6;
 const GAIN_STEP_BITS: u32 = 7;
 const GAIN_MIN_OCTAVE: i32 = -30;
 /// PQ code 1.0 is `10000 / intensity_target` relative to the source peak, and PQ is only tone
-/// mapped when the target is above 250 nits, so `y < 40 < 2^6`. HLG stays at or below 1.
+/// mapped when the target is above 250 nits, so `y < 40 < 2^6`. HLG codes in [0, 1] stay at or
+/// below 1. Only f32 codes above 1 go past the table, and get the exact gain (`gain_exact`).
 const GAIN_MAX_OCTAVE: i32 = 6;
 const GAIN_LEN: usize = ((GAIN_MAX_OCTAVE - GAIN_MIN_OCTAVE) as usize) << GAIN_STEP_BITS;
 const GAIN_MIN_BITS: u32 = ((127 + GAIN_MIN_OCTAVE) as u32) << 23;
@@ -86,7 +95,8 @@ static HLG_DECODE: OnceLock<Box<DecodeTable>> = OnceLock::new();
 /// `sqrt(linear) * 65535` (rounded) -> 16-bit sRGB code.
 static SRGB_ENCODE: OnceLock<Box<[u16; 65536]>> = OnceLock::new();
 
-/// `TF_PQ_Base::DisplayFromEncoded` with `display_intensity_target = 1`: code -> nits.
+/// `TF_PQ_Base::DisplayFromEncoded` with `display_intensity_target = 1`: code -> nits. Infinite
+/// from the pole at code `(C2 / C3)^M2` (about 1.99) on, which only an f32 code can reach.
 fn pq_nits_from_encoded(e: f64) -> f64 {
   if e <= 0.0 {
     return 0.0;
@@ -94,7 +104,15 @@ fn pq_nits_from_encoded(e: f64) -> f64 {
   let xp = e.powf(1.0 / M2);
   let num = (xp - C1).max(0.0);
   let den = C2 - C3 * xp;
+  if den <= 0.0 {
+    return f64::INFINITY;
+  }
   (num / den).powf(1.0 / M1) * 10000.0
+}
+
+/// PQ code -> nits / 10000 (the [`PQ_DECODE`] curve).
+fn pq_linear_from_encoded(e: f64) -> f64 {
+  pq_nits_from_encoded(e) / 10000.0
 }
 
 /// `TF_PQ_Base::EncodedFromDisplay` with `display_intensity_target = 1`: nits -> code.
@@ -152,7 +170,7 @@ fn build_srgb_encode_table() -> Box<[u16; 65536]> {
 }
 
 fn pq_decode_table() -> &'static DecodeTable {
-  PQ_DECODE.get_or_init(|| build_decode_table(|e| pq_nits_from_encoded(e) / 10000.0))
+  PQ_DECODE.get_or_init(|| build_decode_table(pq_linear_from_encoded))
 }
 
 fn hlg_decode_table() -> &'static DecodeTable {
@@ -280,6 +298,21 @@ fn gamut_map(rgb: &mut [f32; 3], lum: [f32; 3], preserve_saturation: f32) {
   }
 }
 
+/// The gain of `HlgOOTF::Apply` for each exponent in turn, on a pixel with luminance `y` (the
+/// second sees the luminance the first leaves). An exponent within 0.01 of 0 is skipped, like
+/// `apply_ootf_`.
+fn hlg_gain(exponents: [f32; 2], mut y: f32) -> f32 {
+  let mut g = 1.0f32;
+  for exponent in exponents {
+    if exponent < -0.01 || 0.01 < exponent {
+      let ratio = y.powf(exponent).min(1e9);
+      g *= ratio;
+      y *= ratio;
+    }
+  }
+  g
+}
+
 fn mul3(a: &Matrix, b: &Matrix) -> Matrix {
   std::array::from_fn(|i| std::array::from_fn(|j| (0..3).map(|k| a[i][k] * b[k][j]).sum()))
 }
@@ -288,10 +321,14 @@ fn mul3_vec(m: &Matrix, v: [f64; 3]) -> [f64; 3] {
   std::array::from_fn(|i| (0..3).map(|k| m[i][k] * v[k]).sum())
 }
 
-fn inv3(m: &Matrix) -> Matrix {
-  let det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+fn det3(m: &Matrix) -> f64 {
+  m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
     - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
-    + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+    + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+}
+
+fn inv3(m: &Matrix) -> Matrix {
+  let det = det3(m);
   std::array::from_fn(|i| {
     std::array::from_fn(|j| {
       let (a, b) = ((j + 1) % 3, (j + 2) % 3);
@@ -305,12 +342,25 @@ fn xy_to_xyz((x, y): (f64, f64)) -> [f64; 3] {
   [x / y, 1.0, (1.0 - x - y) / y]
 }
 
-/// Linear RGB -> XYZ (white = Y 1) for the given primaries and white point.
-fn rgb_to_xyz(primaries: [(f64, f64); 3], white: (f64, f64)) -> Matrix {
-  let columns = primaries.map(xy_to_xyz);
-  let m: Matrix = std::array::from_fn(|r| std::array::from_fn(|c| columns[c][r]));
+/// Linear RGB -> XYZ (white = Y 1) for the given primaries and white point, like `PrimariesToXYZ`:
+/// each primary is the column `[x, y, 1 - x - y]`, scaled so that the columns add up to the white
+/// point. A primary may have `y = 0` (the header allows it); only the white point's `y` divides,
+/// and jxl-rs rejects a white point with `y <= 0`. `None` for singular primaries (libjxl's
+/// `Inv3x3Matrix` limit).
+fn rgb_to_xyz(primaries: [(f64, f64); 3], white: (f64, f64)) -> Option<Matrix> {
+  let m: Matrix = std::array::from_fn(|r| {
+    std::array::from_fn(|c| {
+      let (x, y) = primaries[c];
+      [x, y, 1.0 - x - y][r]
+    })
+  });
+  if det3(&m).abs() < 1e-10 {
+    return None;
+  }
   let scale = mul3_vec(&inv3(&m), xy_to_xyz(white));
-  std::array::from_fn(|r| std::array::from_fn(|c| m[r][c] * scale[c]))
+  Some(std::array::from_fn(|r| {
+    std::array::from_fn(|c| m[r][c] * scale[c])
+  }))
 }
 
 /// Bradford chromatic adaptation from one white point to another (XYZ -> XYZ).
@@ -335,8 +385,8 @@ enum Curve {
   /// PQ with an intensity target above 250 nits: Rec. 2408, gain table plus the exact near-black
   /// path of `ToneMap`.
   ToneMap(Rec2408),
-  /// HLG: the product of the two OOTFs, from the gain table.
-  Gain,
+  /// HLG: the product of the two OOTFs (their exponents, see [`hlg_gain`]), from the gain table.
+  Gain([f32; 2]),
   /// PQ with an intensity target at or below 250 nits: nothing to tone map.
   None,
 }
@@ -345,6 +395,8 @@ enum Curve {
 pub(super) struct HdrToSrgb {
   decode: &'static DecodeTable,
   encode: &'static [u16; 65536],
+  /// The exact curve behind `decode`, for f32 codes outside [0, 1].
+  decode_exact: fn(f64) -> f64,
   /// Multiplies a decoded value to make it relative to the source peak (PQ: 10000 / target).
   scale: f32,
   /// Luminance of each source primary. Gray: `[1, 0, 0]`, applied to the single channel.
@@ -358,8 +410,10 @@ pub(super) struct HdrToSrgb {
 
 impl HdrToSrgb {
   /// `Some` only for PQ or HLG in a colour enum (RGB or gray). An ICC profile, even an HDR one,
-  /// is left to the ICC path.
-  pub(super) fn new(profile: &JxlColorProfile, intensity_target: f32) -> Option<Self> {
+  /// is left to the ICC path, and so are primaries this cannot build a finite matrix for. `xyb`:
+  /// the file is XYB encoded (`!uses_original_profile`), so jxl-rs wrote HLG through its own
+  /// inverse OOTF.
+  pub(super) fn new(profile: &JxlColorProfile, intensity_target: f32, xyb: bool) -> Option<Self> {
     let JxlColorProfile::Simple(encoding) = profile else {
       return None;
     };
@@ -395,16 +449,20 @@ impl HdrToSrgb {
         let primaries = primaries
           .to_xy_coords()
           .map(|(x, y)| (f64::from(x), f64::from(y)));
-        let to_xyz = rgb_to_xyz(primaries, white);
+        let to_xyz = rgb_to_xyz(primaries, white)?;
         let d65 = JxlWhitePoint::D65.to_xy_coords();
         let d65 = (f64::from(d65.0), f64::from(d65.1));
-        let srgb = rgb_to_xyz([(0.64, 0.33), (0.30, 0.60), (0.15, 0.06)], d65);
+        let srgb = rgb_to_xyz([(0.64, 0.33), (0.30, 0.60), (0.15, 0.06)], d65)?;
         let to_xyz = if (white.0 - d65.0).abs() > 1e-6 || (white.1 - d65.1).abs() > 1e-6 {
           mul3(&bradford(white, d65), &to_xyz)
         } else {
           to_xyz
         };
         let m = mul3(&inv3(&srgb), &to_xyz);
+        // A NaN here would turn every pixel black (`encode`), so leave such a file to moxcms.
+        if !m.iter().chain(&to_xyz).flatten().all(|v| v.is_finite()) {
+          return None;
+        }
         (
           to_xyz[1].map(|v| v as f32),
           Some(m.map(|row| row.map(|v| v as f32))),
@@ -415,7 +473,7 @@ impl HdrToSrgb {
 
     let mut gain = Box::new([1.0f32; GAIN_LEN]);
     let gain_at = |i: usize| f32::from_bits(GAIN_MIN_BITS + ((i as u32) << GAIN_FRACTION_BITS));
-    let (decode, scale, curve) = if pq {
+    let (decode, decode_exact, scale, curve): (_, fn(f64) -> f64, _, _) = if pq {
       // `stage_tone_mapping.cc`: PQ is only tone mapped down, never up.
       let curve = if intensity_target > TARGET_PQ_NITS {
         let tone_map = Rec2408::new(intensity_target, TARGET_PQ_NITS);
@@ -426,31 +484,47 @@ impl HdrToSrgb {
       } else {
         Curve::None
       };
-      (pq_decode_table(), 10000.0 / intensity_target, curve)
+      (
+        pq_decode_table(),
+        pq_linear_from_encoded,
+        10000.0 / intensity_target,
+        curve,
+      )
     } else {
       // `HlgOOTF::FromSceneLight(intensity_target)` (scene -> display light, in the to-linear
       // stage), then `HlgOOTF(intensity_target, 80)` (the tone-mapping stage). An exponent within
       // 0.01 of 0 is skipped, like `apply_ootf_`.
+      // An XYB file comes out of jxl-rs already turned back into scene light by the inverse OOTF
+      // (`hlg_display_to_scene_vec`), which this undoes. But jxl-rs skips that inverse when
+      // `|(1 - gamma) / gamma| < 0.1` (libjxl: 0.01), for targets of about 161..282 and 321..602
+      // nits. Then the forward OOTF must be skipped too, or it is applied on top (mid-gray 23528
+      // instead of djxl's 26173 at 600 nits). Same f32 maths as jxl-rs's `hlg_system_gamma`.
+      let inverse_skipped = xyb && {
+        let gamma = (1.2f64 * 1.111f64.powf((f64::from(intensity_target) / 1e3).log2())) as f32;
+        ((1.0 - gamma) / gamma).abs() < 0.1
+      };
       let exponents = [
-        1.2 * 1.111f32.powf((intensity_target / 1000.0).log2()) - 1.0,
+        if inverse_skipped {
+          0.0
+        } else {
+          1.2 * 1.111f32.powf((intensity_target / 1000.0).log2()) - 1.0
+        },
         1.111f32.powf((TARGET_HLG_NITS / intensity_target).log2()) - 1.0,
       ];
       for (i, value) in gain.iter_mut().enumerate() {
-        let (mut g, mut y) = (1.0f32, gain_at(i));
-        for exponent in exponents {
-          if exponent < -0.01 || 0.01 < exponent {
-            let ratio = y.powf(exponent).min(1e9);
-            g *= ratio;
-            y *= ratio;
-          }
-        }
-        *value = g;
+        *value = hlg_gain(exponents, gain_at(i));
       }
-      (hlg_decode_table(), 1.0, Curve::Gain)
+      (
+        hlg_decode_table(),
+        hlg_scene_from_encoded,
+        1.0,
+        Curve::Gain(exponents),
+      )
     };
 
     Some(Self {
       decode,
+      decode_exact,
       encode: srgb_encode_table(),
       scale,
       lum,
@@ -470,7 +544,7 @@ impl HdrToSrgb {
     let offset = y.to_bits() - GAIN_MIN_BITS;
     let i = (offset >> GAIN_FRACTION_BITS) as usize;
     if i + 1 >= GAIN_LEN {
-      return self.gain[GAIN_LEN - 1];
+      return self.gain_exact(y);
     }
     let fraction = (offset & ((1 << GAIN_FRACTION_BITS) - 1)) as f32
       * (1.0 / (1u32 << GAIN_FRACTION_BITS) as f32);
@@ -478,12 +552,23 @@ impl HdrToSrgb {
     g0 + (self.gain[i + 1] - g0) * fraction
   }
 
+  /// The gain for a luminance past the table (only from f32 codes above 1). PQ: at or above the
+  /// source peak Rec. 2408 gives the target peak, so this is about `1 / y`.
+  #[cold]
+  fn gain_exact(&self, y: f32) -> f32 {
+    match &self.curve {
+      Curve::ToneMap(tone_map) => tone_map.multiplier(y),
+      Curve::Gain(exponents) => hlg_gain(*exponents, y),
+      Curve::None => 1.0,
+    }
+  }
+
   /// Tone map a pixel (relative to the source peak), with luminance `y`.
   #[inline(always)]
   fn tone_map(&self, rgb: [f32; 3], y: f32) -> [f32; 3] {
     match &self.curve {
       Curve::ToneMap(tone_map) if y * tone_map.source_peak <= MIN_LUMINANCE => [tone_map.cap(y); 3],
-      Curve::ToneMap(_) | Curve::Gain => {
+      Curve::ToneMap(_) | Curve::Gain(_) => {
         let g = self.gain_of(y);
         rgb.map(|v| v * g)
       }
@@ -497,6 +582,29 @@ impl HdrToSrgb {
     self.encode[(v.clamp(0.0, 1.0).sqrt() * 65535.0 + 0.5) as u16 as usize]
   }
 
+  /// Linear source RGB (relative to the source peak) -> 16-bit sRGB.
+  #[inline(always)]
+  fn rgb_to_srgb(&self, m: &[[f32; 3]; 3], rgb: [f32; 3]) -> [u16; 3] {
+    let lum = self.lum;
+    let y = lum[0] * rgb[0] + lum[1] * rgb[1] + lum[2] * rgb[2];
+    let rgb = self.tone_map(rgb, y);
+    let mut srgb: [f32; 3] =
+      std::array::from_fn(|c| m[c][0] * rgb[0] + m[c][1] * rgb[1] + m[c][2] * rgb[2]);
+    let max = srgb[0].max(srgb[1]).max(srgb[2]);
+    let min = srgb[0].min(srgb[1]).min(srgb[2]);
+    if max > 1.0 || min < 0.0 {
+      gamut_map(&mut srgb, SRGB_LUMINANCE, PRESERVE_SATURATION);
+    }
+    srgb.map(|value| self.encode(value))
+  }
+
+  /// Linear gray (relative to the source peak) -> 16-bit sRGB gray.
+  #[inline(always)]
+  fn gray_to_srgb(&self, v: f32) -> u16 {
+    // `lum` is [1, 0, 0]: the luminance is the sample itself.
+    self.encode(self.tone_map([v; 3], v * self.lum[0])[0])
+  }
+
   /// Convert interleaved 16-bit PQ/HLG samples to sRGB in place. `channels` is 1 or 2 for gray
   /// (with alpha), 3 or 4 for RGB (with alpha); alpha is left as it is.
   pub(super) fn apply_u16(&self, pixels: &mut [u16], channels: usize) {
@@ -504,27 +612,56 @@ impl HdrToSrgb {
     match &self.to_srgb {
       Some(m) => {
         for pixel in pixels.chunks_exact_mut(channels) {
-          let rgb = [decode(pixel[0]), decode(pixel[1]), decode(pixel[2])];
-          let lum = self.lum;
-          let y = lum[0] * rgb[0] + lum[1] * rgb[1] + lum[2] * rgb[2];
-          let rgb = self.tone_map(rgb, y);
-          let mut srgb: [f32; 3] =
-            std::array::from_fn(|c| m[c][0] * rgb[0] + m[c][1] * rgb[1] + m[c][2] * rgb[2]);
-          let max = srgb[0].max(srgb[1]).max(srgb[2]);
-          let min = srgb[0].min(srgb[1]).min(srgb[2]);
-          if max > 1.0 || min < 0.0 {
-            gamut_map(&mut srgb, SRGB_LUMINANCE, PRESERVE_SATURATION);
-          }
-          for (out, value) in pixel.iter_mut().zip(srgb) {
-            *out = self.encode(value);
-          }
+          let srgb = self.rgb_to_srgb(m, [decode(pixel[0]), decode(pixel[1]), decode(pixel[2])]);
+          pixel[..3].copy_from_slice(&srgb);
         }
       }
       None => {
         for pixel in pixels.chunks_exact_mut(channels) {
-          let v = decode(pixel[0]);
-          // `lum` is [1, 0, 0]: the luminance is the sample itself.
-          pixel[0] = self.encode(self.tone_map([v; 3], v * self.lum[0])[0]);
+          pixel[0] = self.gray_to_srgb(decode(pixel[0]));
+        }
+      }
+    }
+  }
+
+  /// [`Self::apply_u16`] for interleaved f32 PQ/HLG samples, written to `output` (the same length).
+  /// A code in [0, 1] is first rounded to the 16-bit code jxl-rs's u16 output holds (`f32_to_u16`:
+  /// times 65535, round half to even), so it gives exactly what `apply_u16` gives. A code outside
+  /// [0, 1] keeps its sign and its size through the exact curve, the tone mapping and the gamut
+  /// mapping, like libjxl (which clips only when it writes integers). Alpha is quantized like
+  /// jxl-rs's u16 output.
+  pub(super) fn apply_f32(&self, pixels: &[f32], output: &mut [u16], channels: usize) {
+    let decode = |v: f32| {
+      if (0.0..=1.0).contains(&v) {
+        self.decode[(v * 65535.0).round_ties_even() as usize] * self.scale
+      } else if v.is_nan() {
+        // jxl-rs's u16 output holds 0 for NaN.
+        0.0
+      } else {
+        let linear = (self.decode_exact)(f64::from(v.abs())).min(MAX_LINEAR);
+        (linear as f32).copysign(v) * self.scale
+      }
+    };
+    // `as` maps NaN to 0.
+    let alpha = |v: f32| (v.clamp(0.0, 1.0) * 65535.0).round_ties_even() as u16;
+    let pixels = pixels.chunks_exact(channels);
+    let output = output.chunks_exact_mut(channels);
+    match &self.to_srgb {
+      Some(m) => {
+        for (pixel, out) in pixels.zip(output) {
+          let srgb = self.rgb_to_srgb(m, [decode(pixel[0]), decode(pixel[1]), decode(pixel[2])]);
+          out[..3].copy_from_slice(&srgb);
+          if channels == 4 {
+            out[3] = alpha(pixel[3]);
+          }
+        }
+      }
+      None => {
+        for (pixel, out) in pixels.zip(output) {
+          out[0] = self.gray_to_srgb(decode(pixel[0]));
+          if channels == 2 {
+            out[1] = alpha(pixel[1]);
+          }
         }
       }
     }
@@ -538,7 +675,9 @@ mod tests {
     RenderingIntent,
   };
 
-  use super::{HdrToSrgb, gamut_map, pq_encoded_from_nits, pq_nits_from_encoded};
+  const E: (f64, f64) = (1.0 / 3.0, 1.0 / 3.0);
+
+  use super::{HdrToSrgb, gamut_map, pq_encoded_from_nits, pq_nits_from_encoded, rgb_to_xyz};
 
   fn rgb(primaries: JxlPrimaries, transfer_function: JxlTransferFunction) -> JxlColorProfile {
     JxlColorProfile::Simple(JxlColorEncoding::RgbColorSpace {
@@ -560,19 +699,19 @@ mod tests {
   #[test]
   fn only_pq_and_hlg_enums() {
     for tf in [JxlTransferFunction::PQ, JxlTransferFunction::HLG] {
-      assert!(HdrToSrgb::new(&rgb(JxlPrimaries::BT2100, tf.clone()), 1000.0).is_some());
-      assert!(HdrToSrgb::new(&gray(tf), 1000.0).is_some());
+      assert!(HdrToSrgb::new(&rgb(JxlPrimaries::BT2100, tf.clone()), 1000.0, false).is_some());
+      assert!(HdrToSrgb::new(&gray(tf), 1000.0, false).is_some());
     }
     for tf in [
       JxlTransferFunction::SRGB,
       JxlTransferFunction::Linear,
       JxlTransferFunction::DCI,
     ] {
-      assert!(HdrToSrgb::new(&rgb(JxlPrimaries::BT2100, tf.clone()), 1000.0).is_none());
-      assert!(HdrToSrgb::new(&gray(tf), 1000.0).is_none());
+      assert!(HdrToSrgb::new(&rgb(JxlPrimaries::BT2100, tf.clone()), 1000.0, false).is_none());
+      assert!(HdrToSrgb::new(&gray(tf), 1000.0, false).is_none());
     }
     // An ICC profile stays on the ICC path, whatever it describes.
-    assert!(HdrToSrgb::new(&JxlColorProfile::Icc(vec![0; 132]), 1000.0).is_none());
+    assert!(HdrToSrgb::new(&JxlColorProfile::Icc(vec![0; 132]), 1000.0, false).is_none());
   }
 
   #[test]
@@ -603,7 +742,7 @@ mod tests {
       (rgb(JxlPrimaries::BT2100, JxlTransferFunction::PQ), 3),
       (gray(JxlTransferFunction::PQ), 1),
     ] {
-      let hdr = HdrToSrgb::new(&profile, 10000.0).unwrap();
+      let hdr = HdrToSrgb::new(&profile, 10000.0, false).unwrap();
       let mut pixels: Vec<u16> = (0..256u16)
         .flat_map(|x| std::iter::repeat_n(x * 257, channels))
         .collect();
@@ -624,6 +763,7 @@ mod tests {
     let hdr = HdrToSrgb::new(
       &rgb(JxlPrimaries::BT2100, JxlTransferFunction::HLG),
       f32::NAN,
+      false,
     )
     .unwrap();
     let mut pixels = [65535u16, 0, 0, 1234, 30000, 30000, 30000, 0];
@@ -632,5 +772,107 @@ mod tests {
     assert_eq!(pixels[7], 0);
     // Saturated Rec.2020 red is outside sRGB: desaturated, not clipped to pure red.
     assert!(pixels[1] > 0 && pixels[2] > 0, "{pixels:?}");
+  }
+
+  /// A primary with `y = 0` gives a finite matrix (dividing by `y` made it NaN: all black).
+  #[test]
+  fn primaries_with_zero_y() {
+    let identity = rgb_to_xyz([(1.0, 0.0), (0.0, 1.0), (0.0, 0.0)], E).unwrap();
+    for (r, row) in identity.iter().enumerate() {
+      for (c, &v) in row.iter().enumerate() {
+        assert!(
+          (v - f64::from(u8::from(r == c))).abs() < 1e-12,
+          "{identity:?}"
+        );
+      }
+    }
+    let d65 = (0.3127, 0.329);
+    let zero = rgb_to_xyz([(0.7347, 0.2653), (0.1596, 0.8404), (0.0366, 0.0)], d65).unwrap();
+    let near = rgb_to_xyz([(0.7347, 0.2653), (0.1596, 0.8404), (0.0366, 1e-6)], d65).unwrap();
+    assert!(zero.iter().flatten().all(|v| v.is_finite()), "{zero:?}");
+    for (a, b) in zero.iter().flatten().zip(near.iter().flatten()) {
+      assert!((a - b).abs() < 1e-5, "{zero:?} vs {near:?}");
+    }
+    // Singular primaries (all on one line) are refused, not inverted.
+    assert!(rgb_to_xyz([(0.2, 0.2), (0.4, 0.4), (0.6, 0.3)], E).is_some());
+    assert!(rgb_to_xyz([(0.2, 0.2), (0.4, 0.4), (0.3, 0.3)], E).is_none());
+
+    let profile = JxlColorProfile::Simple(JxlColorEncoding::RgbColorSpace {
+      white_point: JxlWhitePoint::E,
+      primaries: JxlPrimaries::Chromaticities {
+        rx: 1.0,
+        ry: 0.0,
+        gx: 0.0,
+        gy: 1.0,
+        bx: 0.0,
+        by: 0.0,
+      },
+      transfer_function: JxlTransferFunction::PQ,
+      rendering_intent: RenderingIntent::Relative,
+    });
+    let hdr = HdrToSrgb::new(&profile, 10000.0, false).unwrap();
+    let mut pixel = [32768u16; 3];
+    hdr.apply_u16(&mut pixel, 3);
+    // The float64 port of libjxl: 39307 (PQ code 0.5 at a 10000-nit target).
+    assert!(pixel.iter().all(|&v| v.abs_diff(39307) <= 2), "{pixel:?}");
+  }
+
+  /// f32 codes in [0, 1] give exactly the u16 path; codes outside keep their sign and size.
+  #[test]
+  fn f32_codes_outside_unit_range() {
+    for tf in [JxlTransferFunction::PQ, JxlTransferFunction::HLG] {
+      let hdr = HdrToSrgb::new(&rgb(JxlPrimaries::BT2100, tf.clone()), 1000.0, false).unwrap();
+      let codes: Vec<u16> = (0..=65535u16).step_by(7).collect();
+      let mut expected: Vec<u16> = codes.iter().flat_map(|&c| [c, 65535 - c, c / 2]).collect();
+      let floats: Vec<f32> = expected.iter().map(|&c| f32::from(c) / 65535.0).collect();
+      hdr.apply_u16(&mut expected, 3);
+      let mut actual = vec![0u16; floats.len()];
+      hdr.apply_f32(&floats, &mut actual, 3);
+      assert_eq!(actual, expected, "{tf:?}");
+
+      // Above 1 is not clipped to 1, and below 0 is not clipped to 0.
+      let mut out = [0u16; 9];
+      hdr.apply_f32(
+        &[1.0, 0.6, 0.3, 1.1, 0.6, 0.3, 0.5, -0.05, 0.2],
+        &mut out,
+        3,
+      );
+      assert_ne!(out[..3], out[3..6], "{tf:?}");
+      let mut clipped = [0u16; 3];
+      hdr.apply_f32(&[0.5, 0.0, 0.2], &mut clipped, 3);
+      assert_ne!(out[6..], clipped, "{tf:?}");
+      // Huge, infinite and NaN codes stay finite, and alpha is quantized like jxl-rs.
+      let mut out = [0u16; 8];
+      hdr.apply_f32(
+        &[f32::MAX, 3.0, -f32::INFINITY, 0.5, f32::NAN, 1.0, 2.0, 1.5],
+        &mut out,
+        4,
+      );
+      assert_eq!(out[3], 32768);
+      assert_eq!(out[7], 65535);
+    }
+  }
+
+  /// For XYB, jxl-rs skips its inverse HLG OOTF when `|(1 - gamma) / gamma| < 0.1`, so the forward
+  /// one is skipped too. Lossless files (no inverse) keep libjxl's 0.01.
+  #[test]
+  fn hlg_forward_ootf_follows_jxl_rs_for_xyb() {
+    let profile = rgb(JxlPrimaries::BT2100, JxlTransferFunction::HLG);
+    let mid = |target: f32, xyb: bool| {
+      let mut pixel = [32768u16; 3];
+      HdrToSrgb::new(&profile, target, xyb)
+        .unwrap()
+        .apply_u16(&mut pixel, 3);
+      pixel[1]
+    };
+    // Inside about 161..282 and 321..602 nits only the XYB file skips the forward OOTF (the djxl
+    // comparison is the `gray-ramp-hlg{250,600}-xyb` test in `jxl.spec.mjs`).
+    for target in [170.0, 250.0, 281.0, 323.0, 500.0, 600.0, 602.0] {
+      assert_ne!(mid(target, true), mid(target, false), "{target}");
+    }
+    // Outside them both sides apply their OOTF, and at 300 neither does.
+    for target in [150.0, 160.0, 283.0, 300.0, 321.0, 603.0, 1000.0] {
+      assert_eq!(mid(target, true), mid(target, false), "{target}");
+    }
   }
 }

@@ -16,8 +16,9 @@
 //!   through that ICC and `moxcms`.
 //! - 8-bit for files with <= 8 bits per sample, 16-bit otherwise (9..16 bit and float). Never f32.
 //!   A float file that needs conversion is decoded as f32 and only clipped to [0, 1] after the
-//!   conversion to sRGB, like `djxl`. PQ/HLG files are always decoded as u16 (their code values are
-//!   in [0, 1]) and an 8-bit one is rounded back to 8 bits after the tone mapping.
+//!   conversion to sRGB, like `djxl`. So are PQ/HLG float and XYB files, whose codes can be outside
+//!   [0, 1]: they are clipped only after the tone mapping. Other PQ/HLG files are decoded as u16, and
+//!   an 8-bit one is rounded back to 8 bits after the tone mapping.
 //! - Straight (unpremultiplied) alpha, which is what the `image` crate assumes.
 //! - The first visible frame of an animation (already composited by the decoder).
 
@@ -151,8 +152,9 @@ fn decode_first_frame(buf: &[u8]) -> Result<DynamicImage> {
       .ok_or_else(|| decode_error("missing output color profile"))
   };
   let mut profile = set_format(data_format)?;
+  let xyb = !info.uses_original_profile;
   // PQ/HLG in a colour enum: tone mapped by `hdr` instead of the ICC path (`convert` stays false).
-  let hdr = hdr::HdrToSrgb::new(&profile, info.tone_mapping.intensity_target);
+  let hdr = hdr::HdrToSrgb::new(&profile, info.tone_mapping.intensity_target, xyb);
   let convert = hdr.is_none() && !is_srgb(&profile);
   // jxl-rs clips u8/u16 output to [0, 1] in the file's colour space, but a float file may hold
   // values outside it (HDR highlights, wide-gamut colours). The primaries matrix mixes every channel
@@ -166,10 +168,24 @@ fn decode_first_frame(buf: &[u8]) -> Result<DynamicImage> {
       endianness: Endianness::native(),
     })?;
   }
+  // The same clipping problem for PQ/HLG: a float file can hold codes outside [0, 1] (HLG
+  // super-whites, negative values), and so does an XYB file of any bit depth (ringing around edges).
+  // libjxl tone maps those unclipped, so decode them as f32 for `hdr` (codes in [0, 1] come out
+  // exactly as through u16). A lossless integer file only holds codes in [0, 1]. When the f32 buffer
+  // would be over [`MAX_OUTPUT_BYTES`], stay with u16 (clipped codes) instead of failing.
+  let decoded_channels = color_type.samples_per_pixel();
+  let hdr_f32 = hdr.is_some()
+    && (float || xyb)
+    && checked_buffer_len(width, height, decoded_channels, std::mem::size_of::<f32>()).is_ok();
+  if hdr_f32 {
+    set_format(JxlDataFormat::F32 {
+      endianness: Endianness::native(),
+    })?;
+  }
   // `hdr` works on 16-bit codes, so an 8-bit PQ/HLG file is decoded as u16 too (no banding from
   // tone mapping 8-bit codes). The profile of a colour enum does not depend on the sample type.
   let hdr_from_u8 = hdr.is_some() && !sixteen_bit;
-  if hdr_from_u8 {
+  if hdr_from_u8 && !hdr_f32 {
     set_format(JxlDataFormat::U16 {
       endianness: Endianness::native(),
       bit_depth: 16,
@@ -178,7 +194,6 @@ fn decode_first_frame(buf: &[u8]) -> Result<DynamicImage> {
 
   // Reject oversized images before any pixel buffer exists. A gray image that needs conversion
   // becomes RGB(A), so check the size of the final buffer.
-  let decoded_channels = color_type.samples_per_pixel();
   let output_channels = if gray && convert {
     decoded_channels + 2
   } else {
@@ -188,7 +203,7 @@ fn decode_first_frame(buf: &[u8]) -> Result<DynamicImage> {
   checked_buffer_len(width, height, output_channels, bytes_per_sample)?;
   // The f32 decode buffer is twice the size of the u16 one, so check it at 4 bytes per sample, and
   // an 8-bit PQ/HLG file is decoded at 2 bytes per sample.
-  let decoded_bytes_per_sample = if float_convert {
+  let decoded_bytes_per_sample = if float_convert || hdr_f32 {
     std::mem::size_of::<f32>()
   } else if hdr_from_u8 {
     std::mem::size_of::<u16>()
@@ -214,10 +229,19 @@ fn decode_first_frame(buf: &[u8]) -> Result<DynamicImage> {
   };
 
   if let Some(hdr) = hdr {
-    let mut pixels =
-      decode_pixels::<u16>(&mut decoder, &mut input, decoded_len, height, row_samples)?;
-    drop(decoder);
-    hdr.apply_u16(&mut pixels, src_layout.channels());
+    let pixels = if hdr_f32 {
+      let codes = decode_pixels::<f32>(&mut decoder, &mut input, decoded_len, height, row_samples)?;
+      drop(decoder);
+      let mut pixels = try_alloc::<u16>(codes.len())?;
+      hdr.apply_f32(&codes, &mut pixels, src_layout.channels());
+      pixels
+    } else {
+      let mut pixels =
+        decode_pixels::<u16>(&mut decoder, &mut input, decoded_len, height, row_samples)?;
+      drop(decoder);
+      hdr.apply_u16(&mut pixels, src_layout.channels());
+      pixels
+    };
     if hdr_from_u8 {
       let mut pixels8 = try_alloc::<u8>(pixels.len())?;
       for (out, &value) in pixels8.iter_mut().zip(&pixels) {
