@@ -46,14 +46,14 @@ metadataSync(withExif?: boolean | null): Metadata
 
 `Metadata`:
 
-| Field         | Type                     | Notes                                      |
-| ------------- | ------------------------ | ------------------------------------------ |
-| `width`       | `number`                 |                                            |
-| `height`      | `number`                 |                                            |
-| `format`      | `string`                 | e.g. `'jpeg'`, `'png'`, `'webp'`, `'avif'` |
-| `colorType`   | `JsColorType`            | see enum below                             |
-| `orientation` | `number?`                | EXIF orientation tag (1–8), if present     |
-| `exif`        | `Record<string,string>?` | only when `withExif` is `true`             |
+| Field         | Type                     | Notes                                               |
+| ------------- | ------------------------ | --------------------------------------------------- |
+| `width`       | `number`                 |                                                     |
+| `height`      | `number`                 |                                                     |
+| `format`      | `string`                 | e.g. `'jpeg'`, `'png'`, `'webp'`, `'avif'`, `'jxl'` |
+| `colorType`   | `JsColorType`            | see enum below                                      |
+| `orientation` | `number?`                | EXIF orientation tag (1–8), if present              |
+| `exif`        | `Record<string,string>?` | only when `withExif` is `true`                      |
 
 ### Encoders
 

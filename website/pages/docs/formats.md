@@ -67,6 +67,30 @@ await compressJpeg(jpegBytes)
 await compressJpeg(jpegBytes, { quality: 75 })
 ```
 
+## JPEG XL
+
+JPEG XL input (`.jxl`, as a bare codestream or in the JPEG XL container) is decoded on every platform, including browser/WASM builds, by the bundled pure-Rust [jxl-rs](https://github.com/libjxl/jxl-rs) decoder. There is no JPEG XL encoder, so there is no `.jxl()` output method: decode JPEG XL and encode to another format. `metadata().format` is `'jxl'`.
+
+```ts
+import { Transformer } from '@napi-rs/image'
+
+const webp = await new Transformer(jxlBytes).resize(800).webp(80)
+```
+
+| Behavior    | Result                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Orientation | Applied while decoding, so pixels are already upright. `metadata().orientation` is undefined and `.rotate()` without an angle changes nothing                                                                                                                                                                                                                                                                                                                |
+| Color       | Converted to sRGB when the file uses another color space (Display P3, Rec.2100, an embedded ICC profile); the ICC profile is not kept                                                                                                                                                                                                                                                                                                                        |
+| HDR         | PQ and HLG input is tone mapped to SDR sRGB with libjxl's own method: Rec. 2408 from the intensity target down to 250 nits for PQ, and the HLG OOTF down to 80 nits. Colors outside sRGB are desaturated towards gray instead of clipped. 203 nits comes out at about 74% of sRGB white. The curve is smooth and neutral on gray, and integer and float files give the same pixels. HDR that comes with an embedded ICC profile is converted by that profile |
+| Bit depth   | Up to 8 bits per sample decodes to 8-bit; 9–16 bit and floating-point input decode to 16-bit                                                                                                                                                                                                                                                                                                                                                                 |
+| Grayscale   | Stays grayscale, unless its color space needs conversion; then it decodes to RGB. Gray PQ and HLG input stays grayscale                                                                                                                                                                                                                                                                                                                                      |
+| Alpha       | Straight (unpremultiplied); premultiplied files are converted                                                                                                                                                                                                                                                                                                                                                                                                |
+| Animation   | Only the first frame is decoded                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Metadata    | EXIF and XMP boxes are not read: `metadata(true).exif` is undefined                                                                                                                                                                                                                                                                                                                                                                                          |
+| Limits      | CMYK files are rejected. Files whose decoded pixels would need more than 512 MiB are rejected before decoding, like other formats. The decoder also rejects images of about 134 megapixels or more (about 100 megapixels with alpha)                                                                                                                                                                                                                         |
+
+JPEG files recompressed with `cjxl` decode to pixels; the original JPEG bytes are not reconstructed.
+
 ## HEIC and HEIF
 
 HEVC-in-HEIF input (`.heic` / `.heif`) and HEIC output are available only on **macOS and Windows**, using OS codecs. The package does not bundle a HEVC codec. Linux, Android, FreeBSD and browser/WASM builds reject HEIC operations.

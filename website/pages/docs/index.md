@@ -74,6 +74,7 @@ This table describes the published 1.15.0 API. The API processes still images an
 | WebP           | Yes                            | Yes             | Lossy or lossless output                                            |
 | AVIF           | Yes                            | Yes             | Decoded to 8-bit pixels                                             |
 | HEIC / HEIF    | macOS / Windows                | macOS / Windows | HEVC-in-HEIF; requires an OS codec                                  |
+| JPEG XL        | Yes                            | No              | Decode only; first frame, upright, converted to sRGB                |
 | TIFF           | Yes                            | Yes             | Baseline, LZW and PackBits input; no fax support                    |
 | BMP            | Yes                            | Yes             |                                                                     |
 | ICO            | Yes                            | Yes             |                                                                     |
@@ -84,7 +85,7 @@ This table describes the published 1.15.0 API. The API processes still images an
 | SVG            | `Transformer.fromSvg()`        | No              | Rasterized before further transforms                                |
 | Raw pixels     | `Transformer.fromRgbaPixels()` | `rawPixels()`   | Input: RGBA8; output: native-endian bytes in the image's color type |
 
-GIF, OpenEXR and farbfeld codecs are not enabled in the published build. The declared `farbfeld()` and `farbfeldSync()` methods currently reject with an unsupported-format error. See [Format Guides](/docs/formats#heic-and-heif) for HEIC restrictions.
+GIF, OpenEXR and farbfeld codecs are not enabled in the published build. The declared `farbfeld()` and `farbfeldSync()` methods currently reject with an unsupported-format error. See [Format Guides](/docs/formats#heic-and-heif) for HEIC restrictions and [JPEG XL](/docs/formats#jpeg-xl) for how `.jxl` input is decoded.
 
 ## Platforms
 

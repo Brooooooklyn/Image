@@ -13,6 +13,15 @@ mod fast_resize;
 pub mod heic;
 #[cfg(feature = "binding")]
 pub mod jpeg;
+// JPEG XL input (decode only) via the pure-Rust `jxl` crate; see `jxl.rs`.
+#[cfg(feature = "binding")]
+mod jxl;
+// PQ/HLG to SDR sRGB for `jxl.rs`, with its SIMD kernels. Its own `jxl_hdr` feature (pure Rust,
+// no napi) so the x86_64 and ASan `cargo test --no-default-features` jobs can run its
+// kernel==scalar tests; without `binding` nothing outside the tests calls it.
+#[cfg(feature = "jxl_hdr")]
+#[cfg_attr(not(feature = "binding"), allow(dead_code))]
+mod jxl_hdr;
 // P3: deterministic fixed-point sRGB->Oklab + Euclidean Oklab distance, wired
 // into the quantizer's perceptual color ASSIGNMENT metric (`pdist` in
 // `quantize.rs`).
