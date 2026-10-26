@@ -170,7 +170,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ## [jxl-rs](https://github.com/libjxl/jxl-rs)
 
-The PQ/HLG tone mapping in `src/jxl/hdr.rs` is also ported from [libjxl](https://github.com/libjxl/libjxl), by the same authors under the same license.
+The PQ/HLG tone mapping in `src/jxl_hdr.rs` (and its SIMD kernels in `src/jxl_hdr/simd.rs`) is also ported from [libjxl](https://github.com/libjxl/libjxl), by the same authors under the same license.
 
 <details>
   <summary>BSD 3-Clause License, Copyright (c) the JPEG XL Project Authors.</summary>

@@ -28,12 +28,17 @@ default            = ["binding", "oxipng/parallel"]
 # the CodSpeed bench builds with `--no-default-features` to link only the pure
 # quantizer core (no `napi_*` symbols, which Valgrind cannot resolve).
 # `binding` also pulls the JPEG XL input path, which the bench never needs:
-# - `jxl`: pure-Rust libjxl/jxl-rs decoder (BSD-3-Clause). Decode only, jxl-rs has no encoder.
-#   Default features keep runtime SIMD dispatch (`all-simd`); `brotli` stays off (no EXIF read).
+# - `jxl` (through `jxl_hdr`): pure-Rust libjxl/jxl-rs decoder (BSD-3-Clause). Decode only, jxl-rs
+#   has no encoder. Default features keep runtime SIMD dispatch (`all-simd`); `brotli` stays off
+#   (no EXIF read).
 # - `moxcms`: converts non-sRGB JPEG XL output to sRGB (same 0.8.1 `image` already locks).
 #   `extended_range` keeps float samples outside [0, 1] through the conversion.
 # - `bytemuck`: views the aligned `Vec<u16>`/`Vec<f32>` decode buffer as bytes (already in the tree).
-binding            = ["dep:bytemuck", "dep:jxl", "dep:moxcms"]
+binding            = ["jxl_hdr", "dep:bytemuck", "dep:moxcms"]
+# The PQ/HLG tone mapping of the JPEG XL path (`src/jxl_hdr.rs`) and its SIMD kernels, with `jxl`
+# for the colour types. Part of `binding`; on its own (pure Rust, no napi) for the x86_64 and ASan
+# CI jobs, which build with `--no-default-features` and run its kernel==scalar tests.
+jxl_hdr            = ["dep:jxl"]
 logo               = []
 oxipng_libdeflater = ["oxipng/zopfli", "oxipng/parallel"]
 # Opt-in: lets `PngQuantOptions::use_zopfli` select oxipng's zopfli deflater for

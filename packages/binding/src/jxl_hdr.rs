@@ -2,7 +2,7 @@
 //!
 //! Used for files whose output colour space is an enum (`JxlColorProfile::Simple`) with the PQ or
 //! HLG transfer function, RGB or gray. An HDR file that carries its own ICC profile still goes
-//! through that profile and `moxcms` (see `super::decode_first_frame`).
+//! through that profile and `moxcms` (see `jxl::decode_first_frame`).
 //!
 //! Why not the ICC profile jxl-rs writes for these enums: its A2B0 tag is a 9x9x9 8-bit Lab LUT, and
 //! moxcms 0.8.1 always interpolates a Lab/XYZ-PCS table trilinearly. Next to the neutral axis that
@@ -26,6 +26,15 @@
 //!    the result to its CMS.
 //! 5. Clip to [0, 1] and apply the sRGB curve (65536-entry table on sqrt-spaced input).
 //!
+//! SIMD: `apply_u16` and `apply_f32` run RGB(A) pixels through one generic kernel
+//! (`simd.rs`), built for NEON (aarch64), AVX2 or SSE4.1 (x86_64, picked at runtime) and simd128
+//! (wasm32, when compiled in), eight pixels at a time. The scalar `apply_u16_scalar` /
+//! `apply_f32_scalar` are the reference: every kernel gives the same bits for every input (no FMA,
+//! Rust's `max`/`min`/`clamp`/`as` reproduced lane by lane; the `kernel_matches_scalar_*` tests).
+//! A gray u16 image of at least 65536 pixels goes through a per-image table of all 65536 codes
+//! instead, which is the scalar result by construction. `IMAGE_JXL_HDR_SCALAR=1` forces the scalar
+//! kernel for RGB(A), like `IMAGE_QUANTIZE_SCALAR` for the quantizer; the gray table still applies.
+//!
 //! Ported from libjxl (<https://github.com/libjxl/libjxl>, main at e47d2a2b, 0.13 development),
 //! Copyright (c) the JPEG XL Project Authors, BSD-3-Clause (license text in `credits.md`):
 //! - `lib/jxl/cms/tone_mapping.h`: `Rec2408ToneMapperBase` (:23-98), `HlgOOTF_Base` (:100-130),
@@ -34,6 +43,8 @@
 //! - `lib/jxl/cms/transfer_functions.h`: `TF_PQ_Base` (:90-127), `TF_HLG_Base::InvOETF` (:54-64)
 //! - `lib/jxl/cms/jxl_cms_internal.h`: `PrimariesToXYZ` (:43-68)
 //! - `lib/jxl/render_pipeline/stage_tone_mapping.cc` (:36-108): when each step applies
+
+mod simd;
 
 use std::sync::OnceLock;
 
@@ -85,6 +96,10 @@ const GAIN_MAX_OCTAVE: i32 = 6;
 const GAIN_LEN: usize = ((GAIN_MAX_OCTAVE - GAIN_MIN_OCTAVE) as usize) << GAIN_STEP_BITS;
 const GAIN_MIN_BITS: u32 = ((127 + GAIN_MIN_OCTAVE) as u32) << 23;
 const GAIN_FRACTION_BITS: u32 = 23 - GAIN_STEP_BITS;
+
+/// A gray u16 image this big gets a table of all 65536 codes ([`HdrToSrgb::gray_table`]) instead
+/// of converting each pixel; building the table costs as much as converting that many pixels.
+const GRAY_TABLE_MIN_PIXELS: usize = 65536;
 
 /// 16-bit code -> linear light; entry 65536 repeats entry 65535.
 type DecodeTable = [f32; 65537];
@@ -392,7 +407,7 @@ enum Curve {
 }
 
 /// PQ or HLG code values -> 16-bit sRGB, in place. Build it once per image with [`HdrToSrgb::new`].
-pub(super) struct HdrToSrgb {
+pub(crate) struct HdrToSrgb {
   decode: &'static DecodeTable,
   encode: &'static [u16; 65536],
   /// The exact curve behind `decode`, for f32 codes outside [0, 1].
@@ -406,6 +421,27 @@ pub(super) struct HdrToSrgb {
   curve: Curve,
   /// Gain over luminance (see [`GAIN_STEP_BITS`]), unused for [`Curve::None`].
   gain: Box<[f32; GAIN_LEN]>,
+  /// `[gain[i], gain[i + 1] - gain[i]]` (the last entry `[gain[i], 0]`): the two operands of
+  /// `gain_of`'s interpolation in one load, for the SIMD kernels.
+  #[cfg_attr(
+    not(any(
+      target_arch = "aarch64",
+      target_arch = "x86_64",
+      all(target_arch = "wasm32", target_feature = "simd128")
+    )),
+    allow(dead_code)
+  )]
+  gain2: Box<[[f32; 2]]>,
+  /// `cap(0)` for [`Curve::ToneMap`] (otherwise 0): `cap(y)` is this value for every `y <= 0`.
+  #[cfg_attr(
+    not(any(
+      target_arch = "aarch64",
+      target_arch = "x86_64",
+      all(target_arch = "wasm32", target_feature = "simd128")
+    )),
+    allow(dead_code)
+  )]
+  cap0: f32,
 }
 
 impl HdrToSrgb {
@@ -413,7 +449,7 @@ impl HdrToSrgb {
   /// is left to the ICC path, and so are primaries this cannot build a finite matrix for. `xyb`:
   /// the file is XYB encoded (`!uses_original_profile`), so jxl-rs wrote HLG through its own
   /// inverse OOTF.
-  pub(super) fn new(profile: &JxlColorProfile, intensity_target: f32, xyb: bool) -> Option<Self> {
+  pub(crate) fn new(profile: &JxlColorProfile, intensity_target: f32, xyb: bool) -> Option<Self> {
     let JxlColorProfile::Simple(encoding) = profile else {
       return None;
     };
@@ -521,6 +557,16 @@ impl HdrToSrgb {
         Curve::Gain(exponents),
       )
     };
+    let gain2 = (0..GAIN_LEN)
+      .map(|i| match gain.get(i + 1) {
+        Some(&next) => [gain[i], next - gain[i]],
+        None => [gain[i], 0.0],
+      })
+      .collect();
+    let cap0 = match &curve {
+      Curve::ToneMap(tone_map) => tone_map.cap(0.0),
+      _ => 0.0,
+    };
 
     Some(Self {
       decode,
@@ -531,6 +577,8 @@ impl HdrToSrgb {
       to_srgb,
       curve,
       gain,
+      gain2,
+      cap0,
     })
   }
 
@@ -607,7 +655,39 @@ impl HdrToSrgb {
 
   /// Convert interleaved 16-bit PQ/HLG samples to sRGB in place. `channels` is 1 or 2 for gray
   /// (with alpha), 3 or 4 for RGB (with alpha); alpha is left as it is.
-  pub(super) fn apply_u16(&self, pixels: &mut [u16], channels: usize) {
+  pub(crate) fn apply_u16(&self, pixels: &mut [u16], channels: usize) {
+    if self.to_srgb.is_none() && pixels.len() / channels >= GRAY_TABLE_MIN_PIXELS {
+      // Gray: the whole pipeline depends on the one code, so convert each code once.
+      let table = self.gray_table();
+      for pixel in pixels.chunks_exact_mut(channels) {
+        pixel[0] = table[usize::from(pixel[0])];
+      }
+      return;
+    }
+    simd::apply_u16(self, simd::detect(), pixels, channels);
+  }
+
+  /// [`Self::apply_u16`] for interleaved f32 PQ/HLG samples, written to `output` (the same
+  /// length). See [`Self::apply_f32_scalar`].
+  pub(crate) fn apply_f32(&self, pixels: &[f32], output: &mut [u16], channels: usize) {
+    simd::apply_f32(self, simd::detect(), pixels, output, channels);
+  }
+
+  /// The 16-bit sRGB gray for every 16-bit gray code: [`Self::gray_to_srgb`] on each.
+  #[cold]
+  fn gray_table(&self) -> Box<[u16; 65536]> {
+    let mut table = vec![0u16; 65536];
+    for (code, value) in table.iter_mut().enumerate() {
+      *value = self.gray_to_srgb(self.decode[code] * self.scale);
+    }
+    table
+      .into_boxed_slice()
+      .try_into()
+      .expect("vec len == 65536")
+  }
+
+  /// The scalar reference of [`Self::apply_u16`]: what every SIMD kernel must reproduce.
+  pub(crate) fn apply_u16_scalar(&self, pixels: &mut [u16], channels: usize) {
     let decode = |code: u16| self.decode[usize::from(code)] * self.scale;
     match &self.to_srgb {
       Some(m) => {
@@ -624,13 +704,12 @@ impl HdrToSrgb {
     }
   }
 
-  /// [`Self::apply_u16`] for interleaved f32 PQ/HLG samples, written to `output` (the same length).
-  /// A code in [0, 1] is first rounded to the 16-bit code jxl-rs's u16 output holds (`f32_to_u16`:
-  /// times 65535, round half to even), so it gives exactly what `apply_u16` gives. A code outside
-  /// [0, 1] keeps its sign and its size through the exact curve, the tone mapping and the gamut
-  /// mapping, like libjxl (which clips only when it writes integers). Alpha is quantized like
-  /// jxl-rs's u16 output.
-  pub(super) fn apply_f32(&self, pixels: &[f32], output: &mut [u16], channels: usize) {
+  /// The scalar reference of [`Self::apply_f32`]. A code in [0, 1] is first rounded to the 16-bit
+  /// code jxl-rs's u16 output holds (`f32_to_u16`: times 65535, round half to even), so it gives
+  /// exactly what `apply_u16` gives. A code outside [0, 1] keeps its sign and its size through the
+  /// exact curve, the tone mapping and the gamut mapping, like libjxl (which clips only when it
+  /// writes integers). Alpha is quantized like jxl-rs's u16 output.
+  pub(crate) fn apply_f32_scalar(&self, pixels: &[f32], output: &mut [u16], channels: usize) {
     let decode = |v: f32| {
       if (0.0..=1.0).contains(&v) {
         self.decode[(v * 65535.0).round_ties_even() as usize] * self.scale

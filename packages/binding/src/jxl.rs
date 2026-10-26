@@ -10,9 +10,9 @@
 //! - sRGB: any other output colour space (Display P3, linear Rec.2100, an embedded ICC, ...) is
 //!   converted with `moxcms`. jxl-rs has no colour management of its own.
 //! - HDR: PQ and HLG given as a colour enum (not as an ICC) are tone mapped to SDR sRGB by
-//!   [`hdr`], a port of libjxl's own tone mapping (Rec. 2408 down to 250 nits for PQ, the HLG OOTF
-//!   down to 80 nits, out-of-gamut colours desaturated in sRGB). They do not go through the ICC
-//!   jxl-rs writes for them: see `hdr.rs` for why. An HDR file with an embedded ICC still goes
+//!   [`crate::jxl_hdr`], a port of libjxl's own tone mapping (Rec. 2408 down to 250 nits for PQ, the
+//!   HLG OOTF down to 80 nits, out-of-gamut colours desaturated in sRGB). They do not go through the
+//!   ICC jxl-rs writes for them: see `jxl_hdr.rs` for why. An HDR file with an embedded ICC still goes
 //!   through that ICC and `moxcms`.
 //! - 8-bit for files with <= 8 bits per sample, 16-bit otherwise (9..16 bit and float). Never f32.
 //!   A float file that needs conversion is decoded as f32 and only clipped to [0, 1] after the
@@ -21,8 +21,6 @@
 //!   an 8-bit one is rounded back to 8 bits after the tone mapping.
 //! - Straight (unpremultiplied) alpha, which is what the `image` crate assumes.
 //! - The first visible frame of an animation (already composited by the decoder).
-
-mod hdr;
 
 use std::fmt::Display;
 
@@ -34,6 +32,8 @@ use jxl::api::{
 };
 use moxcms::{ColorProfile, Layout, TransformExecutor, TransformOptions};
 use napi::bindgen_prelude::*;
+
+use crate::jxl_hdr::HdrToSrgb;
 
 /// Largest decoded buffer we allocate: 512 MiB, the same cap as the `image` crate's
 /// `Limits::default().max_alloc` that every other format gets through `load_from_memory`.
@@ -154,7 +154,7 @@ fn decode_first_frame(buf: &[u8]) -> Result<DynamicImage> {
   let mut profile = set_format(data_format)?;
   let xyb = !info.uses_original_profile;
   // PQ/HLG in a colour enum: tone mapped by `hdr` instead of the ICC path (`convert` stays false).
-  let hdr = hdr::HdrToSrgb::new(&profile, info.tone_mapping.intensity_target, xyb);
+  let hdr = HdrToSrgb::new(&profile, info.tone_mapping.intensity_target, xyb);
   let convert = hdr.is_none() && !is_srgb(&profile);
   // jxl-rs clips u8/u16 output to [0, 1] in the file's colour space, but a float file may hold
   // values outside it (HDR highlights, wide-gamut colours). The primaries matrix mixes every channel
@@ -245,7 +245,7 @@ fn decode_first_frame(buf: &[u8]) -> Result<DynamicImage> {
     if hdr_from_u8 {
       let mut pixels8 = try_alloc::<u8>(pixels.len())?;
       for (out, &value) in pixels8.iter_mut().zip(&pixels) {
-        *out = ((u32::from(value) * 255 + 32767) / 65535) as u8;
+        *out = u16_to_u8(value);
       }
       image_u8(w, h, out_layout, pixels8)
     } else {
@@ -399,7 +399,7 @@ fn decode_pixels<T: bytemuck::Pod + Default>(
 }
 
 /// sRGB (or gray with the sRGB curve) needs no conversion. Everything else, including any ICC
-/// profile, goes through `moxcms`, except PQ/HLG enums (see [`hdr`]).
+/// profile, goes through `moxcms`, except PQ/HLG enums (see [`crate::jxl_hdr`]).
 fn is_srgb(profile: &JxlColorProfile) -> bool {
   matches!(
     profile,
@@ -431,7 +431,7 @@ fn transform_options() -> TransformOptions {
     // `cicp` tag next to them. For the DCI transfer jxl-rs writes a pure 2.6 gamma TRC (like libjxl)
     // but cicp 17 (SMPTE ST 428), which moxcms decodes as `v^2.6 / 0.9166`: about 9% too bright.
     allow_use_cicp_transfer: false,
-    // PQ/HLG enums never get here (see [`hdr`]). An HDR file with its own ICC follows that ICC.
+    // PQ/HLG enums never get here (see [`crate::jxl_hdr`]). An HDR file with its own ICC follows that ICC.
     ..TransformOptions::default()
   }
 }
@@ -470,8 +470,27 @@ fn to_srgb<T: Copy + Default>(
   }
 }
 
+/// `round(v * 255 / 65535)` (`(v * 255 + 32767) / 65535`), without the division.
+#[inline]
+fn u16_to_u8(value: u16) -> u8 {
+  let v = u32::from(value);
+  let hi = (v >> 8) + (((v & 0xff) + 128) >> 8);
+  ((v - hi + 128) >> 8) as u8
+}
+
+/// Clip to [0, 1] and quantize to u16, rounding half away from zero (`round(v * 65535)`). The
+/// `+ 0.5` truncation equals `(v * 65535).round()` for every f32 (checked exhaustively, see
+/// `float_quantize_matches_round_exhaustive`) and avoids a `roundf` call per sample on x86 and
+/// wasm. `as` maps NaN to 0.
+#[inline]
+fn unit_to_u16(value: f32) -> u16 {
+  (value.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16
+}
+
 /// Convert f32 rows to sRGB through one scratch row, then clip each sample (alpha too) to [0, 1]
-/// and quantize it to u16 the way jxl-rs does for u16 output (`round(v * 65535)`).
+/// and quantize it to u16 ([`unit_to_u16`]). That matches jxl-rs's scalar u16 output
+/// (`round(v * 65535)`); its SIMD paths round ties to even instead, which differs only for a
+/// value exactly halfway between two codes.
 fn float_to_srgb_u16(
   transform: &(dyn TransformExecutor<f32> + Send + Sync),
   pixels: &[f32],
@@ -490,9 +509,8 @@ fn float_to_srgb_u16(
     transform
       .transform(src, &mut scratch)
       .map_err(|err| decode_error(format!("cannot convert to sRGB: {err}")))?;
-    for (out, value) in dst.iter_mut().zip(&scratch) {
-      // `as` maps NaN to 0.
-      *out = (value.clamp(0.0, 1.0) * 65535.0).round() as u16;
+    for (out, &value) in dst.iter_mut().zip(&scratch) {
+      *out = unit_to_u16(value);
     }
   }
   Ok(output)
@@ -500,7 +518,73 @@ fn float_to_srgb_u16(
 
 #[cfg(test)]
 mod tests {
-  use super::{MAX_OUTPUT_BYTES, checked_buffer_len, is_jxl};
+  use super::{MAX_OUTPUT_BYTES, checked_buffer_len, is_jxl, u16_to_u8, unit_to_u16};
+
+  /// What `unit_to_u16` replaced.
+  fn round_to_u16(value: f32) -> u16 {
+    (value.clamp(0.0, 1.0) * 65535.0).round() as u16
+  }
+
+  /// `+ 0.5` then truncation is `round()` around every rounding boundary `(k + 0.5) / 65535`
+  /// (within 64 ulps, where the two could differ) and on special values.
+  #[test]
+  fn float_quantize_matches_round() {
+    for k in 0..65535u32 {
+      let boundary = (k as f32 + 0.5) / 65535.0;
+      for ulps in -64i32..=64 {
+        let value = f32::from_bits(boundary.to_bits().wrapping_add_signed(ulps));
+        assert_eq!(
+          unit_to_u16(value),
+          round_to_u16(value),
+          "{value:?} ({:#x})",
+          value.to_bits()
+        );
+      }
+    }
+    for value in [
+      0.0f32,
+      -0.0,
+      1.0,
+      -1.0,
+      0.5,
+      1e-45,
+      -1e-45,
+      f32::MIN_POSITIVE,
+      0.499_999_97 / 65535.0,
+      1.000_000_1,
+      0.999_999_94,
+      f32::MAX,
+      f32::MIN,
+      f32::INFINITY,
+      f32::NEG_INFINITY,
+      f32::NAN,
+      -f32::NAN,
+    ] {
+      assert_eq!(unit_to_u16(value), round_to_u16(value), "{value:?}");
+    }
+  }
+
+  /// Every f32 bit pattern (about 3-4 s in release): `cargo test --release -p napi_rs_image --lib
+  /// float_quantize_matches_round_exhaustive -- --ignored`.
+  #[test]
+  #[ignore]
+  fn float_quantize_matches_round_exhaustive() {
+    for bits in 0..=u32::MAX {
+      let value = f32::from_bits(bits);
+      assert_eq!(unit_to_u16(value), round_to_u16(value), "{bits:#x}");
+    }
+  }
+
+  #[test]
+  fn u16_to_u8_matches_division() {
+    for value in 0..=65535u16 {
+      assert_eq!(
+        u16_to_u8(value),
+        ((u32::from(value) * 255 + 32767) / 65535) as u8,
+        "{value}"
+      );
+    }
+  }
 
   #[test]
   fn detects_bare_codestream() {

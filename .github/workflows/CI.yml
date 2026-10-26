@@ -662,9 +662,11 @@ jobs:
       # hardware (ubuntu-latest has SSE4.1 universally and AVX2 on current
       # runners; the tests self-skip when a feature is absent). `--no-default-
       # features` is required: the napi-gated code can't link outside Node, and
-      # there is no ELF equivalent of the macOS dynamic_lookup flag.
+      # there is no ELF equivalent of the macOS dynamic_lookup flag. `jxl_hdr`
+      # (pure Rust, no napi) adds the JPEG XL HDR kernels' AVX2/SSE4.1 gates
+      # (`jxl_hdr::simd::tests::kernel_matches_scalar_*`), x86_64-only the same way.
       - name: cargo test
-        run: cargo test -p napi_rs_image --no-default-features
+        run: cargo test -p napi_rs_image --no-default-features --features jxl_hdr
 
   test-rust-binding-asan:
     name: Unit test binding under AddressSanitizer (cargo +nightly test)
@@ -674,7 +676,8 @@ jobs:
       matrix:
         include:
           # Real x86_64: exercises the SSE4.1/AVX2 (and AVX-512 where the runner
-          # silicon has it) quantizer kernels' unaligned loads under ASan.
+          # silicon has it) quantizer kernels' unaligned loads under ASan, and the
+          # JPEG XL HDR kernels (`--features jxl_hdr`) on both targets.
           - host: ubuntu-latest
             target: x86_64-unknown-linux-gnu
           # Real aarch64 Linux: exercises the NEON kernels under ASan. (macOS
@@ -706,7 +709,7 @@ jobs:
       # binary is fully checked.
       - name: cargo test (ASan)
         run: |
-          cargo -Ztarget-applies-to-host test -p napi_rs_image --no-default-features --lib \
+          cargo -Ztarget-applies-to-host test -p napi_rs_image --no-default-features --features jxl_hdr --lib \
             --target ${{ matrix.target }} \
             --config 'target.${{ matrix.target }}.rustflags=["-Zsanitizer=address"]' \
             --config 'host.target-applies-to-host=false'
