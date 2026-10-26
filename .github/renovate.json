@@ -11,6 +11,12 @@
     {
       "matchPackagePatterns": ["^eslint", "^@typescript-eslint"],
       "groupName": "linter"
+    },
+    {
+      "matchDatasources": ["npm"],
+      "matchPackageNames": ["void", "@void/*"],
+      "groupName": "void",
+      "separateMajorMinor": false
     }
   ],
   "commitMessagePrefix": "chore: ",
