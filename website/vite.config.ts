@@ -74,6 +74,11 @@ export default defineConfig({
   // the default 'iife' worker format cannot handle the top-level await in the
   // wasm package, which fails the build. format:'es' fixes the nested worker.
   worker: { format: 'es' },
+  // @cloudflare/vite-plugin emits Worker source maps unless build.sourcemap says
+  // otherwise. They nearly double the modules `void deploy` uploads (~330 .map
+  // files on top of ~410 .js), which pushed the Worker upload past its timeout.
+  // The client never had maps, so this only changes the Worker output.
+  build: { sourcemap: false },
   resolve: {
     // The playground worker imports the public `@napi-rs/image` API, but in the
     // browser that wrapper's `main` (index.js) is the universal NATIVE loader — it
