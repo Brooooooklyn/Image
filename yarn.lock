@@ -3912,12 +3912,21 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@types/node@npm:^24.10.1, @types/node@npm:^24.9.0":
+"@types/node@npm:^24.9.0":
   version: 24.19.2
   resolution: "@types/node@npm:24.19.2"
   dependencies:
     undici-types: "npm:>=7.24.0 <7.24.7"
   checksum: 10c0/b51a7f8854007ad579dffdd0633d8addbfeb2c97cceb380f2eba0ed163638ec52e17565385a6cc04d54ac4ff99c70c64aee68a4ca45b6128c035e828794e29c5
+  languageName: node
+  linkType: hard
+
+"@types/node@npm:^26.0.0":
+  version: 26.6.6
+  resolution: "@types/node@npm:26.6.6"
+  dependencies:
+    undici-types: "npm:~8.9.0"
+  checksum: 10c0/5cb63f644f6e85a257a9cd2403cbcbe196760e2a35fd3ec9fb8b5cff663e14cc832b198cc17b53f870a2e30900ed45a1fb3f53e6589aba26b8e8c484aa672053
   languageName: node
   linkType: hard
 
@@ -6496,7 +6505,7 @@ __metadata:
   dependencies:
     "@napi-rs/cli": "npm:3.10.9"
     "@taplo/cli": "npm:^0.7.0"
-    "@types/node": "npm:^24.10.1"
+    "@types/node": "npm:^26.0.0"
     "@types/sharp": "npm:^0.32.0"
     ava: "npm:^8.0.1"
     blurhash: "npm:^2.0.5"
@@ -9893,6 +9902,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"undici-types@npm:~8.9.0":
+  version: 8.9.0
+  resolution: "undici-types@npm:8.9.0"
+  checksum: 10c0/51c712c20c087368f62c6fc0f2bc49fa76bfe5dec28ff01584bb677ff29b0622569783c02d43e151143808c48c0503f804093bd2c491b10f2a830138034cb451
+  languageName: node
+  linkType: hard
+
 "undici@npm:7.29.0":
   version: 7.29.0
   resolution: "undici@npm:7.29.0"
@@ -10201,7 +10217,7 @@ __metadata:
     "@napi-rs/image-wasm32-wasi": "npm:1.15.0"
     "@playwright/test": "npm:^1.50.0"
     "@tailwindcss/vite": "npm:4.3.3"
-    "@types/node": "npm:^24.10.1"
+    "@types/node": "npm:^26.0.0"
     "@types/react": "npm:^19.0.0"
     "@types/react-dom": "npm:^19.0.0"
     "@void/md": "npm:1.4.0"
