@@ -325,7 +325,7 @@ jobs:
           shell: bash
           run: |
             env | sort
-            sudo pkg install -y -f curl node libnghttp2 npm cmake nasm perl5 llvm19
+            sudo pkg install -y -f curl node libnghttp2 npm cmake-core nasm perl5 llvm19
             sudo npm install -g yarn --ignore-scripts
             curl https://sh.rustup.rs -sSf --output rustup.sh
             sh rustup.sh -y --default-toolchain stable
