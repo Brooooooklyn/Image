@@ -488,16 +488,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@emnapi/core@npm:2.0.0-alpha.5":
-  version: 2.0.0-alpha.5
-  resolution: "@emnapi/core@npm:2.0.0-alpha.5"
-  dependencies:
-    "@emnapi/wasi-threads": "npm:2.1.0"
-    tslib: "npm:^2.4.0"
-  checksum: 10c0/c89ae29b699d1b75f555ac18342dfa7354be4ee6ed60c071b1723a7bf2f2f20ed3418e6157ca12e457309e44fc1776e6699f66c65319e6ace56c1c859b42a7b4
-  languageName: node
-  linkType: hard
-
 "@emnapi/core@npm:2.0.0-beta.2":
   version: 2.0.0-beta.2
   resolution: "@emnapi/core@npm:2.0.0-beta.2"
@@ -554,15 +544,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@emnapi/runtime@npm:2.0.0-alpha.5":
-  version: 2.0.0-alpha.5
-  resolution: "@emnapi/runtime@npm:2.0.0-alpha.5"
-  dependencies:
-    tslib: "npm:^2.4.0"
-  checksum: 10c0/0effd9cc76cb7d65d38d4fc30b0d4599bd6c96abbfe334d10f7739e69e95f3e465d4243019931a0d7ae682ba42420b0170b87b341ea410e700343f5002704ec9
-  languageName: node
-  linkType: hard
-
 "@emnapi/runtime@npm:2.0.0-beta.2":
   version: 2.0.0-beta.2
   resolution: "@emnapi/runtime@npm:2.0.0-beta.2"
@@ -614,15 +595,6 @@ __metadata:
   dependencies:
     tslib: "npm:^2.4.0"
   checksum: 10c0/5aed84bc5dbe867973b20406ca1ed95661a4892ecaef80378fdf2d37424b3f7b9c428df8a3e1d82b783a3345a530032bf049e699e1f113ea52203c3e9b4e6ce5
-  languageName: node
-  linkType: hard
-
-"@emnapi/wasi-threads@npm:2.1.0":
-  version: 2.1.0
-  resolution: "@emnapi/wasi-threads@npm:2.1.0"
-  dependencies:
-    tslib: "npm:^2.4.0"
-  checksum: 10c0/01fd84e87420be4bf5edfc4e1845675521017e84788f3c26e7174a5f51f972fbcbaa05aa302fccf2e2eee3fa9160d04eb581c166da07f5eabd3ce8cbfeaef375
   languageName: node
   linkType: hard
 
@@ -2071,14 +2043,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@napi-rs/image-wasm32-wasi@npm:1.15.0":
-  version: 1.15.0
-  resolution: "@napi-rs/image-wasm32-wasi@npm:1.15.0"
+"@napi-rs/image-wasm32-wasi@npm:1.16.0":
+  version: 1.16.0
+  resolution: "@napi-rs/image-wasm32-wasi@npm:1.16.0"
   dependencies:
-    "@emnapi/core": "npm:2.0.0-alpha.5"
-    "@emnapi/runtime": "npm:2.0.0-alpha.5"
-    "@napi-rs/wasm-runtime": "npm:~1.2.4"
-  checksum: 10c0/440889be53abc0362996e2e8bded66c8390a2fee183eb9e3ed4faeb57f6adf9489a3094e90d0552ec9514aad405fbf58c4e4a0e3c60dc4d48a75fdcbee9f0ec6
+    "@emnapi/core": "npm:2.0.0-beta.2"
+    "@emnapi/runtime": "npm:2.0.0-beta.2"
+    "@napi-rs/wasm-runtime": "npm:~1.2.6"
+  checksum: 10c0/6c9f18a4ec9f478df5bca877792858f7f9edf4ca5a30ee3199537f8fd19eedc17db18ba4f612751ec46af2e5efd49e7e61a5f45d967f91a8617ee5996aee2585
   languageName: node
   linkType: hard
 
@@ -2659,7 +2631,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@napi-rs/wasm-runtime@npm:1.2.6, @napi-rs/wasm-runtime@npm:^1.1.4, @napi-rs/wasm-runtime@npm:^1.1.5, @napi-rs/wasm-runtime@npm:^1.1.6, @napi-rs/wasm-runtime@npm:~1.2.4":
+"@napi-rs/wasm-runtime@npm:1.2.6, @napi-rs/wasm-runtime@npm:^1.1.4, @napi-rs/wasm-runtime@npm:^1.1.5, @napi-rs/wasm-runtime@npm:^1.1.6, @napi-rs/wasm-runtime@npm:~1.2.6":
   version: 1.2.6
   resolution: "@napi-rs/wasm-runtime@npm:1.2.6"
   dependencies:
@@ -10198,7 +10170,7 @@ __metadata:
     "@fontsource-variable/space-grotesk": "npm:^5.2.10"
     "@napi-rs/canvas": "npm:^1.0.0"
     "@napi-rs/image": "npm:1.12.1"
-    "@napi-rs/image-wasm32-wasi": "npm:1.15.0"
+    "@napi-rs/image-wasm32-wasi": "npm:1.16.0"
     "@playwright/test": "npm:^1.50.0"
     "@tailwindcss/vite": "npm:4.3.3"
     "@types/node": "npm:^24.10.1"
