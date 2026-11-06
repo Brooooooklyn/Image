@@ -81,11 +81,11 @@
   },
   "repository": "git@github.com:Brooooooklyn/Image.git",
   "devDependencies": {
-    "@emnapi/core": "2.0.0-beta.2",
-    "@emnapi/runtime": "2.0.0-beta.2",
-    "@napi-rs/cli": "3.10.9",
-    "@napi-rs/wasm-runtime": "1.2.6",
-    "emnapi": "2.0.0-beta.2"
+    "@emnapi/core": "2.0.0-beta.3",
+    "@emnapi/runtime": "2.0.0-beta.3",
+    "@napi-rs/cli": "3.10.12",
+    "@napi-rs/wasm-runtime": "1.2.7",
+    "emnapi": "2.0.0-beta.3"
   },
   "homepage": "https://image.napi.rs"
 }
