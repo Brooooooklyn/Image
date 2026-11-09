@@ -138,7 +138,7 @@ jobs:
               export TARGET_CFLAGS="$TARGET_CXXFLAGS"
               yarn workspace @napi-rs/image build --target wasm32-wasip1-threads
 
-    name: stable - ${{ matrix.settings.target }} - node@24
+    name: stable - ${{ matrix.settings.target }} - node@26
     runs-on: ${{ matrix.settings.host }}
     env:
       RUST_TARGET: ${{ matrix.settings.target }}
@@ -285,6 +285,8 @@ jobs:
           targets: 'armv7-unknown-linux-gnueabihf'
       - name: Install dependencies
         run: |
+          # Node.js 25+ no longer bundles Corepack.
+          npm install --global corepack --ignore-scripts
           corepack enable
           yarn install --immutable --mode=skip-build
       - name: Config git
