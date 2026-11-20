@@ -1,0 +1,26 @@
+#!/bin/sh
+# cargo-xwin sets CMAKE_AR=llvm-lib for clang-cl. libavif 1.4's
+# merge_static_libs.cmake matches CMAKE_C_COMPILER_ID Clang before MSVC,
+# so it merges static libs with GNU ar MRI (`${CMAKE_AR} -M <script.ar`).
+# llvm-lib rejects -M ("ignoring unknown argument") and writes no avif.lib.
+# Forward MRI mode to llvm-ar; keep llvm-lib for /out: archive creation.
+set -eu
+HERE="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
+if [ "${1:-}" = "-M" ]; then
+  exec llvm-ar "$@"
+fi
+NEWPATH=""
+OLDIFS=$IFS
+IFS=:
+for p in $PATH; do
+  [ "$p" = "$HERE" ] && continue
+  if [ -z "$NEWPATH" ]; then
+    NEWPATH="$p"
+  else
+    NEWPATH="$NEWPATH:$p"
+  fi
+done
+IFS=$OLDIFS
+PATH="$NEWPATH"
+export PATH
+exec llvm-lib "$@"
