@@ -4188,45 +4188,45 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@void/deploy-cloudflare@npm:1.12.0":
-  version: 1.12.0
-  resolution: "@void/deploy-cloudflare@npm:1.12.0"
+"@void/deploy-cloudflare@npm:1.12.2":
+  version: 1.12.2
+  resolution: "@void/deploy-cloudflare@npm:1.12.2"
   dependencies:
-    "@void/deploy-core": "npm:1.12.0"
+    "@void/deploy-core": "npm:1.12.2"
     jsonc-parser: "npm:^3.3.1"
-  checksum: 10c0/7c73c3e75d394eca582df21c461a6a047fd9c0462b246d85141446ff21c3af9053cac902e4e0fe20def22ff504bd9ec67b6e6b8a4aac4a3cf86d8e08178eb5ae
+  checksum: 10c0/be6d37d3d5e61420711ad5feb9661a74d6194c5a9b1723c802ce2e08458b1dd2392650f743b2af037f089416d88992f353d0c08279032cdc3799c471821cb3ff
   languageName: node
   linkType: hard
 
-"@void/deploy-core@npm:1.12.0":
-  version: 1.12.0
-  resolution: "@void/deploy-core@npm:1.12.0"
-  checksum: 10c0/fd579fcaa5c053c4a6de32d4fb34405bffacf2001528b70dacc1dbf530ce20f92e3e615619a46a4ece3d1b7ae6203d754ac669e4d522130605d94ce251942a28
+"@void/deploy-core@npm:1.12.2":
+  version: 1.12.2
+  resolution: "@void/deploy-core@npm:1.12.2"
+  checksum: 10c0/505d08dd1c97cffd405efc94f1c6141acc1fe0583702fe666550e84a46cefa9619ef9b2bf9783c7b1be380b797519544954e5e48d3ed14f2ef490a610fa9288a
   languageName: node
   linkType: hard
 
-"@void/edge@npm:1.12.0":
-  version: 1.12.0
-  resolution: "@void/edge@npm:1.12.0"
+"@void/edge@npm:1.12.2":
+  version: 1.12.2
+  resolution: "@void/edge@npm:1.12.2"
   dependencies:
-    "@void/deploy-core": "npm:1.12.0"
-  checksum: 10c0/1a45d210dd6366df6339b686cee44eb8dc01b87d8b890d5937bfc1f267b1eb11ff1f26dabe761fed8ca7a23aaba5a38d8e583916c2e77ff1ad0a841452459ba3
+    "@void/deploy-core": "npm:1.12.2"
+  checksum: 10c0/02e48295a211202cedc8775d8beab05fb382be7840e307a1c264c3d837787cb17f3ded4a3675252261523c9b45b19cb1f372409371df3cd0ec8b1a4ce96953f0
   languageName: node
   linkType: hard
 
-"@void/isr@npm:1.12.0":
-  version: 1.12.0
-  resolution: "@void/isr@npm:1.12.0"
+"@void/isr@npm:1.12.2":
+  version: 1.12.2
+  resolution: "@void/isr@npm:1.12.2"
   dependencies:
     "@cloudflare/workers-types": "npm:^5.20261125.1"
-    "@void/edge": "npm:1.12.0"
-  checksum: 10c0/605a97194bf12a164a976d2ce2fd154c5a314f3a31f275b0caabb55bf1e427afdee6b07c25b6bafcfb9564579bd579d90f2cd1505bcd41c850f16adeb6fe09f2
+    "@void/edge": "npm:1.12.2"
+  checksum: 10c0/2b2a5a099255ca9762f527e7de22284172c118a7ebca965a4af6feb787bbba1b8e935e2a8f45b4acb7ea9bedac894bb8436c65b5f3f8d1fe1ab7dcf3335c95a1
   languageName: node
   linkType: hard
 
-"@void/md@npm:1.12.0":
-  version: 1.12.0
-  resolution: "@void/md@npm:1.12.0"
+"@void/md@npm:1.12.2":
+  version: 1.12.2
+  resolution: "@void/md@npm:1.12.2"
   dependencies:
     "@pierre/highlights": "npm:^0.5.2"
     gray-matter: "npm:^4.0.3"
@@ -4241,32 +4241,32 @@ __metadata:
     tinyglobby: "npm:^0.2.17"
   peerDependencies:
     vite: ^8.0.0
-    void: 1.12.0
-  checksum: 10c0/06bc526fbaa2daafcc9d6b4b292c026f5e6821e48f4718e1b23d7c167cbaf0b2b865bb68d35bf77f71ca2dd3f4bc1b8910a6af305522fad6322c48e4f5d17fc9
+    void: 1.12.2
+  checksum: 10c0/ca11f42ec9475a301fea8a9b79e37b17e9461670ce8fdf6ade8ca42397b24a0456cdc11d3e5ec428c5e37fc22c1f2ee84ac4e26031bb8eabf35420e1eca89e78
   languageName: node
   linkType: hard
 
-"@void/platform@npm:1.12.0":
-  version: 1.12.0
-  resolution: "@void/platform@npm:1.12.0"
+"@void/platform@npm:1.12.2":
+  version: 1.12.2
+  resolution: "@void/platform@npm:1.12.2"
   dependencies:
-    "@void/deploy-core": "npm:1.12.0"
+    "@void/deploy-core": "npm:1.12.2"
     pathslash: "npm:^0.1.0"
-  checksum: 10c0/292874164672322ba095f838aa76b2501916e87b9d4a3e46494441dd93d9adcb6de886c60462f438fa3a4a5637521eabbc6381adccf609ae5db69bd75d8d9f4e
+  checksum: 10c0/b3bb048fdda44e80370477c48833f2c98b1749ddbfc19ed0cca36f0f9a5acefe97053bb52cb8cd179af1e2386344e9c6e56c40cfe68c2ac0b71bc3cb684be92e
   languageName: node
   linkType: hard
 
-"@void/react@npm:1.12.0":
-  version: 1.12.0
-  resolution: "@void/react@npm:1.12.0"
+"@void/react@npm:1.12.2":
+  version: 1.12.2
+  resolution: "@void/react@npm:1.12.2"
   dependencies:
     "@vitejs/plugin-react": "npm:^6.3.0"
   peerDependencies:
     react: ^19.0.0
     react-dom: ^19.0.0
     vite: ^8.0.0
-    void: 1.12.0
-  checksum: 10c0/f1f6d312a5bf04a68f6fbb2a899b746fb2a0c83d92c155b40aa62de481c80cee92306c92da4e5b8fa68821199f2e5303b574bb2de0668939c8e47d7401a2e46f
+    void: 1.12.2
+  checksum: 10c0/a7086fd269b98dd478e977ffc4f9a4e1994fb3e19b599c371960e38e0771bb9a30f1e59d9f0e0676749393d2c656c88bef0b305821f203ad58a53aafb9e1d02b
   languageName: node
   linkType: hard
 
@@ -9739,9 +9739,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"void@npm:1.12.0":
-  version: 1.12.0
-  resolution: "void@npm:1.12.0"
+"void@npm:1.12.2":
+  version: 1.12.2
+  resolution: "void@npm:1.12.2"
   dependencies:
     "@cloudflare/build-output-utils": "npm:1.0.0-rc.4"
     "@cloudflare/config": "npm:1.0.0-rc.4"
@@ -9751,11 +9751,11 @@ __metadata:
     "@cloudflare/workers-types": "npm:^5.20261125.1"
     "@cloudflare/workers-utils": "npm:^0.57.0"
     "@napi-rs/keyring": "npm:^2.1.2"
-    "@void/deploy-cloudflare": "npm:1.12.0"
-    "@void/deploy-core": "npm:1.12.0"
-    "@void/edge": "npm:1.12.0"
-    "@void/isr": "npm:1.12.0"
-    "@void/platform": "npm:1.12.0"
+    "@void/deploy-cloudflare": "npm:1.12.2"
+    "@void/deploy-core": "npm:1.12.2"
+    "@void/edge": "npm:1.12.2"
+    "@void/isr": "npm:1.12.2"
+    "@void/platform": "npm:1.12.2"
     better-auth: "npm:^1.7.27"
     better-sqlite3: "npm:^13.2.0"
     blake3-jit: "npm:^1.1.1"
@@ -9785,7 +9785,7 @@ __metadata:
     terminal-link: "npm:^5.0.0"
     yaml: "npm:^2.9.1"
   peerDependencies:
-    "@void/md": 1.12.0
+    "@void/md": 1.12.2
     arktype: ">=2.0.0"
     valibot: ">=1.0.0-beta.7"
     vite: ^8.0.0
@@ -9801,7 +9801,7 @@ __metadata:
       optional: true
   bin:
     void: dist/cli/cli.mjs
-  checksum: 10c0/5ec58974af8aa13ce8a1897851edb3008ff3e3405c5c9d97875759abef92ef3c07161307dc8f9273edd4c27191d038aa18e871825c3e1f460b3054c700c2ac9a
+  checksum: 10c0/1785475c1424c5fd4bd109246f55e1efe0370531c059cfae2e3fac7e47b4dac1873521c089007937777f22176f33c31e29d336d6391af6dfc55d77b075c97e5e
   languageName: node
   linkType: hard
 
@@ -9843,8 +9843,8 @@ __metadata:
     "@types/node": "npm:^26.0.0"
     "@types/react": "npm:^19.0.0"
     "@types/react-dom": "npm:^19.0.0"
-    "@void/md": "npm:1.12.0"
-    "@void/react": "npm:1.12.0"
+    "@void/md": "npm:1.12.2"
+    "@void/react": "npm:1.12.2"
     buffer: "npm:^6.0.0"
     chalk: "npm:^6.0.0"
     react: "npm:^19.2.1"
@@ -9852,7 +9852,7 @@ __metadata:
     tailwindcss: "npm:4.3.5"
     typescript: "npm:^7.0.0"
     vite: "npm:^8.0.0"
-    void: "npm:1.12.0"
+    void: "npm:1.12.2"
   languageName: unknown
   linkType: soft
 
